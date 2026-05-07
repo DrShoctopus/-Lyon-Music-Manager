@@ -1,0 +1,158 @@
+"""Library browser: artists -> albums -> tracks, plus search."""
+from __future__ import annotations
+
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QStandardItem, QStandardItemModel
+from PySide6.QtWidgets import (
+    QAbstractItemView, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
+    QListView, QPushButton, QSplitter, QTableView, QVBoxLayout, QWidget,
+)
+
+from ..core.library import Library, Track
+from .widgets import format_duration
+
+
+class LibraryView(QWidget):
+    play_tracks = Signal(list, int)        # (tracks, start_index)
+    enqueue_tracks = Signal(list)
+    request_rescan = Signal()
+    request_add_folder = Signal()
+
+    def __init__(self, library: Library, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.library = library
+
+        # Top toolbar
+        top = QHBoxLayout()
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Search artist, album, or track...")
+        self.search.textChanged.connect(self._on_search)
+        add_btn = QPushButton("Add Folder")
+        add_btn.clicked.connect(self.request_add_folder.emit)
+        rescan_btn = QPushButton("Rescan")
+        rescan_btn.clicked.connect(self.request_rescan.emit)
+        top.addWidget(self.search, 1)
+        top.addWidget(add_btn)
+        top.addWidget(rescan_btn)
+
+        # Splitter: artists | albums | tracks
+        self.artists = QListView()
+        self.artists.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.artists_model = QStandardItemModel()
+        self.artists.setModel(self.artists_model)
+
+        self.albums = QListView()
+        self.albums.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.albums_model = QStandardItemModel()
+        self.albums.setModel(self.albums_model)
+
+        self.tracks = QTableView()
+        self.tracks.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.tracks.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.tracks.setAlternatingRowColors(True)
+        self.tracks.verticalHeader().setVisible(False)
+        self.tracks_model = QStandardItemModel(0, 5)
+        self.tracks_model.setHorizontalHeaderLabels(["#", "Title", "Artist", "Album", "Time"])
+        self.tracks.setModel(self.tracks_model)
+        self.tracks.horizontalHeader().setStretchLastSection(False)
+        self.tracks.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+
+        splitter = QSplitter(Qt.Horizontal)
+        for w, label in ((self.artists, "Artists"), (self.albums, "Albums")):
+            box = QWidget()
+            v = QVBoxLayout(box)
+            v.setContentsMargins(0, 0, 0, 0)
+            heading = QLabel(label)
+            heading.setStyleSheet("color:#ffb24d;font-weight:600;padding:4px 6px;")
+            v.addWidget(heading)
+            v.addWidget(w)
+            splitter.addWidget(box)
+        right = QWidget()
+        rv = QVBoxLayout(right)
+        rv.setContentsMargins(0, 0, 0, 0)
+        rh = QLabel("Tracks")
+        rh.setStyleSheet("color:#ffb24d;font-weight:600;padding:4px 6px;")
+        rv.addWidget(rh)
+        rv.addWidget(self.tracks)
+        splitter.addWidget(right)
+        splitter.setSizes([180, 220, 600])
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.addLayout(top)
+        layout.addWidget(splitter, 1)
+
+        self.artists.selectionModel().currentChanged.connect(lambda *_: self._refresh_albums())
+        self.albums.selectionModel().currentChanged.connect(lambda *_: self._refresh_tracks())
+        self.tracks.doubleClicked.connect(self._on_track_double)
+
+        self._current_tracks: list[Track] = []
+        self.refresh()
+
+    # ------------------------------------------------------------------ data
+    def refresh(self) -> None:
+        self.artists_model.clear()
+        for a in self.library.all_artists():
+            self.artists_model.appendRow(QStandardItem(a))
+        if self.artists_model.rowCount():
+            self.artists.setCurrentIndex(self.artists_model.index(0, 0))
+
+    def _refresh_albums(self) -> None:
+        self.albums_model.clear()
+        idx = self.artists.currentIndex()
+        if not idx.isValid():
+            return
+        artist = idx.data(Qt.DisplayRole)
+        for album, _art in self.library.albums_for_artist(artist):
+            it = QStandardItem(album)
+            it.setData(album, Qt.UserRole)
+            self.albums_model.appendRow(it)
+        if self.albums_model.rowCount():
+            self.albums.setCurrentIndex(self.albums_model.index(0, 0))
+
+    def _refresh_tracks(self) -> None:
+        self.tracks_model.removeRows(0, self.tracks_model.rowCount())
+        ai = self.artists.currentIndex()
+        bi = self.albums.currentIndex()
+        if not ai.isValid() or not bi.isValid():
+            self._current_tracks = []
+            return
+        artist = ai.data(Qt.DisplayRole)
+        album = bi.data(Qt.DisplayRole)
+        self._current_tracks = self.library.tracks_for_album(artist, album)
+        for tr in self._current_tracks:
+            row = [
+                QStandardItem(str(tr.track_no or "")),
+                QStandardItem(tr.title),
+                QStandardItem(tr.artist),
+                QStandardItem(tr.album),
+                QStandardItem(format_duration(tr.duration)),
+            ]
+            for it in row:
+                it.setEditable(False)
+            self.tracks_model.appendRow(row)
+
+    # ------------------------------------------------------------------ search
+    def _on_search(self, q: str) -> None:
+        q = q.strip()
+        if not q:
+            self._refresh_tracks()
+            return
+        self._current_tracks = self.library.search(q)
+        self.tracks_model.removeRows(0, self.tracks_model.rowCount())
+        for tr in self._current_tracks:
+            row = [
+                QStandardItem(str(tr.track_no or "")),
+                QStandardItem(tr.title),
+                QStandardItem(tr.artist),
+                QStandardItem(tr.album),
+                QStandardItem(format_duration(tr.duration)),
+            ]
+            for it in row:
+                it.setEditable(False)
+            self.tracks_model.appendRow(row)
+
+    def _on_track_double(self, index) -> None:
+        if not index.isValid() or not self._current_tracks:
+            return
+        self.play_tracks.emit(self._current_tracks, index.row())

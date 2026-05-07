@@ -3,6 +3,7 @@ __pycache__/
 *.pyo
 *.pyd
 *.spec
+!build/lyon.spec
 .venv/
 venv/
 env/
