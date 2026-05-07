@@ -41,6 +41,15 @@ pyinstaller build\lyon.spec
 :: Output goes to dist\LyonMusicManager\
 ```
 
+### Building from macOS or Linux
+
+PyInstaller can't cross-compile, so a Windows `.exe` has to be built on
+Windows. The included GitHub Actions workflow
+[`.github/workflows/windows-build.yml`](.github/workflows/windows-build.yml)
+runs on `windows-latest`, downloads `ffmpeg.exe` and `libdiscid.dll`,
+runs PyInstaller, and uploads `LyonMusicManager-windows.zip` as an artifact
+on every push. Grab it from the workflow run page on GitHub.
+
 ## Folder layout
 
 ```
