@@ -1,0 +1,114 @@
+"""Optical drive detection and disc ID computation.
+
+Windows-only paths are guarded so the module can be imported on any platform
+during development. At runtime on Windows we use ctypes to enumerate drives
+and call libdiscid (bundled DLL) for identification.
+"""
+from __future__ import annotations
+
+import ctypes
+import os
+import string
+import sys
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from .settings import bundled_bin_dir
+
+DRIVE_CDROM = 5  # GetDriveTypeW return value
+
+
+@dataclass
+class DiscToc:
+    drive: str                  # e.g. "D:"
+    discid: str = ""
+    freedb_id: str = ""
+    toc_string: str = ""        # "1 LAST FIRST_OFFSET LEAD_OFFSET ..."
+    track_count: int = 0
+    track_offsets: list[int] = field(default_factory=list)
+    sectors: int = 0
+
+
+def list_cd_drives() -> list[str]:
+    """Return a list of optical drive letters with media (best-effort)."""
+    if sys.platform != "win32":
+        return []
+    drives: list[str] = []
+    bitmask = ctypes.windll.kernel32.GetLogicalDrives()
+    for i, letter in enumerate(string.ascii_uppercase):
+        if bitmask & (1 << i):
+            root = f"{letter}:\\"
+            try:
+                kind = ctypes.windll.kernel32.GetDriveTypeW(ctypes.c_wchar_p(root))
+            except OSError:
+                kind = 0
+            if kind == DRIVE_CDROM:
+                drives.append(f"{letter}:")
+    return drives
+
+
+def has_audio_cd(drive: str) -> bool:
+    """True if the disc in `drive` looks like an audio CD."""
+    if sys.platform != "win32":
+        return False
+    # Audio CDs typically expose .cda virtual files at the drive root.
+    try:
+        for entry in os.listdir(f"{drive}\\"):
+            if entry.lower().endswith(".cda"):
+                return True
+    except OSError:
+        return False
+    return False
+
+
+def read_disc(drive: str | None = None) -> DiscToc | None:
+    """Read TOC + MusicBrainz disc ID for a drive."""
+    if sys.platform != "win32":
+        return None
+    if drive is None:
+        drives = list_cd_drives()
+        if not drives:
+            return None
+        drive = drives[0]
+
+    # Make bundled libdiscid.dll discoverable before importing.
+    bin_dir = bundled_bin_dir()
+    if bin_dir.exists():
+        os.environ["PATH"] = str(bin_dir) + os.pathsep + os.environ.get("PATH", "")
+        try:
+            os.add_dll_directory(str(bin_dir))  # type: ignore[attr-defined]
+        except (AttributeError, OSError):
+            pass
+
+    try:
+        import discid
+    except (ImportError, OSError):
+        return None
+
+    device = drive.rstrip("\\:") + ":"
+    try:
+        d = discid.read(device, features=["mcn", "isrc"])
+    except discid.DiscError:
+        return None
+
+    return DiscToc(
+        drive=drive,
+        discid=d.id,
+        freedb_id=getattr(d, "freedb_id", "") or "",
+        toc_string=d.toc_string,
+        track_count=len(d.tracks),
+        track_offsets=[t.offset for t in d.tracks],
+        sectors=getattr(d, "sectors", 0) or 0,
+    )
+
+
+def eject(drive: str) -> None:
+    if sys.platform != "win32":
+        return
+    # Use mciSendString to open the tray.
+    mci = ctypes.windll.winmm.mciSendStringW
+    drive_letter = drive.rstrip(":")
+    cmd = f'open {drive_letter}: type cdaudio alias lyon_cd'
+    mci(cmd, None, 0, None)
+    mci("set lyon_cd door open", None, 0, None)
+    mci("close lyon_cd", None, 0, None)
