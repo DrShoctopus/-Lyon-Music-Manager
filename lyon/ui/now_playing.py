@@ -107,8 +107,8 @@ class TransportBar(QFrame):
 
         # Cover thumb
         self.thumb = QLabel()
-        self.thumb.setFixedSize(56, 56)
-        self.thumb.setPixmap(cover_pixmap(None, 56, "♪"))
+        self.thumb.setFixedSize(112, 112)
+        self.thumb.setPixmap(cover_pixmap(None, 112, "♪"))
         self.thumb.setStyleSheet("border:1px solid #000;")
         self.thumb.mousePressEvent = lambda ev: self.open_now_playing.emit()
 
@@ -126,8 +126,8 @@ class TransportBar(QFrame):
 
         meta_w = QWidget()
         meta_w.setLayout(meta)
-        meta_w.setMinimumWidth(180)
-        meta_w.setMaximumWidth(280)
+        meta_w.setMinimumWidth(260)
+        meta_w.setMaximumWidth(420)
         meta_w.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
 
         # Transport buttons
@@ -179,14 +179,14 @@ class TransportBar(QFrame):
         self.vol = QSlider(Qt.Horizontal)
         self.vol.setRange(0, 100)
         self.vol.setValue(player.volume())
-        self.vol.setMaximumWidth(120)
+        self.vol.setMaximumWidth(240)
         self.vol.valueChanged.connect(player.set_volume)
         vol_row = QHBoxLayout()
         vol_row.addWidget(QLabel("🔊"))
         vol_row.addWidget(self.vol)
 
         outer = QHBoxLayout(self)
-        outer.setContentsMargins(10, 6, 10, 6)
+        outer.setContentsMargins(16, 10, 16, 10)
         outer.addWidget(self.thumb)
         outer.addWidget(meta_w)
         outer.addLayout(center, 1)
@@ -212,11 +212,11 @@ class TransportBar(QFrame):
         if track is None:
             self.title_lbl.setText("Nothing playing")
             self.artist_lbl.setText("")
-            self.thumb.setPixmap(cover_pixmap(None, 56, "♪"))
+            self.thumb.setPixmap(cover_pixmap(None, 112, "♪"))
         else:
             self.title_lbl.setText(track.title)
             self.artist_lbl.setText(f"{track.display_artist} - {track.album}")
-            self.thumb.setPixmap(cover_pixmap(track.artwork_path, 56, "♪"))
+            self.thumb.setPixmap(cover_pixmap(track.artwork_path, 112, "♪"))
 
     def _on_position(self, pos_ms: int, dur_ms: int) -> None:
         if not self._user_dragging:

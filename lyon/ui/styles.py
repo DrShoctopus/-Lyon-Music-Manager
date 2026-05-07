@@ -114,24 +114,24 @@ QLineEdit:focus, QComboBox:focus { border: 1px solid #ffb24d; }
 
 /* Sliders (transport bar + volume) */
 QSlider::groove:horizontal {
-    height: 6px;
+    height: 12px;
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
         stop:0 #050709, stop:1 #1a2230);
     border: 1px solid #000;
-    border-radius: 3px;
+    border-radius: 6px;
 }
 QSlider::sub-page:horizontal {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
         stop:0 #ffd17a, stop:1 #c87018);
-    border-radius: 3px;
+    border-radius: 6px;
 }
 QSlider::handle:horizontal {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
         stop:0 #f5f5f5, stop:1 #888);
     border: 1px solid #000;
-    width: 12px;
-    margin: -5px 0;
-    border-radius: 6px;
+    width: 20px;
+    margin: -8px 0;
+    border-radius: 10px;
 }
 
 /* Transport bar */
@@ -139,31 +139,33 @@ QFrame#transport {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
         stop:0 #1a232f, stop:0.5 #0c1219, stop:1 #050709);
     border-top: 1px solid #000;
-    min-height: 70px;
+    min-height: 130px;
 }
-QLabel#nowPlayingTitle  { color: #ffb24d; font-weight: 600; font-size: 10pt; }
-QLabel#nowPlayingArtist { color: #cfd6e2; }
-QLabel#timeLabel        { color: #aab3c0; }
+QLabel#nowPlayingTitle  { color: #ffb24d; font-weight: 600; font-size: 13pt; }
+QLabel#nowPlayingArtist { color: #cfd6e2; font-size: 11pt; }
+QLabel#timeLabel        { color: #aab3c0; font-size: 11pt; }
 
 /* Round transport buttons */
 QToolButton#transportBtn {
     background: qradialgradient(cx:0.5, cy:0.4, radius:0.8,
         stop:0 #4a5666, stop:1 #0a0e14);
     border: 1px solid #000;
-    border-radius: 16px;
-    min-width: 30px; min-height: 30px;
+    border-radius: 30px;
+    min-width: 60px; min-height: 60px;
     color: #e8edf5;
+    font-size: 16pt;
 }
 QToolButton#transportBtn:hover {
     background: qradialgradient(cx:0.5, cy:0.4, radius:0.8,
         stop:0 #6a7686, stop:1 #1a1e24);
 }
 QToolButton#transportPlay {
-    min-width: 42px; min-height: 42px; border-radius: 22px;
+    min-width: 84px; min-height: 84px; border-radius: 42px;
     background: qradialgradient(cx:0.5, cy:0.4, radius:0.8,
         stop:0 #ffd17a, stop:1 #803c08);
     color: #1a1006;
     font-weight: bold;
+    font-size: 22pt;
 }
 
 /* Status bar */
