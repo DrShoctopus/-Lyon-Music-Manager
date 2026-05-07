@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 
 block_cipher = None
-ROOT = Path(os.path.abspath(os.path.dirname(SPECPATH))).parent
+ROOT = Path(SPECPATH).resolve().parent
 BIN = ROOT / "bin"
 
 binaries = []
