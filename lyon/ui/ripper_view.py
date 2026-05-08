@@ -288,7 +288,7 @@ class RipperView(QWidget):
             title = self.tracks_model.item(r, 1).text().strip() or f"Track {num:02d}"
             album.tracks.append(TrackInfo(number=num, title=title, artist=album.artist))
 
-        folder = target_folder(self.settings, album)
+        folder = target_folder(self.settings, album, create=True)
         self.start_btn.setEnabled(False)
         self.cancel_btn.setEnabled(True)
         self.detect_btn.setEnabled(False)
