@@ -166,6 +166,11 @@ QToolButton#transportPlay {
     color: #1a1006;
     font-weight: bold;
     font-size: 22pt;
+    border: 2px solid #5a3308;
+}
+QToolButton#transportPlay:hover {
+    background: qradialgradient(cx:0.5, cy:0.4, radius:0.8,
+        stop:0 #ffe199, stop:1 #a04e10);
 }
 
 /* Status bar */
