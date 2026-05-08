@@ -54,27 +54,35 @@ The YouTube tab needs `PySide6-Addons` (already in `requirements.txt`).
 That pulls in QtWebEngine + Chromium, ~150 MB. Without it the YouTube tab
 shows a "Not installed" message; everything else still works.
 
-## Building a single .exe
+## Building a Windows installer
+
+The default packaging step produces a real installer
+(`LyonMusicManager-Setup.exe`) using PyInstaller + Inno Setup. The
+installer creates a Start menu shortcut, an optional desktop shortcut,
+optional `.flac` association, and a proper uninstaller.
 
 See [docs/BUILD.md](docs/BUILD.md) for the full guide. Short version:
 
 ```powershell
 py -m pip install pyinstaller
 py -m PyInstaller build\lyon.spec
-# Output: dist\LyonMusicManager\
+# (Install Inno Setup 6 from https://jrsoftware.org/isinfo.php once.)
+& "${env:ProgramFiles(x86)}\Inno Setup 6\iscc.exe" installer\lyon.iss
+# Output: installer\Output\LyonMusicManager-Setup.exe
 ```
 
-Distribute by zipping `dist\LyonMusicManager\` and shipping the whole
-folder — copying just the `.exe` will not work.
+Distribute the resulting `LyonMusicManager-Setup.exe` — users
+double-click it, click *Next*, and the app is installed.
 
 ### Building from macOS or Linux
 
-PyInstaller can't cross-compile, so a Windows `.exe` has to be built on
-Windows. The included GitHub Actions workflow
-[`.github/workflows/windows-build.yml`](.github/workflows/windows-build.yml)
+PyInstaller and Inno Setup both run only on Windows, so a Windows
+installer has to be built on Windows. The included GitHub Actions
+workflow [`.github/workflows/windows-build.yml`](.github/workflows/windows-build.yml)
 runs on `windows-latest`, fetches `ffmpeg.exe` and `libdiscid.dll`, runs
-PyInstaller, and uploads `LyonMusicManager-windows.zip` as an artifact on
-every push. Grab the artifact from the workflow run page on GitHub.
+PyInstaller, installs Inno Setup, compiles the installer, and uploads
+`LyonMusicManager-Setup.exe` as an artifact on every push. Grab the
+artifact from the workflow run page on GitHub.
 
 ## Folder layout
 
@@ -102,8 +110,9 @@ lyon/
     styles.py            Spotify-inspired QSS
     widgets.py           Cover placeholder, elided label, formatters
 build/lyon.spec          PyInstaller spec
+installer/lyon.iss       Inno Setup script (produces Setup.exe)
 bin/                     ffmpeg.exe + discid.dll (you provide these)
-.github/workflows/       Windows build CI
+.github/workflows/       Windows installer CI
 ```
 
 ## Tech stack
