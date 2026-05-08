@@ -148,58 +148,88 @@ QLineEdit#searchBox {
     padding-left: 36px;
 }
 
-/* Sliders (transport + volume) */
+/* Sliders (transport + volume).
+   The transport bar uses Spotify green for the filled portion with a
+   gentle vertical gradient -- shiny without being glossy. */
 QSlider::groove:horizontal {
-    height: 4px;
-    background: #4d4d4d;
+    height: 6px;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #2a2a2a, stop:1 #4a4a4a);
     border: 0;
-    border-radius: 2px;
+    border-radius: 3px;
 }
 QSlider::sub-page:horizontal {
-    background: #b3b3b3;
-    border-radius: 2px;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #25e070, stop:0.5 #1DB954, stop:1 #128a3d);
+    border-radius: 3px;
 }
 QSlider::handle:horizontal {
-    background: #ffffff;
+    background: qradialgradient(cx:0.5, cy:0.4, radius:0.6,
+        stop:0 #ffffff, stop:1 #cccccc);
     border: 0;
-    width: 12px; height: 12px;
-    margin: -4px 0;
-    border-radius: 6px;
+    width: 18px; height: 18px;
+    margin: -6px 0;
+    border-radius: 9px;
 }
-QSlider:hover::sub-page:horizontal { background: #1DB954; }
-QSlider:hover::handle:horizontal   { background: #ffffff; }
+QSlider:hover::sub-page:horizontal {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #2af07a, stop:0.5 #1ED760, stop:1 #169a45);
+}
+QSlider:hover::handle:horizontal { background: #ffffff; }
 
-/* Transport bar */
+/* Transport bar -- vertical gradient + thin Spotify-green top edge for
+   a subtle metallic feel (shiny but not glossy). */
 QFrame#transport {
-    background: #181818;
-    border-top: 1px solid #2a2a2a;
-    min-height: 90px; max-height: 110px;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #1f1f1f, stop:0.45 #131313, stop:1 #050505);
+    border-top: 2px solid #1DB954;
+    min-height: 143px; max-height: 175px;
 }
-QLabel#nowPlayingTitle  { color: #ffffff; font-weight: 600; font-size: 11pt; }
-QLabel#nowPlayingArtist { color: #b3b3b3; font-size: 9pt; }
-QLabel#timeLabel        { color: #a7a7a7; font-size: 9pt; }
+QLabel#nowPlayingTitle  { color: #ffffff; font-weight: 700; font-size: 17pt; }
+QLabel#nowPlayingArtist { color: #b3b3b3; font-size: 13pt; }
+QLabel#timeLabel        { color: #a7a7a7; font-size: 13pt; }
 
-/* Round transport buttons (Spotify uses simple icon buttons, no gradient) */
+/* Round transport buttons -- soft radial gradient, larger icons. */
 QToolButton#transportBtn {
-    background: transparent;
-    color: #b3b3b3;
+    background: qradialgradient(cx:0.5, cy:0.45, radius:0.7,
+        stop:0 #2e2e2e, stop:1 transparent);
+    color: #cfcfcf;
     border: 0;
-    border-radius: 16px;
-    min-width: 32px; min-height: 32px;
-    font-size: 14pt;
+    border-radius: 26px;
+    min-width: 51px; min-height: 51px;
+    font-size: 22pt;
     padding: 0;
 }
-QToolButton#transportBtn:hover     { color: #ffffff; }
-QToolButton#transportBtn:checked   { color: #1DB954; }
-QToolButton#transportPlay {
-    background: #ffffff;
-    color: #000000;
-    border-radius: 18px;
-    min-width: 36px; min-height: 36px;
-    font-size: 14pt;
-    font-weight: bold;
+QToolButton#transportBtn:hover {
+    color: #ffffff;
+    background: qradialgradient(cx:0.5, cy:0.45, radius:0.75,
+        stop:0 #3a3a3a, stop:1 transparent);
 }
-QToolButton#transportPlay:hover { background: #f5f5f5; }
+QToolButton#transportBtn:checked  { color: #1DB954; }
+QToolButton#transportBtn:pressed  {
+    background: qradialgradient(cx:0.5, cy:0.45, radius:0.75,
+        stop:0 #1f1f1f, stop:1 transparent);
+}
+
+/* Play button -- Spotify-green orb with a soft top highlight. */
+QToolButton#transportPlay {
+    background: qradialgradient(cx:0.5, cy:0.35, radius:0.75,
+        stop:0 #2bf07c, stop:0.55 #1DB954, stop:1 #128a3d);
+    color: #06170d;
+    border: 1px solid #0e6e34;
+    border-radius: 28px;
+    min-width: 57px; min-height: 57px;
+    font-size: 22pt;
+    font-weight: 800;
+}
+QToolButton#transportPlay:hover {
+    background: qradialgradient(cx:0.5, cy:0.35, radius:0.75,
+        stop:0 #38ff86, stop:0.55 #1ED760, stop:1 #169a45);
+}
+QToolButton#transportPlay:pressed {
+    background: qradialgradient(cx:0.5, cy:0.55, radius:0.75,
+        stop:0 #1DB954, stop:1 #0e6e34);
+}
 
 /* Album / playlist cards */
 QFrame#card {
