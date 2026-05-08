@@ -114,11 +114,33 @@ if ($SkipBinaries) {
     if ($needDiscid) {
         Write-Host "==> Downloading libdiscid (Windows x64)" -ForegroundColor Cyan
         $tmp = Join-Path $env:TEMP "lyon-discid.zip"
-        Invoke-WebRequest -Uri 'https://github.com/metabrainz/libdiscid/releases/download/v0.6.4/libdiscid-0.6.4-win64.zip' -OutFile $tmp
+        # Try MetaBrainz FTP mirrors; GitHub releases only ship source tarballs.
+        $urls = @(
+            'https://ftp.musicbrainz.org/pub/musicbrainz/libdiscid/libdiscid-0.6.4-win.zip',
+            'https://ftp.osuosl.org/pub/musicbrainz/libdiscid/libdiscid-0.6.4-win.zip',
+            'https://ftp.musicbrainz.org/pub/musicbrainz/libdiscid/libdiscid-0.6.2-win.zip'
+        )
+        $ok = $false
+        foreach ($u in $urls) {
+            try {
+                Write-Host "    Trying $u"
+                Invoke-WebRequest -Uri $u -OutFile $tmp -ErrorAction Stop
+                $ok = $true
+                break
+            } catch {
+                Write-Host "      -> $($_.Exception.Message)"
+            }
+        }
+        if (-not $ok) { throw "Could not fetch libdiscid Windows binary from any known source." }
         $extract = Join-Path $env:TEMP 'lyon-discid-extract'
         if (Test-Path $extract) { Remove-Item $extract -Recurse -Force }
         Expand-Archive $tmp -DestinationPath $extract
-        $dll = Get-ChildItem -Path $extract -Recurse -Filter discid.dll | Select-Object -First 1
+        # Prefer x64 DLL to match 64-bit Python.
+        $dll = Get-ChildItem -Path $extract -Recurse -Filter discid.dll |
+                 Where-Object { $_.FullName -match '64' } | Select-Object -First 1
+        if (-not $dll) {
+            $dll = Get-ChildItem -Path $extract -Recurse -Filter discid.dll | Select-Object -First 1
+        }
         if (-not $dll) {
             $dll = Get-ChildItem -Path $extract -Recurse -Filter libdiscid.dll | Select-Object -First 1
         }
