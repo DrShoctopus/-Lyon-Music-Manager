@@ -152,13 +152,18 @@ class MainWindow(QMainWindow):
     def _on_view_changed(self, _idx: int) -> None:
         current = self.stack.currentWidget()
         is_youtube = current is self.youtube_view
-        # Hide the local-music transport bar on the YouTube page.
-        self.transport.setVisible(not is_youtube)
-        if is_youtube:
-            # Stop local playback before YouTube starts making sound.
+        is_rip = current is self.ripper_view
+        # Tabs where the local-music transport bar makes no sense:
+        # the YouTube tab (different audio source) and the Rip tab
+        # (drive activity / the disc audio is what the user cares about).
+        hide_transport = is_youtube or is_rip
+        self.transport.setVisible(not hide_transport)
+        if hide_transport:
+            # Stop local playback before the user starts ripping or watching
+            # YouTube, so two audio sources don't compete.
             self.player.stop()
-        else:
-            # Pause any playing YouTube video when leaving the tab.
+        if not is_youtube:
+            # Pause any playing YouTube video when leaving that tab.
             self.youtube_view.pause_all_videos()
 
     # ------------------------------------------------------------------ actions
