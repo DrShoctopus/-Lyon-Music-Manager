@@ -1,6 +1,6 @@
 # Lyon Music Manager
 
-A Windows 8 / 10 / 11 desktop app that rips CDs to FLAC, builds and manages
+A Windows 10 / 11 desktop app that rips CDs to FLAC, builds and manages
 your music library, and plays it back through a UI inspired by the legacy
 Windows Media Player.
 
