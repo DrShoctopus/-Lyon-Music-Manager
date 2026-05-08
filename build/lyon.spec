@@ -1,16 +1,14 @@
 # PyInstaller spec for Lyon Music Manager.
 # Build on Windows with:  pyinstaller build/lyon.spec
 #
-# Place these files into a `bin/` folder at the project root before building:
+# Drop these into a `bin/` folder at the project root before building:
 #   bin/ffmpeg.exe         (static Windows build, e.g. from gyan.dev)
-#   bin/libdiscid.dll      (Win64 build from MetaBrainz)
+#   bin/discid.dll         (libdiscid Windows release)
 #
 # They are bundled next to the .exe so the app works offline.
 # -*- mode: python ; coding: utf-8 -*-
-import os
 from pathlib import Path
 
-block_cipher = None
 ROOT = Path(SPECPATH).resolve().parent
 BIN = ROOT / "bin"
 
@@ -31,12 +29,9 @@ a = Analysis(
     hookspath=[],
     runtime_hooks=[],
     excludes=[],
-    win_no_prefer_redirects=False,
-    win_private_assemblies=False,
-    cipher=block_cipher,
     noarchive=False,
 )
-pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+pyz = PYZ(a.pure, a.zipped_data)
 
 exe = EXE(
     pyz,
