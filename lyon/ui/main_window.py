@@ -194,9 +194,9 @@ class MainWindow(QMainWindow):
             self, "About " + __app_name__,
             f"<h3>{__app_name__} {__version__}</h3>"
             "<p><b>Custom Built For Chuck Lyon</b></p>"
-            "<p>Rip your CDs to FLAC, manage your library, browse YouTube, "
-            "and play music with a Spotify-inspired interface.</p>"
-            "<p>Uses MusicBrainz, Cover Art Archive, ffmpeg, and Qt WebEngine.</p>",
+            "<p>Rip your CDs to FLAC, manage your library, and play music "
+            "with a familiar Windows Media Player look.</p>"
+            "<p>Uses MusicBrainz, Cover Art Archive, and ffmpeg.</p>",
         )
 
     def closeEvent(self, ev) -> None:

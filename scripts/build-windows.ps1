@@ -1,29 +1,29 @@
 <#
 .SYNOPSIS
-    End-to-end Windows build for Lyon Music Manager (Spotify branch).
+    End-to-end Windows build for Lyon Music Manager (WMP branch / main).
 
 .DESCRIPTION
-    From a clean checkout, produces installer\Output\LyonMusicManager-Setup.exe.
-    Steps: create Python 3.14 venv, install dependencies, download ffmpeg.exe
-    and libdiscid.dll into bin\, run PyInstaller, run Inno Setup.
+    From a clean checkout, produces dist\LyonMusicManager\ and a
+    distributable zip at dist\LyonMusicManager-windows.zip.
+
+    Steps: create Python 3.14 venv, install dependencies, download
+    ffmpeg.exe and libdiscid.dll into bin\, run PyInstaller, zip output.
 
     Run from the project root:
         scripts\build-windows.ps1
 
     Optional flags:
-        -SkipBinaries   Don't re-download ffmpeg / libdiscid if bin\ is already populated.
-        -SkipInstaller  Build the bundle but don't run Inno Setup.
-        -Clean          Wipe .venv, build\, dist\, installer\Output\ before building.
+        -SkipBinaries  Don't re-download ffmpeg / libdiscid if bin\ is already populated.
+        -SkipZip       Build the bundle but don't zip it.
+        -Clean         Wipe .venv, build\, dist\ before building.
 
 .NOTES
-    Requires:
-      - Python 3.14 64-bit on PATH (or the py launcher: py -3.14 ...).
-      - Inno Setup 6 installed at the default location (unless -SkipInstaller).
+    Requires Python 3.14 64-bit on PATH (or the py launcher: py -3.14 ...).
 #>
 [CmdletBinding()]
 param(
     [switch]$SkipBinaries,
-    [switch]$SkipInstaller,
+    [switch]$SkipZip,
     [switch]$Clean
 )
 
@@ -34,13 +34,13 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Root      = Resolve-Path (Join-Path $ScriptDir '..')
 Set-Location $Root
 
-Write-Host "==> Lyon Music Manager (Spotify branch) - Windows build" -ForegroundColor Green
+Write-Host "==> Lyon Music Manager (WMP / main branch) - Windows build" -ForegroundColor Green
 Write-Host "    Project root: $Root"
 
 # 0. Optional clean -----------------------------------------------------------
 if ($Clean) {
     Write-Host "==> Cleaning previous build artefacts" -ForegroundColor Yellow
-    foreach ($p in '.venv', 'build', 'dist', 'installer\Output') {
+    foreach ($p in '.venv', 'build', 'dist') {
         $full = Join-Path $Root $p
         if (Test-Path $full) {
             Write-Host "    Removing $p"
@@ -89,16 +89,12 @@ if ($LASTEXITCODE -ne 0) { throw "pyinstaller install failed" }
 $bin = Join-Path $Root 'bin'
 New-Item -ItemType Directory -Force -Path $bin | Out-Null
 
-$needFfmpeg  = -not (Test-Path (Join-Path $bin 'ffmpeg.exe'))
-$needDiscid  = -not (Test-Path (Join-Path $bin 'discid.dll'))
+$needFfmpeg = -not (Test-Path (Join-Path $bin 'ffmpeg.exe'))
+$needDiscid = -not (Test-Path (Join-Path $bin 'discid.dll'))
 
 if ($SkipBinaries) {
-    if (-not (Test-Path (Join-Path $bin 'ffmpeg.exe'))) {
-        Write-Warning "bin\ffmpeg.exe missing; CD ripping won't work in the built app."
-    }
-    if (-not (Test-Path (Join-Path $bin 'discid.dll'))) {
-        Write-Warning "bin\discid.dll missing; CD detection won't work in the built app."
-    }
+    if ($needFfmpeg) { Write-Warning "bin\ffmpeg.exe missing; CD ripping won't work in the built app." }
+    if ($needDiscid) { Write-Warning "bin\discid.dll missing; CD detection won't work in the built app." }
 } else {
     if ($needFfmpeg) {
         Write-Host "==> Downloading ffmpeg.exe" -ForegroundColor Cyan
@@ -144,27 +140,21 @@ Write-Host "==> Running PyInstaller" -ForegroundColor Cyan
 & $venvPython -m PyInstaller --noconfirm build\lyon.spec
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
 
-# 7. Inno Setup installer -----------------------------------------------------
-if ($SkipInstaller) {
-    Write-Host "==> Skipping installer step (-SkipInstaller)" -ForegroundColor Yellow
-    Write-Host "    Bundle is at: $(Join-Path $Root 'dist\LyonMusicManager')"
+$bundle = Join-Path $Root 'dist\LyonMusicManager'
+if (-not (Test-Path $bundle)) { throw "PyInstaller didn't produce $bundle" }
+
+# 7. Zip the bundle for distribution -----------------------------------------
+if ($SkipZip) {
+    Write-Host "==> Skipping zip step (-SkipZip)" -ForegroundColor Yellow
+    Write-Host "    Bundle is at: $bundle"
 } else {
-    Write-Host "==> Building installer with Inno Setup" -ForegroundColor Cyan
-    $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\iscc.exe"
-    if (-not (Test-Path $iscc)) {
-        $iscc = "${env:ProgramFiles}\Inno Setup 6\iscc.exe"
-    }
-    if (-not (Test-Path $iscc)) {
-        throw "iscc.exe not found. Install Inno Setup 6 from https://jrsoftware.org/isinfo.php, or pass -SkipInstaller."
-    }
-    & $iscc installer\lyon.iss
-    if ($LASTEXITCODE -ne 0) { throw "Inno Setup compilation failed" }
-
-    $setup = Join-Path $Root 'installer\Output\LyonMusicManager-Setup.exe'
-    if (-not (Test-Path $setup)) { throw "Setup.exe not produced" }
-
-    $size = (Get-Item $setup).Length / 1MB
+    $zip = Join-Path $Root 'dist\LyonMusicManager-windows.zip'
+    if (Test-Path $zip) { Remove-Item $zip -Force }
+    Write-Host "==> Zipping bundle to dist\LyonMusicManager-windows.zip" -ForegroundColor Cyan
+    Compress-Archive -Path "$bundle\*" -DestinationPath $zip
+    $size = (Get-Item $zip).Length / 1MB
     Write-Host ""
     Write-Host "==> Build complete" -ForegroundColor Green
-    Write-Host ("    {0}  ({1:N1} MB)" -f $setup, $size)
+    Write-Host ("    {0}  ({1:N1} MB)" -f $zip, $size)
+    Write-Host "    Distribute by sending this zip; users unzip and double-click LyonMusicManager.exe."
 }
