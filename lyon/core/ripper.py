@@ -39,13 +39,20 @@ def find_ffmpeg() -> Optional[str]:
     return found
 
 
-def target_folder(settings: Settings, album: AlbumInfo) -> Path:
+def target_folder(settings: Settings, album: AlbumInfo, create: bool = False) -> Path:
+    """Compute the destination folder for an album rip.
+
+    Pure path arithmetic by default — pass ``create=True`` only when you
+    actually intend to rip. The UI calls this on every keystroke to
+    preview the path, which is why we never mkdir on the preview path.
+    """
     artist = safe_path_component(album.artist or "Unknown Artist")
     name = safe_path_component(album.album or "Unknown Album")
     if album.year:
         name = f"{album.year} - {name}"
     folder = Path(settings.music_root) / artist / name
-    folder.mkdir(parents=True, exist_ok=True)
+    if create:
+        folder.mkdir(parents=True, exist_ok=True)
     return folder
 
 
