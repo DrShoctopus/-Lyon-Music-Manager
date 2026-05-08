@@ -33,6 +33,13 @@ def bundled_bin_dir() -> Path:
     return Path(__file__).resolve().parent.parent.parent / "bin"
 
 
+def _app_version() -> str:
+    # Imported lazily to avoid a circular import (lyon.__init__ imports nothing
+    # heavy, but settings is imported by lyon.core which __init__ may touch).
+    from .. import __version__
+    return __version__
+
+
 @dataclass
 class Settings:
     music_root: str = field(default_factory=lambda: str(_default_music_root()))
@@ -40,7 +47,7 @@ class Settings:
     flac_compression: int = 8           # 0-8
     cd_drive: str = ""                 # e.g. "D:" - blank means auto-pick first
     musicbrainz_app: str = "LyonMusicManager"
-    musicbrainz_version: str = "0.1.0"
+    musicbrainz_version: str = field(default_factory=_app_version)
     musicbrainz_contact: str = "https://example.invalid/lyon"
     eject_after_rip: bool = True
     auto_lookup_metadata: bool = True

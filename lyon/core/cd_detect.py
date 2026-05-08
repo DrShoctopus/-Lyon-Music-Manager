@@ -18,6 +18,29 @@ from .settings import bundled_bin_dir
 DRIVE_CDROM = 5  # GetDriveTypeW return value
 
 
+def _bind_winapi() -> None:
+    """Bind argtypes/restype on the few Windows APIs we use via ctypes.
+
+    Without this, ctypes assumes int args and int returns, which is unsafe
+    for pointer arguments on 64-bit Windows.
+    """
+    if sys.platform != "win32":
+        return
+    k32 = ctypes.windll.kernel32
+    k32.GetLogicalDrives.argtypes = []
+    k32.GetLogicalDrives.restype = ctypes.c_ulong
+    k32.GetDriveTypeW.argtypes = [ctypes.c_wchar_p]
+    k32.GetDriveTypeW.restype = ctypes.c_uint
+    winmm = ctypes.windll.winmm
+    winmm.mciSendStringW.argtypes = [
+        ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint, ctypes.c_void_p,
+    ]
+    winmm.mciSendStringW.restype = ctypes.c_uint
+
+
+_bind_winapi()
+
+
 @dataclass
 class DiscToc:
     drive: str                  # e.g. "D:"
@@ -39,7 +62,7 @@ def list_cd_drives() -> list[str]:
         if bitmask & (1 << i):
             root = f"{letter}:\\"
             try:
-                kind = ctypes.windll.kernel32.GetDriveTypeW(ctypes.c_wchar_p(root))
+                kind = ctypes.windll.kernel32.GetDriveTypeW(root)
             except OSError:
                 kind = 0
             if kind == DRIVE_CDROM:
@@ -105,10 +128,10 @@ def read_disc(drive: str | None = None) -> DiscToc | None:
 def eject(drive: str) -> None:
     if sys.platform != "win32":
         return
-    # Use mciSendString to open the tray.
     mci = ctypes.windll.winmm.mciSendStringW
     drive_letter = drive.rstrip(":")
-    cmd = f'open {drive_letter}: type cdaudio alias lyon_cd'
-    mci(cmd, None, 0, None)
-    mci("set lyon_cd door open", None, 0, None)
+    # Close any leftover alias from an earlier interrupted call, then reopen.
     mci("close lyon_cd", None, 0, None)
+    if mci(f'open {drive_letter}: type cdaudio alias lyon_cd', None, 0, None) == 0:
+        mci("set lyon_cd door open", None, 0, None)
+        mci("close lyon_cd", None, 0, None)

@@ -33,7 +33,6 @@ class Player(QObject):
         self._index: int = -1
         self._shuffle = False
         self._repeat = RepeatMode.OFF
-        self._seen: list[int] = []  # for shuffle history
 
         self._player.positionChanged.connect(self._emit_position)
         self._player.durationChanged.connect(self._emit_position_dur)
