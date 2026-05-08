@@ -1,8 +1,7 @@
 # Lyon Music Manager
 
-A Windows 8 / 10 / 11 desktop app that rips CDs to FLAC, builds and manages
-your music library, and plays it back through a UI inspired by the legacy
-Windows Media Player.
+A Windows 10 / 11 desktop app that rips CDs to FLAC, builds and manages
+your music library, and plays it back through a UI inspired by Spotify.
 
 ## Features
 
@@ -15,7 +14,7 @@ Windows Media Player.
   rescan, prune missing files.
 - **Music player**: queue, shuffle, repeat, volume, scrubbing, full Now Playing
   view with cover art.
-- **WMP look**: dark gradient chrome, orange accents, glossy transport bar.
+- **spotify look**: dark gradient chrome, orange accents, glossy transport bar.
 
 ## Quick start (developer / from source)
 
