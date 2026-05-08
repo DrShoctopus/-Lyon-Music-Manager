@@ -22,8 +22,8 @@ jobs:
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pyinstaller
+          python -m pip install -r requirements.txt
+          python -m pip install pyinstaller
 
       - name: Fetch ffmpeg.exe
         shell: pwsh
@@ -55,7 +55,7 @@ jobs:
         run: python -c "from lyon.app import main; print('imports OK')"
 
       - name: Build with PyInstaller
-        run: pyinstaller --noconfirm build/lyon.spec
+        run: python -m PyInstaller --noconfirm build/lyon.spec
 
       - name: Zip dist folder
         shell: pwsh
