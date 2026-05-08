@@ -15,7 +15,7 @@ class Sidebar(QFrame):
         self.setObjectName("sidebar")
         self.setFrameShape(QFrame.NoFrame)
 
-        title = QLabel("Lyon")
+        title = QLabel("Chuck")
         title.setObjectName("sidebarTitle")
 
         self._buttons: dict[str, QPushButton] = {}
