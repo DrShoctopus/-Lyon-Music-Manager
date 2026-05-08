@@ -14,7 +14,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Optional
 
 from PySide6.QtCore import QObject, QThread, Signal
 
@@ -23,6 +23,9 @@ from .settings import Settings, bundled_bin_dir
 
 
 SAFE_CHARS_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+# Suppress the console window ffmpeg would otherwise pop up per track on Windows.
+_NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
 
 def safe_path_component(name: str) -> str:
@@ -159,15 +162,19 @@ class RipWorker(QObject):
                     cmd,
                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                     text=True, bufsize=1,
+                    creationflags=_NO_WINDOW,
                 )
             except OSError as e:
                 self.log.emit(f"ffmpeg launch error: {e}")
                 continue
 
-            assert proc.stdout is not None
+            if proc.stdout is None:
+                proc.wait()
+                continue
             for line in proc.stdout:
                 if self._cancel:
                     proc.kill()
+                    proc.wait()
                     return False
                 pct = _parse_progress(line)
                 if pct is not None:
