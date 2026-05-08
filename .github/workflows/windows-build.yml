@@ -22,8 +22,8 @@ jobs:
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pyinstaller
+          python -m pip install -r requirements.txt
+          python -m pip install pyinstaller
 
       - name: Fetch ffmpeg.exe
         shell: pwsh
@@ -40,22 +40,47 @@ jobs:
       - name: Fetch libdiscid.dll
         shell: pwsh
         run: |
-          $url = "https://github.com/metabrainz/libdiscid/releases/download/v0.6.4/libdiscid-0.6.4-win64.zip"
-          Invoke-WebRequest -Uri $url -OutFile libdiscid.zip
-          Expand-Archive libdiscid.zip -DestinationPath libdiscid-extract
-          $dll = Get-ChildItem -Path libdiscid-extract -Recurse -Filter discid.dll | Select-Object -First 1
+          $urls = @(
+            'https://ftp.musicbrainz.org/pub/musicbrainz/libdiscid/libdiscid-0.6.4-win.zip',
+            'https://ftp.osuosl.org/pub/musicbrainz/libdiscid/libdiscid-0.6.4-win.zip',
+            'https://ftp.musicbrainz.org/pub/musicbrainz/libdiscid/libdiscid-0.6.2-win.zip'
+          )
+          $zip = "libdiscid.zip"
+          $ok = $false
+          foreach ($u in $urls) {
+            try {
+              Write-Host "Trying $u"
+              Invoke-WebRequest -Uri $u -OutFile $zip -ErrorAction Stop
+              $ok = $true
+              break
+            } catch {
+              Write-Host "  -> $($_.Exception.Message)"
+            }
+          }
+          if (-not $ok) {
+            throw "Could not fetch libdiscid Windows binary from any known source."
+          }
+          Expand-Archive $zip -DestinationPath libdiscid-extract -Force
+          # The official MetaBrainz zip ships both x86 and x64 DLLs in subfolders;
+          # prefer the 64-bit one to match the windows-latest runner.
+          $dll = Get-ChildItem -Path libdiscid-extract -Recurse -Filter discid.dll |
+                   Where-Object { $_.FullName -match '64' } | Select-Object -First 1
+          if (-not $dll) {
+            $dll = Get-ChildItem -Path libdiscid-extract -Recurse -Filter discid.dll | Select-Object -First 1
+          }
           if (-not $dll) {
             $dll = Get-ChildItem -Path libdiscid-extract -Recurse -Filter libdiscid.dll | Select-Object -First 1
           }
-          Copy-Item $dll.FullName -Destination bin\discid.dll
-          Remove-Item libdiscid.zip
+          if (-not $dll) { throw "Archive contained no discid.dll / libdiscid.dll." }
+          Copy-Item $dll.FullName -Destination bin\discid.dll -Force
+          Remove-Item $zip
           Remove-Item -Recurse -Force libdiscid-extract
 
       - name: Smoke-test imports
         run: python -c "from lyon.app import main; print('imports OK')"
 
       - name: Build with PyInstaller
-        run: pyinstaller --noconfirm build/lyon.spec
+        run: python -m PyInstaller --noconfirm build/lyon.spec
 
       - name: Zip dist folder
         shell: pwsh
