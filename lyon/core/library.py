@@ -13,6 +13,9 @@ from .settings import app_data_dir
 
 SUPPORTED_EXTS = {".flac", ".mp3", ".m4a", ".aac", ".ogg", ".opus", ".wav", ".wma"}
 
+DISPLAY_ARTIST_SQL = "COALESCE(NULLIF(album_artist,''), NULLIF(artist,''), 'Unknown Artist')"
+DISPLAY_ALBUM_SQL = "COALESCE(NULLIF(album,''), 'Unknown Album')"
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS tracks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -120,35 +123,38 @@ class Library:
     # ------------------------------------------------------------------ queries
     def all_artists(self) -> list[str]:
         rows = self.conn.execute(
-            "SELECT DISTINCT COALESCE(NULLIF(album_artist,''), artist) AS a "
-            "FROM tracks WHERE a IS NOT NULL AND a != '' ORDER BY a COLLATE NOCASE"
+            f"""SELECT DISTINCT {DISPLAY_ARTIST_SQL} AS a
+                FROM tracks
+                ORDER BY a COLLATE NOCASE"""
         ).fetchall()
         return [r["a"] for r in rows]
 
     def albums_for_artist(self, artist: str) -> list[tuple[str, str | None]]:
         rows = self.conn.execute(
-            """SELECT album, MAX(artwork_path) AS art
-               FROM tracks
-               WHERE COALESCE(NULLIF(album_artist,''), artist) = ?
-               GROUP BY album ORDER BY year, album COLLATE NOCASE""",
+            f"""SELECT {DISPLAY_ALBUM_SQL} AS display_album, MAX(artwork_path) AS art
+                FROM tracks
+                WHERE {DISPLAY_ARTIST_SQL} = ?
+                GROUP BY display_album
+                ORDER BY MIN(year), display_album COLLATE NOCASE""",
             (artist,),
         ).fetchall()
-        return [(r["album"] or "Unknown Album", r["art"]) for r in rows]
+        return [(r["display_album"], r["art"]) for r in rows]
 
     def all_albums(self) -> list[tuple[str, str, str | None]]:
         rows = self.conn.execute(
-            """SELECT COALESCE(NULLIF(album_artist,''), artist) AS a,
-                      album, MAX(artwork_path) AS art
-               FROM tracks GROUP BY a, album
-               ORDER BY a COLLATE NOCASE, album COLLATE NOCASE"""
+            f"""SELECT {DISPLAY_ARTIST_SQL} AS a,
+                       {DISPLAY_ALBUM_SQL} AS display_album, MAX(artwork_path) AS art
+                FROM tracks
+                GROUP BY a, display_album
+                ORDER BY a COLLATE NOCASE, display_album COLLATE NOCASE"""
         ).fetchall()
-        return [(r["a"] or "Unknown Artist", r["album"] or "Unknown Album", r["art"]) for r in rows]
+        return [(r["a"], r["display_album"], r["art"]) for r in rows]
 
     def tracks_for_album(self, artist: str, album: str) -> list[Track]:
         rows = self.conn.execute(
-            """SELECT * FROM tracks
-               WHERE COALESCE(NULLIF(album_artist,''), artist) = ? AND album = ?
-               ORDER BY disc_no, track_no, title COLLATE NOCASE""",
+            f"""SELECT * FROM tracks
+                WHERE {DISPLAY_ARTIST_SQL} = ? AND {DISPLAY_ALBUM_SQL} = ?
+                ORDER BY disc_no, track_no, title COLLATE NOCASE""",
             (artist, album),
         ).fetchall()
         return [_row_to_track(r) for r in rows]
