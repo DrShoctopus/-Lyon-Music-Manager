@@ -16,6 +16,7 @@ from .library_view import LibraryView
 from .now_playing import NowPlayingView, TransportBar
 from .ripper_view import RipperView
 from .styles import WMP_QSS
+from .youtube_view import YouTubeView
 
 
 class MainWindow(QMainWindow):
@@ -56,7 +57,7 @@ class MainWindow(QMainWindow):
         self.tab_group = QButtonGroup(self)
         self.tab_group.setExclusive(True)
         self._tab_buttons: dict[str, QPushButton] = {}
-        for name in ("Now Playing", "Library", "Rip"):
+        for name in ("Now Playing", "Library", "Rip", "YouTube"):
             btn = QPushButton(name)
             btn.setObjectName("navTab")
             btn.setCheckable(True)
@@ -76,10 +77,12 @@ class MainWindow(QMainWindow):
         self.now_playing = NowPlayingView(self.player)
         self.library_view = LibraryView(self.library)
         self.ripper_view = RipperView(self.settings, self.library)
+        self.youtube_view = YouTubeView()
 
         self.stack.addWidget(self.now_playing)
         self.stack.addWidget(self.library_view)
         self.stack.addWidget(self.ripper_view)
+        self.stack.addWidget(self.youtube_view)
 
         self._tab_buttons["Now Playing"].toggled.connect(
             lambda c: c and self.stack.setCurrentWidget(self.now_playing))
@@ -87,6 +90,8 @@ class MainWindow(QMainWindow):
             lambda c: c and self.stack.setCurrentWidget(self.library_view))
         self._tab_buttons["Rip"].toggled.connect(
             lambda c: c and self.stack.setCurrentWidget(self.ripper_view))
+        self._tab_buttons["YouTube"].toggled.connect(
+            lambda c: c and self.stack.setCurrentWidget(self.youtube_view))
         self._tab_buttons["Library"].setChecked(True)
 
         layout.addWidget(self.stack, 1)
@@ -174,9 +179,9 @@ class MainWindow(QMainWindow):
             self, "About " + __app_name__,
             f"<h3>{__app_name__} {__version__}</h3>"
             "<p><b>Custom Built For Chuck Lyon</b></p>"
-            "<p>Rip your CDs to FLAC, manage your library, and play music "
-            "with a familiar Windows Media Player look.</p>"
-            "<p>Uses MusicBrainz, Cover Art Archive, and ffmpeg.</p>",
+            "<p>Rip your CDs to FLAC, manage your library, browse YouTube, "
+            "and play music with a familiar Windows Media Player look.</p>"
+            "<p>Uses MusicBrainz, Cover Art Archive, ffmpeg, and Qt WebEngine.</p>",
         )
 
     def closeEvent(self, ev) -> None:
