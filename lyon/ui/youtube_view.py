@@ -124,3 +124,18 @@ class YouTubeView(QWidget):
                 self.search.setText(q.replace("+", " "))
                 return
         self.search.setText(s)
+
+    def pause_all_videos(self) -> None:
+        """Pause every <video> element on the current page.
+
+        Called when the user navigates away from the YouTube tab so that
+        playback stops and audio doesn't continue in the background.
+        """
+        if not HAS_WEBENGINE:
+            return
+        page = self.web.page() if hasattr(self, "web") else None
+        if page is None:
+            return
+        page.runJavaScript(
+            "document.querySelectorAll('video').forEach(v => v.pause());"
+        )
