@@ -102,6 +102,12 @@ class MainWindow(QMainWindow):
             lambda: self._tab_buttons["Now Playing"].setChecked(True))
         layout.addWidget(self.transport)
 
+        # YouTube and local-music playback are mutually exclusive: stop one
+        # when switching to the other, and hide the transport bar entirely
+        # while the YouTube tab is active. Connected after self.transport
+        # exists so the handler can always reference it.
+        self.stack.currentChanged.connect(self._on_view_changed)
+
         self.setCentralWidget(root)
 
         # Status bar
@@ -141,6 +147,19 @@ class MainWindow(QMainWindow):
 
         help_menu = m.addMenu("&Help")
         help_menu.addAction(QAction("About", self, triggered=self.show_about))
+
+    # ------------------------------------------------------------------ tabs
+    def _on_view_changed(self, _idx: int) -> None:
+        current = self.stack.currentWidget()
+        is_youtube = current is self.youtube_view
+        # Hide the local-music transport bar on the YouTube page.
+        self.transport.setVisible(not is_youtube)
+        if is_youtube:
+            # Stop local playback before YouTube starts making sound.
+            self.player.stop()
+        else:
+            # Pause any playing YouTube video when leaving the tab.
+            self.youtube_view.pause_all_videos()
 
     # ------------------------------------------------------------------ actions
     def add_folder(self) -> None:
