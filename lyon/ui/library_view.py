@@ -156,3 +156,16 @@ class LibraryView(QWidget):
         if not index.isValid() or not self._current_tracks:
             return
         self.play_tracks.emit(self._current_tracks, index.row())
+
+    def select_album(self, artist: str, album: str) -> None:
+        """Programmatically focus an artist+album (used from Home cards)."""
+        for i in range(self.artists_model.rowCount()):
+            idx = self.artists_model.index(i, 0)
+            if idx.data(Qt.DisplayRole) == artist:
+                self.artists.setCurrentIndex(idx)
+                break
+        for j in range(self.albums_model.rowCount()):
+            idx = self.albums_model.index(j, 0)
+            if idx.data(Qt.DisplayRole) == album:
+                self.albums.setCurrentIndex(idx)
+                break
