@@ -1,8 +1,6 @@
 """Rip-from-CD view: detect disc, look up metadata, kick off rip."""
 from __future__ import annotations
 
-from pathlib import Path
-
 from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QPixmap, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
@@ -16,6 +14,16 @@ from ..core.metadata import AlbumInfo, TrackInfo, fetch_artwork, lookup_disc, se
 from ..core.ripper import RipRequest, Ripper, target_folder
 from ..core.settings import Settings
 from .widgets import cover_pixmap
+
+
+def _row_track_no(text: str | None) -> int:
+    """Parse a track-number cell. Returns 0 for empty/non-numeric."""
+    if not text:
+        return 0
+    try:
+        return int(text.strip())
+    except ValueError:
+        return 0
 
 
 class _LookupThread(QThread):
@@ -185,6 +193,13 @@ class RipperView(QWidget):
         )
         self._populate_default_tracks(toc.track_count)
         if self.settings.auto_lookup_metadata:
+            # Abandon any in-flight lookup so its stale result can't overwrite
+            # the metadata for this newly inserted disc.
+            if self._lookup is not None and self._lookup.isRunning():
+                try:
+                    self._lookup.finished_with.disconnect(self._on_lookup_done)
+                except (RuntimeError, TypeError):
+                    pass
             self._lookup = _LookupThread(toc, self.settings, self)
             self._lookup.finished_with.connect(self._on_lookup_done)
             self._lookup.start()
@@ -261,10 +276,7 @@ class RipperView(QWidget):
             album=self.album_edit.text().strip() or "Unknown Album",
             date=self.year_edit.text().strip(),
         )
-        try:
-            folder = target_folder(self.settings, album)
-        except OSError:
-            folder = Path(self.settings.music_root)
+        folder = target_folder(self.settings, album)
         self.dest_label.setText(f"Will save to: {folder}")
 
     # ------------------------------------------------------------------ ripping
@@ -284,7 +296,11 @@ class RipperView(QWidget):
             artwork=(self._album.artwork if self._album else None),
         )
         for r in range(self.tracks_model.rowCount()):
-            num = int(self.tracks_model.item(r, 0).text() or r + 1)
+            raw = (self.tracks_model.item(r, 0).text() or "").strip()
+            try:
+                num = int(raw) if raw else r + 1
+            except ValueError:
+                num = r + 1
             title = self.tracks_model.item(r, 1).text().strip() or f"Track {num:02d}"
             album.tracks.append(TrackInfo(number=num, title=title, artist=album.artist))
 
@@ -306,7 +322,7 @@ class RipperView(QWidget):
     def _on_track_started(self, n: int, title: str) -> None:
         self.status_label.setText(f"Ripping {n:02d}: {title}")
         for r in range(self.tracks_model.rowCount()):
-            if int(self.tracks_model.item(r, 0).text() or 0) == n:
+            if _row_track_no(self.tracks_model.item(r, 0).text()) == n:
                 self.tracks_model.item(r, 2).setText("Ripping...")
                 break
 
@@ -316,7 +332,7 @@ class RipperView(QWidget):
 
     def _on_track_finished(self, n: int, path: str) -> None:
         for r in range(self.tracks_model.rowCount()):
-            if int(self.tracks_model.item(r, 0).text() or 0) == n:
+            if _row_track_no(self.tracks_model.item(r, 0).text()) == n:
                 self.tracks_model.item(r, 2).setText("Done")
                 break
         self.progress.setValue(self.progress.value() + 1)
