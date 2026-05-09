@@ -58,3 +58,22 @@ def test_album_artist_falls_back_to_track_artist_only_when_blank(tmp_path):
     assert [track.path for track in library.tracks_for_album("Track Artist", "Album")] == [
         "/music/track_artist.flac"
     ]
+
+
+def test_search_matches_album_artist_and_display_fallbacks(tmp_path):
+    library = Library(tmp_path / "library.db")
+    add_track(
+        library,
+        "/music/album_artist_search.flac",
+        artist="Track Artist",
+        album_artist="Album Artist",
+        album="Album",
+    )
+    add_track(library, "/music/unknowns.flac")
+
+    assert [track.path for track in library.search("Album Artist")] == [
+        "/music/album_artist_search.flac"
+    ]
+    assert [track.path for track in library.search("Unknown Album")] == [
+        "/music/unknowns.flac"
+    ]

@@ -5,18 +5,21 @@ back to a friendly message instead of crashing the whole app.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QUrl, Qt
+from importlib.util import find_spec
+
+from PySide6.QtCore import QUrl, Qt, QUrlQuery
 from PySide6.QtWidgets import (
     QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout, QWidget,
 )
 
-try:
+HAS_WEBENGINE = (
+    find_spec("PySide6.QtWebEngineWidgets") is not None
+    and find_spec("PySide6.QtWebEngineCore") is not None
+)
+
+if HAS_WEBENGINE:  # pragma: no cover - optional dependency
     from PySide6.QtWebEngineWidgets import QWebEngineView
     from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEngineSettings
-    HAS_WEBENGINE = True
-except ImportError:  # pragma: no cover - optional dep
-    HAS_WEBENGINE = False
-    QWebEngineView = None  # type: ignore[assignment]
 
 
 YT_HOME = "https://www.youtube.com/"
@@ -101,7 +104,6 @@ class YouTubeView(QWidget):
         layout.addStretch(1)
 
     def _on_search(self) -> None:
-        from PySide6.QtCore import QUrlQuery
         text = self.search.text().strip()
         if not text:
             return
@@ -116,7 +118,6 @@ class YouTubeView(QWidget):
         self.web.load(url)
 
     def _on_url_changed(self, url: QUrl) -> None:
-        from PySide6.QtCore import QUrlQuery
         s = url.toString()
         if "search_query=" in s:
             q = QUrlQuery(url).queryItemValue("search_query")
