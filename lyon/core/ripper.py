@@ -131,7 +131,9 @@ class RipWorker(QObject):
                 continue
 
             from .tagger import write_flac_tags
-            write_flac_tags(out, album, tr, art_bytes)
+            if not write_flac_tags(out, album, tr, art_bytes):
+                success = False
+                self.log.emit(f"Track {tr.number} ripped but tags could not be written.")
             self.track_finished.emit(tr.number, str(out))
 
         self.finished.emit(success, "Rip complete." if success else "Rip finished with errors.")

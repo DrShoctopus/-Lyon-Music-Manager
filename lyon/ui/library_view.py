@@ -27,11 +27,17 @@ class LibraryView(QWidget):
         self.search = QLineEdit()
         self.search.setPlaceholderText("Search artist, album, or track...")
         self.search.textChanged.connect(self._on_search)
+        self.play_btn = QPushButton("Play")
+        self.play_btn.clicked.connect(self._play_selected)
+        self.enqueue_btn = QPushButton("Enqueue")
+        self.enqueue_btn.clicked.connect(self._enqueue_selected)
         add_btn = QPushButton("Add Folder")
         add_btn.clicked.connect(self.request_add_folder.emit)
         rescan_btn = QPushButton("Rescan")
         rescan_btn.clicked.connect(self.request_rescan.emit)
         top.addWidget(self.search, 1)
+        top.addWidget(self.play_btn)
+        top.addWidget(self.enqueue_btn)
         top.addWidget(add_btn)
         top.addWidget(rescan_btn)
 
@@ -49,6 +55,7 @@ class LibraryView(QWidget):
         self.tracks = QTableView()
         self.tracks.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.tracks.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.tracks.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.tracks.setAlternatingRowColors(True)
         self.tracks.verticalHeader().setVisible(False)
         self.tracks_model = QStandardItemModel(0, 5)
@@ -96,11 +103,17 @@ class LibraryView(QWidget):
             self.artists_model.appendRow(QStandardItem(a))
         if self.artists_model.rowCount():
             self.artists.setCurrentIndex(self.artists_model.index(0, 0))
+        else:
+            self.albums_model.clear()
+            self.tracks_model.removeRows(0, self.tracks_model.rowCount())
+            self._current_tracks = []
 
     def _refresh_albums(self) -> None:
         self.albums_model.clear()
         idx = self.artists.currentIndex()
         if not idx.isValid():
+            self._current_tracks = []
+            self.tracks_model.removeRows(0, self.tracks_model.rowCount())
             return
         artist = idx.data(Qt.DisplayRole)
         for album, _art in self.library.albums_for_artist(artist):
@@ -109,6 +122,9 @@ class LibraryView(QWidget):
             self.albums_model.appendRow(it)
         if self.albums_model.rowCount():
             self.albums.setCurrentIndex(self.albums_model.index(0, 0))
+        else:
+            self._current_tracks = []
+            self.tracks_model.removeRows(0, self.tracks_model.rowCount())
 
     def _refresh_tracks(self) -> None:
         self.tracks_model.removeRows(0, self.tracks_model.rowCount())
@@ -120,7 +136,10 @@ class LibraryView(QWidget):
         artist = ai.data(Qt.DisplayRole)
         album = bi.data(Qt.DisplayRole)
         self._current_tracks = self.library.tracks_for_album(artist, album)
-        for tr in self._current_tracks:
+        self._populate_tracks(self._current_tracks)
+
+    def _populate_tracks(self, tracks: list[Track]) -> None:
+        for tr in tracks:
             row = [
                 QStandardItem(str(tr.track_no or "")),
                 QStandardItem(tr.title),
@@ -135,22 +154,39 @@ class LibraryView(QWidget):
     # ------------------------------------------------------------------ search
     def _on_search(self, q: str) -> None:
         q = q.strip()
+        self.tracks_model.removeRows(0, self.tracks_model.rowCount())
         if not q:
             self._refresh_tracks()
             return
         self._current_tracks = self.library.search(q)
-        self.tracks_model.removeRows(0, self.tracks_model.rowCount())
-        for tr in self._current_tracks:
-            row = [
-                QStandardItem(str(tr.track_no or "")),
-                QStandardItem(tr.title),
-                QStandardItem(tr.artist),
-                QStandardItem(tr.album),
-                QStandardItem(format_duration(tr.duration)),
-            ]
-            for it in row:
-                it.setEditable(False)
-            self.tracks_model.appendRow(row)
+        self._populate_tracks(self._current_tracks)
+
+    # ------------------------------------------------------------------ playback
+    def _selected_rows(self) -> list[int]:
+        rows = {idx.row() for idx in self.tracks.selectionModel().selectedRows()}
+        if rows:
+            return sorted(rows)
+        idx = self.tracks.currentIndex()
+        return [idx.row()] if idx.isValid() else []
+
+    def _selected_tracks(self) -> list[Track]:
+        return [self._current_tracks[i] for i in self._selected_rows() if i < len(self._current_tracks)]
+
+    def _play_selected(self) -> None:
+        if not self._current_tracks:
+            return
+        rows = self._selected_rows()
+        if rows:
+            tracks = [self._current_tracks[i] for i in rows if i < len(self._current_tracks)]
+            if tracks:
+                self.play_tracks.emit(tracks, 0)
+            return
+        self.play_tracks.emit(self._current_tracks, 0)
+
+    def _enqueue_selected(self) -> None:
+        tracks = self._selected_tracks() or list(self._current_tracks)
+        if tracks:
+            self.enqueue_tracks.emit(tracks)
 
     def _on_track_double(self, index) -> None:
         if not index.isValid() or not self._current_tracks:

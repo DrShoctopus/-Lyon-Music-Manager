@@ -16,6 +16,7 @@ class TrackInfo:
     title: str
     length_ms: int = 0
     artist: str = ""
+    disc_number: int = 1
 
 
 @dataclass
@@ -74,7 +75,7 @@ def lookup_disc(discid_str: str, toc: str | None = None) -> Optional[AlbumInfo]:
 
     if not release:
         return None
-    return _release_to_album(release)
+    return _release_to_album(release, discid_str)
 
 
 def search_album(artist: str, album: str) -> Optional[AlbumInfo]:
@@ -109,7 +110,7 @@ def fetch_artwork(album: AlbumInfo) -> bytes | None:
     return None
 
 
-def _release_to_album(release: dict) -> AlbumInfo:
+def _release_to_album(release: dict, discid: str | None = None) -> AlbumInfo:
     artist_credit = release.get("artist-credit") or []
     artist = ""
     if artist_credit:
@@ -124,21 +125,40 @@ def _release_to_album(release: dict) -> AlbumInfo:
         date=release.get("date", ""),
         musicbrainz_albumid=release.get("id", ""),
     )
-    media = release.get("medium-list") or []
+    media = _matching_media(release.get("medium-list") or [], discid)
     n = 1
     for medium in media:
+        disc_number = _safe_int(medium.get("position"), 1)
         for tr in medium.get("track-list", []) or []:
             rec = tr.get("recording", {}) or {}
-            try:
-                length_ms = int(tr.get("length") or rec.get("length") or 0)
-            except (TypeError, ValueError):
-                length_ms = 0
+            length_ms = _safe_int(tr.get("length") or rec.get("length"), 0)
+            track_number = _safe_int(tr.get("position"), n)
             info.tracks.append(
                 TrackInfo(
-                    number=int(tr.get("position") or n),
+                    number=track_number,
                     title=rec.get("title") or tr.get("title") or f"Track {n}",
                     length_ms=length_ms,
+                    disc_number=disc_number,
                 )
             )
             n += 1
     return info
+
+
+def _matching_media(media: list[dict], discid: str | None) -> list[dict]:
+    if not discid:
+        return media
+    matches = []
+    for medium in media:
+        for disc in medium.get("disc-list", []) or []:
+            if disc.get("id") == discid:
+                matches.append(medium)
+                break
+    return matches or media
+
+
+def _safe_int(value, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default

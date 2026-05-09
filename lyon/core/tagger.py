@@ -14,11 +14,11 @@ def write_flac_tags(
     album: AlbumInfo,
     track: TrackInfo,
     artwork: bytes | None,
-) -> None:
+) -> bool:
     try:
         f = FLAC(str(path))
     except Exception:
-        return
+        return False
 
     f["title"] = track.title
     f["artist"] = track.artist or album.artist
@@ -42,4 +42,8 @@ def write_flac_tags(
         f.clear_pictures()
         f.add_picture(pic)
 
-    f.save()
+    try:
+        f.save()
+    except Exception:
+        return False
+    return True
