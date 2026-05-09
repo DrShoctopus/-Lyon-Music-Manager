@@ -7,6 +7,8 @@ and call libdiscid (bundled DLL) for identification.
 from __future__ import annotations
 
 import ctypes
+import importlib
+import importlib.util
 import os
 import string
 import sys
@@ -103,9 +105,8 @@ def read_disc(drive: str | None = None) -> DiscToc | None:
         except (AttributeError, OSError):
             pass
 
-    try:
-        import discid
-    except (ImportError, OSError):
+    discid = _load_discid()
+    if discid is None:
         return None
 
     device = drive.rstrip("\\:") + ":"
@@ -123,6 +124,15 @@ def read_disc(drive: str | None = None) -> DiscToc | None:
         track_offsets=[t.offset for t in d.tracks],
         sectors=getattr(d, "sectors", 0) or 0,
     )
+
+
+def _load_discid():
+    if importlib.util.find_spec("discid") is None:
+        return None
+    try:
+        return importlib.import_module("discid")
+    except OSError:
+        return None
 
 
 def eject(drive: str) -> None:
