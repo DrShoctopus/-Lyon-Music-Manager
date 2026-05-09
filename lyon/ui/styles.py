@@ -18,9 +18,9 @@ QMainWindow, QWidget#root {
 /* Title / chrome bar */
 QFrame#titlebar {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-        stop:0 #45505c, stop:0.38 #20262d, stop:0.39 #10151b, stop:1 #05070a);
+        stop:0 #303945, stop:0.38 #1d232a, stop:0.39 #10151b, stop:1 #05070a);
     border-bottom: 1px solid #050607;
-    min-height: 40px;
+    min-height: 20px;
 }
 QLabel#titleLabel {
     color: #f4fbff;
