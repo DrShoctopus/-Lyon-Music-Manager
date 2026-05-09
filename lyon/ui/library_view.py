@@ -1,6 +1,8 @@
 """Library browser: artists -> albums -> tracks, plus search."""
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
@@ -15,6 +17,7 @@ from .widgets import format_duration
 class LibraryView(QWidget):
     play_tracks = Signal(list, int)        # (tracks, start_index)
     enqueue_tracks = Signal(list)
+    status_message = Signal(str)
     request_rescan = Signal()
     request_add_folder = Signal()
 
@@ -57,6 +60,7 @@ class LibraryView(QWidget):
         self.tracks.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.tracks.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.tracks.setAlternatingRowColors(True)
+        self.tracks.setMouseTracking(True)
         self.tracks.verticalHeader().setVisible(False)
         self.tracks_model = QStandardItemModel(0, 5)
         self.tracks_model.setHorizontalHeaderLabels(["#", "Title", "Artist", "Album", "Time"])
@@ -140,16 +144,25 @@ class LibraryView(QWidget):
 
     def _populate_tracks(self, tracks: list[Track]) -> None:
         for tr in tracks:
+            duration = format_duration(tr.duration)
+            tooltip = self._track_tooltip(tr, duration)
             row = [
                 QStandardItem(str(tr.track_no or "")),
                 QStandardItem(tr.title),
                 QStandardItem(tr.artist),
                 QStandardItem(tr.album),
-                QStandardItem(format_duration(tr.duration)),
+                QStandardItem(duration),
             ]
             for it in row:
                 it.setEditable(False)
+                it.setToolTip(tooltip)
             self.tracks_model.appendRow(row)
+
+    def _track_tooltip(self, track: Track, duration: str) -> str:
+        file_type = Path(track.path).suffix.lstrip(".").upper() or "Unknown"
+        artist = track.display_artist
+        album = track.album or "Unknown Album"
+        return f"Artist: {artist}\nAlbum: {album}\nTime: {duration}\nFile type: {file_type}"
 
     # ------------------------------------------------------------------ search
     def _on_search(self, q: str) -> None:
@@ -187,8 +200,52 @@ class LibraryView(QWidget):
         tracks = self._selected_tracks() or list(self._current_tracks)
         if tracks:
             self.enqueue_tracks.emit(tracks)
+        else:
+            self.status_message.emit("No tracks selected to enqueue.")
 
     def _on_track_double(self, index) -> None:
         if not index.isValid() or not self._current_tracks:
             return
         self.play_tracks.emit(self._current_tracks, index.row())
+
+    def highlight_track(self, track: Track | None) -> None:
+        if track is None:
+            return
+        row = self._row_for_track(track)
+        if row < 0 and not self.search.text().strip():
+            self._show_track_album(track)
+            row = self._row_for_track(track)
+        if row >= 0:
+            self._select_track_row(row)
+
+    def _row_for_track(self, track: Track) -> int:
+        for row, current in enumerate(self._current_tracks):
+            if self._same_track(current, track):
+                return row
+        return -1
+
+    def _same_track(self, a: Track, b: Track) -> bool:
+        return (a.id and b.id and a.id == b.id) or a.path == b.path
+
+    def _select_track_row(self, row: int) -> None:
+        idx = self.tracks_model.index(row, 0)
+        self.tracks.selectRow(row)
+        self.tracks.setCurrentIndex(idx)
+        self.tracks.scrollTo(idx, QAbstractItemView.PositionAtCenter)
+
+    def _show_track_album(self, track: Track) -> None:
+        artist = track.display_artist
+        album = track.album or "Unknown Album"
+        artist_row = self._find_model_row(self.artists_model, artist)
+        if artist_row < 0:
+            return
+        self.artists.setCurrentIndex(self.artists_model.index(artist_row, 0))
+        album_row = self._find_model_row(self.albums_model, album)
+        if album_row >= 0:
+            self.albums.setCurrentIndex(self.albums_model.index(album_row, 0))
+
+    def _find_model_row(self, model: QStandardItemModel, value: str) -> int:
+        for row in range(model.rowCount()):
+            if model.index(row, 0).data(Qt.DisplayRole) == value:
+                return row
+        return -1
