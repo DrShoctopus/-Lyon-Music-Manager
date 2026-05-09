@@ -162,10 +162,16 @@ class Library:
     def search(self, query: str) -> list[Track]:
         like = f"%{query}%"
         rows = self.conn.execute(
-            """SELECT * FROM tracks
-               WHERE title LIKE ? OR artist LIKE ? OR album LIKE ?
-               ORDER BY artist, album, track_no LIMIT 500""",
-            (like, like, like),
+            f"""SELECT * FROM tracks
+               WHERE title LIKE ?
+                  OR artist LIKE ?
+                  OR album_artist LIKE ?
+                  OR album LIKE ?
+                  OR {DISPLAY_ARTIST_SQL} LIKE ?
+                  OR {DISPLAY_ALBUM_SQL} LIKE ?
+               ORDER BY {DISPLAY_ARTIST_SQL}, {DISPLAY_ALBUM_SQL}, disc_no, track_no
+               LIMIT 500""",
+            (like, like, like, like, like, like),
         ).fetchall()
         return [_row_to_track(r) for r in rows]
 

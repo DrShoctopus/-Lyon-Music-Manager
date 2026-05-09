@@ -99,6 +99,7 @@ class Player(QObject):
         nxt = self._next_index()
         if nxt is None:
             self.stop()
+            self._index = -1
             self.track_changed.emit(None)
             return
         self.play_index(nxt)

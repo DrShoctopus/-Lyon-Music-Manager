@@ -1,7 +1,7 @@
 """Top-level window with WMP-style title, tab bar, stacked views."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QButtonGroup, QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow,
@@ -19,6 +19,20 @@ from .styles import WMP_QSS
 from .youtube_view import YouTubeView
 
 
+class _LibraryScanThread(QThread):
+    finished_with = Signal(int, str)  # (new_tracks, label)
+
+    def __init__(self, library: Library, roots: list[str], label: str, parent=None):
+        super().__init__(parent)
+        self.library = library
+        self.roots = roots
+        self.label = label
+
+    def run(self) -> None:
+        n = self.library.scan_paths(self.roots)
+        self.finished_with.emit(n, self.label)
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -26,6 +40,7 @@ class MainWindow(QMainWindow):
         self.library = Library()
         self.player = Player(self)
         self.player.set_volume(self.settings.last_volume)
+        self._scan_thread: _LibraryScanThread | None = None
 
         self.setWindowTitle(__app_name__)
         self.resize(1100, 720)
@@ -102,10 +117,6 @@ class MainWindow(QMainWindow):
             lambda: self._tab_buttons["Now Playing"].setChecked(True))
         layout.addWidget(self.transport)
 
-        # YouTube and local-music playback are mutually exclusive: stop one
-        # when switching to the other, and hide the transport bar entirely
-        # while the YouTube tab is active. Connected after self.transport
-        # exists so the handler can always reference it.
         self.stack.currentChanged.connect(self._on_view_changed)
 
         self.setCentralWidget(root)
@@ -123,12 +134,9 @@ class MainWindow(QMainWindow):
         self.ripper_view.rip_completed.connect(self.library_view.refresh)
         self.ripper_view.log.connect(lambda m: sb.showMessage(m, 4000))
 
-        # Initial scan of saved roots, async-ish
+        # Initial scan of saved roots.
         if self.settings.library_paths:
-            self.statusBar().showMessage("Scanning library...")
-            n = self.library.scan_paths(self.settings.library_paths)
-            self.statusBar().showMessage(f"Scanned: {n} new tracks", 4000)
-            self.library_view.refresh()
+            self._start_scan(self.settings.library_paths, "Scanned")
 
         # Menu
         self._build_menu()
@@ -153,17 +161,11 @@ class MainWindow(QMainWindow):
         current = self.stack.currentWidget()
         is_youtube = current is self.youtube_view
         is_rip = current is self.ripper_view
-        # Tabs where the local-music transport bar makes no sense:
-        # the YouTube tab (different audio source) and the Rip tab
-        # (drive activity / the disc audio is what the user cares about).
         hide_transport = is_youtube or is_rip
         self.transport.setVisible(not hide_transport)
         if hide_transport:
-            # Stop local playback before the user starts ripping or watching
-            # YouTube, so two audio sources don't compete.
             self.player.stop()
         if not is_youtube:
-            # Pause any playing YouTube video when leaving that tab.
             self.youtube_view.pause_all_videos()
 
     # ------------------------------------------------------------------ actions
@@ -174,16 +176,25 @@ class MainWindow(QMainWindow):
         if folder not in self.settings.library_paths:
             self.settings.library_paths.append(folder)
             self.settings.save()
-        self.statusBar().showMessage(f"Scanning {folder}...")
-        n = self.library.scan_paths([folder])
-        self.statusBar().showMessage(f"Added {n} tracks from {folder}", 5000)
-        self.library_view.refresh()
+        self._start_scan([folder], f"Added tracks from {folder}")
 
     def rescan(self) -> None:
-        self.statusBar().showMessage("Rescanning library...")
-        n = self.library.scan_paths(self.settings.library_paths or [self.settings.music_root])
-        self.statusBar().showMessage(f"Rescanned: {n} new tracks", 5000)
+        self._start_scan(self.settings.library_paths or [self.settings.music_root], "Rescanned")
+
+    def _start_scan(self, roots: list[str], label: str) -> None:
+        if self._scan_thread is not None and self._scan_thread.isRunning():
+            self.statusBar().showMessage("Library scan already running.", 4000)
+            return
+        self.statusBar().showMessage("Scanning library...")
+        self._scan_thread = _LibraryScanThread(self.library, list(roots), label, self)
+        self._scan_thread.finished_with.connect(self._on_scan_finished)
+        self._scan_thread.finished.connect(self._scan_thread.deleteLater)
+        self._scan_thread.start()
+
+    def _on_scan_finished(self, n: int, label: str) -> None:
+        self.statusBar().showMessage(f"{label}: {n} new tracks", 5000)
         self.library_view.refresh()
+        self._scan_thread = None
 
     def remove_missing(self) -> None:
         n = self.library.remove_missing()
@@ -196,6 +207,7 @@ class MainWindow(QMainWindow):
         if dlg.exec():
             self.settings = dlg.result_settings
             self.settings.save()
+            self.ripper_view.apply_settings(self.settings)
             self.statusBar().showMessage("Settings saved.", 3000)
 
     def show_about(self) -> None:
@@ -209,6 +221,9 @@ class MainWindow(QMainWindow):
         )
 
     def closeEvent(self, ev) -> None:
+        if self._scan_thread is not None and self._scan_thread.isRunning():
+            self._scan_thread.quit()
+            self._scan_thread.wait(1000)
         self.settings.last_volume = self.player.volume()
         self.settings.save()
         super().closeEvent(ev)
