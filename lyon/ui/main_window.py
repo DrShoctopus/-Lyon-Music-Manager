@@ -128,7 +128,9 @@ class MainWindow(QMainWindow):
 
         # Wire library actions
         self.library_view.play_tracks.connect(self.player.set_queue)
-        self.library_view.enqueue_tracks.connect(self.player.enqueue)
+        self.library_view.enqueue_tracks.connect(self._enqueue_tracks)
+        self.library_view.status_message.connect(lambda m: sb.showMessage(m, 3000))
+        self.player.track_changed.connect(self.library_view.highlight_track)
         self.library_view.request_add_folder.connect(self.add_folder)
         self.library_view.request_rescan.connect(self.rescan)
         self.ripper_view.rip_completed.connect(self.library_view.refresh)
@@ -180,6 +182,16 @@ class MainWindow(QMainWindow):
 
     def rescan(self) -> None:
         self._start_scan(self.settings.library_paths or [self.settings.music_root], "Rescanned")
+
+    def _enqueue_tracks(self, tracks: list) -> None:
+        self.player.enqueue(tracks)
+        count = len(tracks)
+        total = len(self.player.queue())
+        plural = "" if count == 1 else "s"
+        queue_plural = "" if total == 1 else "s"
+        self.statusBar().showMessage(
+            f"Enqueued {count} track{plural}. Queue now has {total} track{queue_plural}.", 3000
+        )
 
     def _start_scan(self, roots: list[str], label: str) -> None:
         if self._scan_thread is not None and self._scan_thread.isRunning():
