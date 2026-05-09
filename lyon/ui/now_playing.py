@@ -71,16 +71,16 @@ class NowPlayingView(QWidget):
 
 
 # Vertical lift of the play button above the bar's top edge, in pixels.
-PLAY_BUTTON_LIFT = 30
+PLAY_BUTTON_LIFT = 34
 
 
 class TransportBar(QWidget):
-    """Bottom playback area: a visible bar + a raised play button.
+    """Glossy bottom playback area with a raised central play button.
 
-    The wrapper is taller than the visible bar; the bar itself fills the
-    bottom portion, and the play button is a free-floating child that
-    sits centred over the controls and protrudes above the bar's top
-    edge -- the classic WMP raised-circle look.
+    The layout intentionally echoes a modernized Windows Media Player
+    transport: a long rounded capsule, glassy segmented control pods,
+    a glowing blue play button that breaks the top edge, and a slim
+    blue volume rail on the right.
     """
 
     open_now_playing = Signal()
@@ -90,15 +90,16 @@ class TransportBar(QWidget):
         self.player = player
         self._user_dragging = False
 
-        # The visible bar -- gradient background, border-top, etc.
+        # The visible bar -- a long, glossy capsule like the reference image.
         self.bar = QFrame(self)
         self.bar.setObjectName("transport")
 
-        # Cover thumb
+        # Cover thumb / now-playing launch target. Keep it compact so the
+        # transport still reads as one continuous media-control pill.
         self.thumb = QLabel()
-        self.thumb.setFixedSize(112, 112)
-        self.thumb.setPixmap(cover_pixmap(None, 112, "♪"))
-        self.thumb.setStyleSheet("border:1px solid #000;")
+        self.thumb.setObjectName("transportThumb")
+        self.thumb.setFixedSize(66, 66)
+        self.thumb.setPixmap(cover_pixmap(None, 66, "♪"))
         self.thumb.mousePressEvent = lambda ev: self.open_now_playing.emit()
 
         self.title_lbl = ElidedLabel("Nothing playing")
@@ -115,17 +116,18 @@ class TransportBar(QWidget):
 
         meta_w = QWidget()
         meta_w.setLayout(meta)
-        meta_w.setMinimumWidth(260)
-        meta_w.setMaximumWidth(420)
+        meta_w.setObjectName("transportMeta")
+        meta_w.setMinimumWidth(150)
+        meta_w.setMaximumWidth(320)
         meta_w.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
 
-        # Side transport buttons (live in the bar's layout).
-        self.prev_btn = self._make_btn("⏮")
-        self.next_btn = self._make_btn("⏭")
-        self.stop_btn = self._make_btn("■")
-        self.shuffle_btn = self._make_btn("⤮")
+        # Side transport buttons (live in glossy segmented pods).
+        self.prev_btn = self._make_btn("◀◀")
+        self.next_btn = self._make_btn("▶▶")
+        self.stop_btn = self._make_btn("■", utility=True)
+        self.shuffle_btn = self._make_btn("⤨", utility=True)
         self.shuffle_btn.setCheckable(True)
-        self.repeat_btn = self._make_btn("⟳")
+        self.repeat_btn = self._make_btn("⟳", utility=True)
         self.repeat_btn.setCheckable(True)
 
         # Play button: free-floating child of self (the wrapper, NOT the bar)
@@ -133,6 +135,7 @@ class TransportBar(QWidget):
         self.play_btn = QToolButton(self)
         self.play_btn.setObjectName("transportPlay")
         self.play_btn.setText("▶")
+        self.play_btn.setCursor(Qt.PointingHandCursor)
         self.play_btn.clicked.connect(player.toggle)
 
         self.prev_btn.clicked.connect(player.previous)
@@ -146,13 +149,23 @@ class TransportBar(QWidget):
         # side buttons so the row's centerline does not shift.
         self._play_spacer = QWidget()
 
-        controls = QHBoxLayout()
-        controls.addWidget(self.shuffle_btn)
+        utility_cluster = QFrame()
+        utility_cluster.setObjectName("transportUtilityCluster")
+        utility_controls = QHBoxLayout(utility_cluster)
+        utility_controls.setContentsMargins(0, 0, 0, 0)
+        utility_controls.setSpacing(0)
+        utility_controls.addWidget(self.shuffle_btn)
+        utility_controls.addWidget(self.repeat_btn)
+        utility_controls.addWidget(self.stop_btn)
+
+        nav_cluster = QFrame()
+        nav_cluster.setObjectName("transportNavCluster")
+        controls = QHBoxLayout(nav_cluster)
+        controls.setContentsMargins(0, 0, 0, 0)
+        controls.setSpacing(0)
         controls.addWidget(self.prev_btn)
         controls.addWidget(self._play_spacer)
         controls.addWidget(self.next_btn)
-        controls.addWidget(self.stop_btn)
-        controls.addWidget(self.repeat_btn)
 
         # Seek
         self.elapsed_lbl = QLabel("0:00")
@@ -170,32 +183,41 @@ class TransportBar(QWidget):
         seek_row.addWidget(self.total_lbl)
 
         center = QVBoxLayout()
-        center.setContentsMargins(0, 6, 0, 6)
-        center.addLayout(controls)
+        center.setContentsMargins(0, 0, 0, 0)
+        center.setSpacing(8)
+        center.addWidget(nav_cluster, 0, Qt.AlignHCenter)
         center.addLayout(seek_row)
 
         # Volume
         self.vol = QSlider(Qt.Horizontal)
         self.vol.setRange(0, 100)
         self.vol.setValue(player.volume())
-        self.vol.setMaximumWidth(240)
+        self.vol.setMaximumWidth(170)
         self.vol.valueChanged.connect(player.set_volume)
-        vol_row = QHBoxLayout()
-        vol_row.addWidget(QLabel("🔊"))
+        volume_icon = QLabel("🔊")
+        volume_icon.setObjectName("volumeIcon")
+        vol_cluster = QFrame()
+        vol_cluster.setObjectName("transportVolumeCluster")
+        vol_row = QHBoxLayout(vol_cluster)
+        vol_row.setContentsMargins(14, 0, 16, 0)
+        vol_row.setSpacing(10)
+        vol_row.addWidget(volume_icon)
         vol_row.addWidget(self.vol)
 
         # The bar's own internal layout.
         bar_layout = QHBoxLayout(self.bar)
-        bar_layout.setContentsMargins(16, 10, 16, 10)
+        bar_layout.setContentsMargins(18, 12, 22, 12)
+        bar_layout.setSpacing(14)
         bar_layout.addWidget(self.thumb)
         bar_layout.addWidget(meta_w)
+        bar_layout.addWidget(utility_cluster)
         bar_layout.addLayout(center, 1)
-        bar_layout.addLayout(vol_row)
+        bar_layout.addWidget(vol_cluster)
 
         # Wrapper layout: leave PLAY_BUTTON_LIFT pixels of breathing room
         # above the bar so the protruding play button has somewhere to render.
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, PLAY_BUTTON_LIFT, 0, 0)
+        outer.setContentsMargins(18, PLAY_BUTTON_LIFT, 18, 10)
         outer.setSpacing(0)
         outer.addWidget(self.bar)
 
@@ -207,10 +229,16 @@ class TransportBar(QWidget):
         self._sync_spacer_size()
         self.play_btn.raise_()
 
-    def _make_btn(self, text: str, primary: bool = False) -> QToolButton:
+    def _make_btn(self, text: str, primary: bool = False, utility: bool = False) -> QToolButton:
         b = QToolButton()
         b.setText(text)
-        b.setObjectName("transportPlay" if primary else "transportBtn")
+        b.setCursor(Qt.PointingHandCursor)
+        if primary:
+            b.setObjectName("transportPlay")
+        elif utility:
+            b.setObjectName("transportUtilityBtn")
+        else:
+            b.setObjectName("transportBtn")
         return b
 
     def _cycle_repeat(self) -> None:
@@ -223,11 +251,11 @@ class TransportBar(QWidget):
         if track is None:
             self.title_lbl.setText("Nothing playing")
             self.artist_lbl.setText("")
-            self.thumb.setPixmap(cover_pixmap(None, 112, "♪"))
+            self.thumb.setPixmap(cover_pixmap(None, 66, "♪"))
         else:
             self.title_lbl.setText(track.title)
             self.artist_lbl.setText(f"{track.display_artist} - {track.album}")
-            self.thumb.setPixmap(cover_pixmap(track.artwork_path, 112, "♪"))
+            self.thumb.setPixmap(cover_pixmap(track.artwork_path, 66, "♪"))
 
     def _on_position(self, pos_ms: int, dur_ms: int) -> None:
         if not self._user_dragging:
@@ -253,7 +281,7 @@ class TransportBar(QWidget):
         # Width matches the play button so the controls row stays symmetric.
         # Height matches the side buttons (60) so the row's centerline does
         # not shift -- the play button is allowed to extend above instead.
-        self._play_spacer.setFixedSize(play_hint.width(), 60)
+        self._play_spacer.setFixedSize(play_hint.width(), 54)
 
     def resizeEvent(self, ev) -> None:
         super().resizeEvent(ev)
