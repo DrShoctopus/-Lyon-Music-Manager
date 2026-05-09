@@ -3,7 +3,7 @@
 Aesthetic notes:
 - Graphite panels with soft, reflective highlights
 - Electric cyan and cobalt gradients for active states
-- A raised glassy transport button over a rounded bottom control bar
+- A contained glassy transport button inside a rounded bottom control bar
 - Matching cool-blue accents across tabs, inputs, progress, and selection
 """
 
@@ -116,25 +116,25 @@ QLineEdit:focus, QComboBox:focus { border: 1px solid #4eefff; }
 
 /* Sliders (transport bar + volume) */
 QSlider::groove:horizontal {
-    height: 10px;
+    height: 8px;
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
         stop:0 #07090c, stop:0.45 #171d24, stop:1 #343d47);
     border: 1px solid #030405;
-    border-radius: 5px;
+    border-radius: 4px;
 }
 QSlider::sub-page:horizontal {
     background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
         stop:0 #102c83, stop:0.5 #1b8dff, stop:1 #68f3ff);
     border: 1px solid rgba(126,245,255,0.45);
-    border-radius: 5px;
+    border-radius: 4px;
 }
 QSlider::handle:horizontal {
     background: qradialgradient(cx:0.45, cy:0.28, radius:0.78,
         stop:0 #ffffff, stop:0.24 #9ff4ff, stop:0.58 #267fe9, stop:1 #07142d);
     border: 1px solid #02050a;
-    width: 22px;
-    margin: -8px 0;
-    border-radius: 11px;
+    width: 18px;
+    margin: -6px 0;
+    border-radius: 9px;
 }
 QSlider::handle:horizontal:hover {
     border: 1px solid #79fbff;
@@ -146,32 +146,32 @@ QFrame#transport {
         stop:0 #6b6f73, stop:0.12 #3a3f44, stop:0.48 #25292e,
         stop:0.49 #171b20, stop:1 #07090c);
     border: 1px solid #020304;
-    border-radius: 36px;
-    min-height: 92px;
+    border-radius: 38px;
+    min-height: 104px;
     margin: 0 14px 10px 14px;
 }
 QLabel#transportThumb {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
         stop:0 #3e4852, stop:1 #07090c);
     border: 1px solid #030405;
-    border-radius: 12px;
+    border-radius: 10px;
     padding: 2px;
 }
-QLabel#nowPlayingTitle  { color: #72f4ff; font-weight: 700; font-size: 13pt; }
-QLabel#nowPlayingArtist { color: #d4e2ee; font-size: 10.5pt; }
-QLabel#timeLabel        { color: #aeb9c4; font-size: 10pt; }
-QLabel#volumeIcon       { color: #e9f7ff; font-size: 20pt; padding-left: 4px; }
+QLabel#nowPlayingTitle  { color: #72f4ff; font-weight: 700; font-size: 12.5pt; }
+QLabel#nowPlayingArtist { color: #d4e2ee; font-size: 10pt; }
+QLabel#timeLabel        { color: #aeb9c4; font-size: 9.5pt; }
+QLabel#volumeIcon       { color: #e9f7ff; font-size: 18pt; padding-left: 2px; }
 
 /* Gloss transport buttons */
 QToolButton#transportBtn {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
         stop:0 #777e85, stop:0.18 #3f474f, stop:0.5 #1b2026, stop:1 #050607);
     border: 1px solid #050607;
-    border-radius: 10px;
-    min-width: 58px;
-    min-height: 54px;
+    border-radius: 8px;
+    min-width: 42px;
+    min-height: 40px;
     color: #f8fdff;
-    font-size: 18pt;
+    font-size: 15pt;
     font-weight: 700;
 }
 QToolButton#transportBtn:hover {
@@ -186,22 +186,22 @@ QToolButton#transportBtn:pressed, QToolButton#transportBtn:checked {
     color: #ffffff;
 }
 QToolButton#transportPlay {
-    min-width: 92px;
-    min-height: 92px;
-    border-radius: 46px;
+    min-width: 62px;
+    min-height: 62px;
+    border-radius: 31px;
     background: qradialgradient(cx:0.38, cy:0.25, radius:0.86,
         stop:0 #ffffff, stop:0.18 #d6f7ff, stop:0.39 #73c8ff,
         stop:0.62 #1f67d6, stop:0.82 #102c82, stop:1 #07101b);
     color: #ffffff;
     font-weight: 900;
-    font-size: 28pt;
-    border: 3px solid #1b2026;
+    font-size: 22pt;
+    border: 2px solid #1b2026;
 }
 QToolButton#transportPlay:hover {
     background: qradialgradient(cx:0.38, cy:0.25, radius:0.86,
         stop:0 #ffffff, stop:0.2 #e7ffff, stop:0.42 #8df7ff,
         stop:0.64 #2d8fff, stop:0.84 #1440aa, stop:1 #07101b);
-    border: 3px solid #65efff;
+    border: 2px solid #65efff;
 }
 QToolButton#transportPlay:pressed {
     background: qradialgradient(cx:0.5, cy:0.6, radius:0.82,
