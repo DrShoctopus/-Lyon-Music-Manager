@@ -71,7 +71,7 @@ class NowPlayingView(QWidget):
 
 
 # Vertical lift of the play button above the bar's top edge, in pixels.
-PLAY_BUTTON_LIFT = 30
+PLAY_BUTTON_LIFT = 28
 
 
 class TransportBar(QWidget):
@@ -94,11 +94,13 @@ class TransportBar(QWidget):
         self.bar = QFrame(self)
         self.bar.setObjectName("transport")
 
-        # Cover thumb
+        # Compact cover thumb; the transport is now a slim glossy pill, so the
+        # artwork acts as a small quick-link into Now Playing instead of a large
+        # block that makes the bar feel heavy.
         self.thumb = QLabel()
-        self.thumb.setFixedSize(112, 112)
-        self.thumb.setPixmap(cover_pixmap(None, 112, "♪"))
-        self.thumb.setStyleSheet("border:1px solid #000;")
+        self.thumb.setObjectName("transportThumb")
+        self.thumb.setFixedSize(76, 76)
+        self.thumb.setPixmap(cover_pixmap(None, 76, "♪"))
         self.thumb.mousePressEvent = lambda ev: self.open_now_playing.emit()
 
         self.title_lbl = ElidedLabel("Nothing playing")
@@ -115,18 +117,25 @@ class TransportBar(QWidget):
 
         meta_w = QWidget()
         meta_w.setLayout(meta)
-        meta_w.setMinimumWidth(260)
-        meta_w.setMaximumWidth(420)
+        meta_w.setMinimumWidth(220)
+        meta_w.setMaximumWidth(360)
         meta_w.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
 
-        # Side transport buttons (live in the bar's layout).
-        self.prev_btn = self._make_btn("⏮")
-        self.next_btn = self._make_btn("⏭")
-        self.stop_btn = self._make_btn("■")
-        self.shuffle_btn = self._make_btn("⤮")
+        # Side transport buttons (live in the bar's layout). They are ordered
+        # like the reference: utility controls on the left, seek controls around
+        # a raised central play button, and volume on the right.
+        self.shuffle_btn = self._make_btn("⤨")
+        self.shuffle_btn.setToolTip("Shuffle")
         self.shuffle_btn.setCheckable(True)
         self.repeat_btn = self._make_btn("⟳")
+        self.repeat_btn.setToolTip("Repeat")
         self.repeat_btn.setCheckable(True)
+        self.stop_btn = self._make_btn("■")
+        self.stop_btn.setToolTip("Stop")
+        self.prev_btn = self._make_btn("◀◀")
+        self.prev_btn.setToolTip("Previous")
+        self.next_btn = self._make_btn("▶▶")
+        self.next_btn.setToolTip("Next")
 
         # Play button: free-floating child of self (the wrapper, NOT the bar)
         # so it can protrude above the bar's top edge without being clipped.
@@ -147,12 +156,14 @@ class TransportBar(QWidget):
         self._play_spacer = QWidget()
 
         controls = QHBoxLayout()
+        controls.setSpacing(6)
         controls.addWidget(self.shuffle_btn)
+        controls.addWidget(self.repeat_btn)
+        controls.addWidget(self.stop_btn)
+        controls.addSpacing(8)
         controls.addWidget(self.prev_btn)
         controls.addWidget(self._play_spacer)
         controls.addWidget(self.next_btn)
-        controls.addWidget(self.stop_btn)
-        controls.addWidget(self.repeat_btn)
 
         # Seek
         self.elapsed_lbl = QLabel("0:00")
@@ -178,18 +189,25 @@ class TransportBar(QWidget):
         self.vol = QSlider(Qt.Horizontal)
         self.vol.setRange(0, 100)
         self.vol.setValue(player.volume())
-        self.vol.setMaximumWidth(240)
+        self.vol.setObjectName("volumeSlider")
+        self.vol.setMaximumWidth(260)
         self.vol.valueChanged.connect(player.set_volume)
+        vol_icon = QLabel("♬")
+        vol_icon.setObjectName("volumeIcon")
         vol_row = QHBoxLayout()
-        vol_row.addWidget(QLabel("🔊"))
+        vol_row.setSpacing(10)
+        vol_row.addWidget(vol_icon)
         vol_row.addWidget(self.vol)
 
         # The bar's own internal layout.
         bar_layout = QHBoxLayout(self.bar)
-        bar_layout.setContentsMargins(16, 10, 16, 10)
+        bar_layout.setContentsMargins(20, 12, 20, 12)
+        bar_layout.setSpacing(14)
         bar_layout.addWidget(self.thumb)
         bar_layout.addWidget(meta_w)
-        bar_layout.addLayout(center, 1)
+        bar_layout.addStretch(1)
+        bar_layout.addLayout(center, 3)
+        bar_layout.addStretch(1)
         bar_layout.addLayout(vol_row)
 
         # Wrapper layout: leave PLAY_BUTTON_LIFT pixels of breathing room
@@ -223,11 +241,11 @@ class TransportBar(QWidget):
         if track is None:
             self.title_lbl.setText("Nothing playing")
             self.artist_lbl.setText("")
-            self.thumb.setPixmap(cover_pixmap(None, 112, "♪"))
+            self.thumb.setPixmap(cover_pixmap(None, 76, "♪"))
         else:
             self.title_lbl.setText(track.title)
             self.artist_lbl.setText(f"{track.display_artist} - {track.album}")
-            self.thumb.setPixmap(cover_pixmap(track.artwork_path, 112, "♪"))
+            self.thumb.setPixmap(cover_pixmap(track.artwork_path, 76, "♪"))
 
     def _on_position(self, pos_ms: int, dur_ms: int) -> None:
         if not self._user_dragging:
@@ -251,9 +269,9 @@ class TransportBar(QWidget):
         """Reserve a row slot the same width as the play button."""
         play_hint = self.play_btn.sizeHint()
         # Width matches the play button so the controls row stays symmetric.
-        # Height matches the side buttons (60) so the row's centerline does
-        # not shift -- the play button is allowed to extend above instead.
-        self._play_spacer.setFixedSize(play_hint.width(), 60)
+        # Height matches the side buttons so the row's centerline does not
+        # shift -- the play button is allowed to extend above instead.
+        self._play_spacer.setFixedSize(play_hint.width(), 54)
 
     def resizeEvent(self, ev) -> None:
         super().resizeEvent(ev)
