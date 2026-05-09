@@ -1,24 +1,36 @@
-"""Spotify-style main window: left sidebar + stacked content + bottom transport."""
+"""Top-level window with WMP-style title, tab bar, stacked views."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
-    QFileDialog, QFrame, QHBoxLayout, QMainWindow, QMessageBox,
-    QStackedWidget, QStatusBar, QVBoxLayout, QWidget,
+    QButtonGroup, QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow,
+    QMessageBox, QPushButton, QStackedWidget, QStatusBar, QVBoxLayout, QWidget,
 )
 
 from .. import __app_name__, __version__
 from ..core.library import Library
 from ..core.player import Player
 from ..core.settings import Settings
-from .home_view import HomeView
 from .library_view import LibraryView
 from .now_playing import NowPlayingView, TransportBar
 from .ripper_view import RipperView
-from .sidebar import Sidebar
-from .styles import SPOTIFY_QSS
+from .styles import WMP_QSS
 from .youtube_view import YouTubeView
+
+
+class _LibraryScanThread(QThread):
+    finished_with = Signal(int, str)  # (new_tracks, label)
+
+    def __init__(self, library: Library, roots: list[str], label: str, parent=None):
+        super().__init__(parent)
+        self.library = library
+        self.roots = roots
+        self.label = label
+
+    def run(self) -> None:
+        n = self.library.scan_paths(self.roots)
+        self.finished_with.emit(n, self.label)
 
 
 class MainWindow(QMainWindow):
@@ -28,53 +40,84 @@ class MainWindow(QMainWindow):
         self.library = Library()
         self.player = Player(self)
         self.player.set_volume(self.settings.last_volume)
+        self._scan_thread: _LibraryScanThread | None = None
 
         self.setWindowTitle(__app_name__)
-        self.resize(1200, 780)
-        self.setMinimumSize(960, 620)
-        self.setStyleSheet(SPOTIFY_QSS)
+        self.resize(1100, 720)
+        self.setMinimumSize(900, 600)
+        self.setStyleSheet(WMP_QSS)
 
         root = QWidget()
         root.setObjectName("root")
-        outer = QVBoxLayout(root)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(0)
+        layout = QVBoxLayout(root)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
 
-        # Top: sidebar + content
-        top = QHBoxLayout()
-        top.setContentsMargins(0, 0, 0, 0)
-        top.setSpacing(0)
+        # ---- title bar
+        title = QFrame()
+        title.setObjectName("titlebar")
+        tlay = QHBoxLayout(title)
+        tlay.setContentsMargins(12, 0, 12, 0)
+        tlay.addWidget(QLabel(f"{__app_name__}"))
+        tlay.itemAt(0).widget().setObjectName("titleLabel")
+        tlay.addStretch(1)
+        layout.addWidget(title)
 
-        self.sidebar = Sidebar()
-        top.addWidget(self.sidebar)
+        # ---- tab strip
+        tabs = QFrame()
+        tabs.setObjectName("tabbar")
+        tlayout = QHBoxLayout(tabs)
+        tlayout.setContentsMargins(8, 0, 8, 0)
+        tlayout.setSpacing(0)
+        self.tab_group = QButtonGroup(self)
+        self.tab_group.setExclusive(True)
+        self._tab_buttons: dict[str, QPushButton] = {}
+        for name in ("Now Playing", "Library", "Rip", "YouTube"):
+            btn = QPushButton(name)
+            btn.setObjectName("navTab")
+            btn.setCheckable(True)
+            btn.setCursor(Qt.PointingHandCursor)
+            tlayout.addWidget(btn)
+            self.tab_group.addButton(btn)
+            self._tab_buttons[name] = btn
+        tlayout.addStretch(1)
+        settings_btn = QPushButton("Settings")
+        settings_btn.setObjectName("navTab")
+        settings_btn.clicked.connect(self.open_settings)
+        tlayout.addWidget(settings_btn)
+        layout.addWidget(tabs)
 
-        # Content frame holds the stack
-        content_frame = QFrame()
-        content_frame.setObjectName("content")
-        cf_layout = QVBoxLayout(content_frame)
-        cf_layout.setContentsMargins(0, 0, 0, 0)
-        cf_layout.setSpacing(0)
-
+        # ---- stacked content
         self.stack = QStackedWidget()
-        self.home_view = HomeView(self.library)
+        self.now_playing = NowPlayingView(self.player)
         self.library_view = LibraryView(self.library)
-        self.youtube_view = YouTubeView()
         self.ripper_view = RipperView(self.settings, self.library)
-        self.now_playing_view = NowPlayingView(self.player)
+        self.youtube_view = YouTubeView()
 
-        for w in (self.home_view, self.library_view, self.youtube_view,
-                  self.ripper_view, self.now_playing_view):
-            self.stack.addWidget(w)
+        self.stack.addWidget(self.now_playing)
+        self.stack.addWidget(self.library_view)
+        self.stack.addWidget(self.ripper_view)
+        self.stack.addWidget(self.youtube_view)
 
-        cf_layout.addWidget(self.stack, 1)
-        top.addWidget(content_frame, 1)
+        self._tab_buttons["Now Playing"].toggled.connect(
+            lambda c: c and self.stack.setCurrentWidget(self.now_playing))
+        self._tab_buttons["Library"].toggled.connect(
+            lambda c: c and self.stack.setCurrentWidget(self.library_view))
+        self._tab_buttons["Rip"].toggled.connect(
+            lambda c: c and self.stack.setCurrentWidget(self.ripper_view))
+        self._tab_buttons["YouTube"].toggled.connect(
+            lambda c: c and self.stack.setCurrentWidget(self.youtube_view))
+        self._tab_buttons["Library"].setChecked(True)
 
-        outer.addLayout(top, 1)
+        layout.addWidget(self.stack, 1)
 
-        # Bottom transport bar spans full width
+        # ---- transport bar
         self.transport = TransportBar(self.player)
-        self.transport.open_now_playing.connect(self._show_now_playing)
-        outer.addWidget(self.transport)
+        self.transport.open_now_playing.connect(
+            lambda: self._tab_buttons["Now Playing"].setChecked(True))
+        layout.addWidget(self.transport)
+
+        self.stack.currentChanged.connect(self._on_view_changed)
 
         self.setCentralWidget(root)
 
@@ -83,55 +126,20 @@ class MainWindow(QMainWindow):
         self.setStatusBar(sb)
         sb.showMessage(f"{__app_name__} {__version__} - ready")
 
-        # Wire navigation
-        self.sidebar.nav_changed.connect(self._on_nav)
-        self.sidebar.set_active("home")
-
-        # Wire actions
-        self.home_view.open_album.connect(self._open_album)
-        self.home_view.open_library.connect(lambda: self.sidebar.set_active("library"))
-        self.home_view.open_rip.connect(lambda: self.sidebar.set_active("rip"))
+        # Wire library actions
         self.library_view.play_tracks.connect(self.player.set_queue)
         self.library_view.enqueue_tracks.connect(self.player.enqueue)
         self.library_view.request_add_folder.connect(self.add_folder)
         self.library_view.request_rescan.connect(self.rescan)
-        self.ripper_view.rip_completed.connect(self._after_rip)
+        self.ripper_view.rip_completed.connect(self.library_view.refresh)
         self.ripper_view.log.connect(lambda m: sb.showMessage(m, 4000))
 
-        # Initial scan
+        # Initial scan of saved roots.
         if self.settings.library_paths:
-            self.statusBar().showMessage("Scanning library...")
-            n = self.library.scan_paths(self.settings.library_paths)
-            self.statusBar().showMessage(f"Scanned: {n} new tracks", 4000)
-            self.library_view.refresh()
-            self.home_view.refresh()
+            self._start_scan(self.settings.library_paths, "Scanned")
 
+        # Menu
         self._build_menu()
-
-    # ------------------------------------------------------------------ navigation
-    def _on_nav(self, key: str) -> None:
-        mapping = {
-            "home": self.home_view,
-            "library": self.library_view,
-            "youtube": self.youtube_view,
-            "rip": self.ripper_view,
-        }
-        target = mapping.get(key)
-        if target:
-            self.stack.setCurrentWidget(target)
-
-    def _show_now_playing(self) -> None:
-        self.stack.setCurrentWidget(self.now_playing_view)
-        # No sidebar entry checked; close-out happens when user picks one again
-        for k in ("home", "library", "youtube", "rip"):
-            btn = self.sidebar.button(k)
-            if btn and btn.isChecked():
-                btn.setChecked(False)
-
-    def _open_album(self, artist: str, album: str) -> None:
-        # Switch to library tab and select the album
-        self.sidebar.set_active("library")
-        self.library_view.select_album(artist, album)
 
     # ------------------------------------------------------------------ menu
     def _build_menu(self) -> None:
@@ -143,12 +151,22 @@ class MainWindow(QMainWindow):
         file_menu.addAction(QAction("Remove Missing Files", self,
                                     triggered=self.remove_missing))
         file_menu.addSeparator()
-        file_menu.addAction(QAction("Settings...", self, triggered=self.open_settings))
-        file_menu.addSeparator()
         file_menu.addAction(QAction("Exit", self, triggered=self.close))
 
         help_menu = m.addMenu("&Help")
         help_menu.addAction(QAction("About", self, triggered=self.show_about))
+
+    # ------------------------------------------------------------------ tabs
+    def _on_view_changed(self, _idx: int) -> None:
+        current = self.stack.currentWidget()
+        is_youtube = current is self.youtube_view
+        is_rip = current is self.ripper_view
+        hide_transport = is_youtube or is_rip
+        self.transport.setVisible(not hide_transport)
+        if hide_transport:
+            self.player.stop()
+        if not is_youtube:
+            self.youtube_view.pause_all_videos()
 
     # ------------------------------------------------------------------ actions
     def add_folder(self) -> None:
@@ -158,28 +176,30 @@ class MainWindow(QMainWindow):
         if folder not in self.settings.library_paths:
             self.settings.library_paths.append(folder)
             self.settings.save()
-        self.statusBar().showMessage(f"Scanning {folder}...")
-        n = self.library.scan_paths([folder])
-        self.statusBar().showMessage(f"Added {n} tracks from {folder}", 5000)
-        self.library_view.refresh()
-        self.home_view.refresh()
+        self._start_scan([folder], f"Added tracks from {folder}")
 
     def rescan(self) -> None:
-        self.statusBar().showMessage("Rescanning library...")
-        n = self.library.scan_paths(self.settings.library_paths or [self.settings.music_root])
-        self.statusBar().showMessage(f"Rescanned: {n} new tracks", 5000)
+        self._start_scan(self.settings.library_paths or [self.settings.music_root], "Rescanned")
+
+    def _start_scan(self, roots: list[str], label: str) -> None:
+        if self._scan_thread is not None and self._scan_thread.isRunning():
+            self.statusBar().showMessage("Library scan already running.", 4000)
+            return
+        self.statusBar().showMessage("Scanning library...")
+        self._scan_thread = _LibraryScanThread(self.library, list(roots), label, self)
+        self._scan_thread.finished_with.connect(self._on_scan_finished)
+        self._scan_thread.finished.connect(self._scan_thread.deleteLater)
+        self._scan_thread.start()
+
+    def _on_scan_finished(self, n: int, label: str) -> None:
+        self.statusBar().showMessage(f"{label}: {n} new tracks", 5000)
         self.library_view.refresh()
-        self.home_view.refresh()
+        self._scan_thread = None
 
     def remove_missing(self) -> None:
         n = self.library.remove_missing()
         self.statusBar().showMessage(f"Removed {n} missing tracks", 5000)
         self.library_view.refresh()
-        self.home_view.refresh()
-
-    def _after_rip(self) -> None:
-        self.library_view.refresh()
-        self.home_view.refresh()
 
     def open_settings(self) -> None:
         from .settings_dialog import SettingsDialog
@@ -187,6 +207,7 @@ class MainWindow(QMainWindow):
         if dlg.exec():
             self.settings = dlg.result_settings
             self.settings.save()
+            self.ripper_view.apply_settings(self.settings)
             self.statusBar().showMessage("Settings saved.", 3000)
 
     def show_about(self) -> None:
@@ -195,11 +216,14 @@ class MainWindow(QMainWindow):
             f"<h3>{__app_name__} {__version__}</h3>"
             "<p><b>Custom Built For Chuck Lyon</b></p>"
             "<p>Rip your CDs to FLAC, manage your library, browse YouTube, "
-            "and play music with a Spotify-inspired interface.</p>"
+            "and play music with a familiar Windows Media Player look.</p>"
             "<p>Uses MusicBrainz, Cover Art Archive, ffmpeg, and Qt WebEngine.</p>",
         )
 
     def closeEvent(self, ev) -> None:
+        if self._scan_thread is not None and self._scan_thread.isRunning():
+            self._scan_thread.quit()
+            self._scan_thread.wait(1000)
         self.settings.last_volume = self.player.volume()
         self.settings.save()
         super().closeEvent(ev)

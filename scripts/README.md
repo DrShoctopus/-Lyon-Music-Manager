@@ -1,10 +1,10 @@
 # Build scripts
 
-End-to-end Windows build for this branch.
+End-to-end Windows build for this branch (WMP / `main`).
 
 ## `build-windows.ps1`
 
-One command, from a fresh clone, takes you to a signed-up `Setup.exe`.
+One command, from a fresh clone, takes you to a distributable zip.
 
 ```powershell
 # from the project root
@@ -20,36 +20,40 @@ scripts\build-windows.ps1
    (MetaBrainz libdiscid v0.6.4) into `bin\` if not already present.
 5. Smoke-tests `from lyon.app import main`.
 6. Runs `pyinstaller --noconfirm build\lyon.spec`.
-7. Runs Inno Setup against `installer\lyon.iss`, producing
-   `installer\Output\LyonMusicManager-Setup.exe`.
+7. Zips the result into `dist\LyonMusicManager-windows.zip`.
 
 ### Prerequisites
 
 - **Python 3.14 (64-bit)** — https://www.python.org/downloads/. Tick
-  *Add Python to PATH*.
-- **Inno Setup 6** — https://jrsoftware.org/isinfo.php. Default install
-  location works.
+  *Add Python to PATH* during install.
 
 ### Flags
 
 - `-SkipBinaries` — don't re-download `ffmpeg.exe` / `discid.dll` if
   they're already in `bin\`. Useful for repeat builds.
-- `-SkipInstaller` — produce the PyInstaller bundle in `dist\` but
-  don't run Inno Setup. Useful if Inno Setup isn't installed.
-- `-Clean` — wipe `.venv`, `build\`, `dist\`, and `installer\Output\`
-  before building.
+- `-SkipZip` — produce the PyInstaller bundle in `dist\` but don't
+  zip it.
+- `-Clean` — wipe `.venv`, `build\`, `dist\` before building.
 
 ### Output
 
-`installer\Output\LyonMusicManager-Setup.exe` — distribute this file.
-Users double-click it to install Lyon Music Manager with Start menu
-shortcut, optional desktop shortcut, optional `.flac` association, and
-a proper uninstaller.
+`dist\LyonMusicManager-windows.zip` — distribute this file. The
+recipient unzips it, runs `LyonMusicManager.exe` from the unzipped
+folder. No installer / no setup wizard.
+
+> **Note.** Copy the *whole folder* alongside the `.exe` — there are
+> dozens of DLLs and the Python runtime in there. Just shipping the
+> `.exe` won't work.
+
+### If you'd rather have a real installer
+
+The Spotify branch (`claude/spotify-youtube-WUsXc`) ships an Inno Setup
+script and its `build-windows.ps1` produces a real
+`LyonMusicManager-Setup.exe` instead of a zip.
 
 ### If PowerShell blocks the script
 
-Run once in a PowerShell window (per-user scope, won't survive logout
-unless you confirm):
+Run once in a PowerShell window (per-user scope):
 
 ```powershell
 Set-ExecutionPolicy -Scope CurrentUser RemoteSigned

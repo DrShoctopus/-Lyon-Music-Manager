@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
 from ..core import cd_detect
 from ..core.library import Library
 from ..core.metadata import AlbumInfo, TrackInfo, fetch_artwork, lookup_disc, search_album
-from ..core.ripper import RipRequest, Ripper, target_folder
+from ..core.ripper import RipRequest, Ripper, target_file, target_folder
 from ..core.settings import Settings
 from .widgets import cover_pixmap
 
@@ -24,6 +24,17 @@ def _row_track_no(text: str | None) -> int:
         return int(text.strip())
     except ValueError:
         return 0
+
+
+class _DiscReadThread(QThread):
+    finished_with = Signal(object)  # DiscToc|None
+
+    def __init__(self, drive: str, parent=None):
+        super().__init__(parent)
+        self.drive = drive
+
+    def run(self) -> None:
+        self.finished_with.emit(cd_detect.read_disc(self.drive))
 
 
 class _LookupThread(QThread):
@@ -42,6 +53,23 @@ class _LookupThread(QThread):
         self.finished_with.emit(info, art)
 
 
+class _AlbumSearchThread(QThread):
+    finished_with = Signal(object, object)   # (AlbumInfo|None, bytes|None)
+
+    def __init__(self, artist: str, album: str, settings: Settings, parent=None):
+        super().__init__(parent)
+        self.artist = artist
+        self.album = album
+        self.settings = settings
+
+    def run(self) -> None:
+        info = search_album(self.artist, self.album)
+        art = None
+        if info and self.settings.download_artwork:
+            art = fetch_artwork(info)
+        self.finished_with.emit(info, art)
+
+
 class RipperView(QWidget):
     rip_completed = Signal()
     log = Signal(str)
@@ -53,7 +81,9 @@ class RipperView(QWidget):
         self.ripper = Ripper(settings, self)
         self._album: AlbumInfo | None = None
         self._toc: cd_detect.DiscToc | None = None
+        self._disc_reader: _DiscReadThread | None = None
         self._lookup: _LookupThread | None = None
+        self._search: _AlbumSearchThread | None = None
 
         # Drive selector + actions
         toolbar = QHBoxLayout()
@@ -148,10 +178,19 @@ class RipperView(QWidget):
         self.ripper.track_finished.connect(self._on_track_finished)
         self.ripper.finished.connect(self._on_rip_finished)
         self.ripper.log.connect(self.log)
+        self.ripper.log.connect(self.status_label.setText)
 
-        for w in (self.album_edit, self.artist_edit, self.year_edit):
-            w.textChanged.connect(self._update_dest)
+        self.album_edit.textChanged.connect(self._update_dest)
+        self.artist_edit.textChanged.connect(self._update_dest)
+        self.year_edit.textChanged.connect(self._update_dest)
 
+        self.refresh_drives()
+        self._update_dest()
+
+    def apply_settings(self, settings: Settings) -> None:
+        self.settings = settings
+        self.ripper.settings = settings
+        self._update_dest()
         self.refresh_drives()
 
     # ------------------------------------------------------------------ drives
@@ -175,10 +214,23 @@ class RipperView(QWidget):
         drive = self.drive_combo.currentText()
         if not drive or "no CD" in drive:
             return
+        if self._disc_reader is not None and self._disc_reader.isRunning():
+            return
         self.settings.cd_drive = drive
         self.settings.save()
         self.status_label.setText(f"Reading disc in {drive}...")
-        toc = cd_detect.read_disc(drive)
+        self.detect_btn.setEnabled(False)
+        self.refresh_btn.setEnabled(False)
+        self.start_btn.setEnabled(False)
+        self._disc_reader = _DiscReadThread(drive, self)
+        self._disc_reader.finished_with.connect(self._on_disc_read)
+        self._disc_reader.finished.connect(self._disc_reader.deleteLater)
+        self._disc_reader.start()
+
+    def _on_disc_read(self, toc: cd_detect.DiscToc | None) -> None:
+        self.detect_btn.setEnabled(True)
+        self.refresh_btn.setEnabled(True)
+        self._disc_reader = None
         if toc is None:
             QMessageBox.warning(
                 self, "No disc",
@@ -189,20 +241,19 @@ class RipperView(QWidget):
             return
         self._toc = toc
         self.status_label.setText(
-            f"Disc found in {drive} ({toc.track_count} tracks). Looking up metadata..."
+            f"Disc found in {toc.drive} ({toc.track_count} tracks). Looking up metadata..."
         )
         self._populate_default_tracks(toc.track_count)
         if self.settings.auto_lookup_metadata:
-            # Abandon any in-flight lookup so its stale result can't overwrite
-            # the metadata for this newly inserted disc.
-            if self._lookup is not None and self._lookup.isRunning():
-                try:
-                    self._lookup.finished_with.disconnect(self._on_lookup_done)
-                except (RuntimeError, TypeError):
-                    pass
-            self._lookup = _LookupThread(toc, self.settings, self)
-            self._lookup.finished_with.connect(self._on_lookup_done)
-            self._lookup.start()
+            self._start_lookup(toc)
+        else:
+            self.start_btn.setEnabled(True)
+
+    def _start_lookup(self, toc: cd_detect.DiscToc) -> None:
+        self._lookup = _LookupThread(toc, self.settings, self)
+        self._lookup.finished_with.connect(self._on_lookup_done)
+        self._lookup.finished.connect(self._lookup.deleteLater)
+        self._lookup.start()
 
     def _populate_default_tracks(self, n: int) -> None:
         self.tracks_model.removeRows(0, self.tracks_model.rowCount())
@@ -218,6 +269,9 @@ class RipperView(QWidget):
         self._update_dest()
 
     def _on_lookup_done(self, info: AlbumInfo | None, art: bytes | None) -> None:
+        if self.sender() is not self._lookup:
+            return
+        self._lookup = None
         if info is None:
             self.status_label.setText(
                 "Disc not found in MusicBrainz. Edit titles manually or click Search Online."
@@ -261,13 +315,25 @@ class RipperView(QWidget):
             QMessageBox.information(self, "Search Online",
                                     "Enter an artist and album to search.")
             return
+        if self._search is not None and self._search.isRunning():
+            return
         self.status_label.setText("Searching MusicBrainz...")
-        info = search_album(artist, album)
+        self.relookup_btn.setEnabled(False)
+        self._search = _AlbumSearchThread(artist, album, self.settings, self)
+        self._search.finished_with.connect(self._on_search_done)
+        self._search.finished.connect(self._search.deleteLater)
+        self._search.start()
+
+    def _on_search_done(self, info: AlbumInfo | None, art: bytes | None) -> None:
+        if self.sender() is not self._search:
+            return
+        self._search = None
+        self.relookup_btn.setEnabled(True)
         if not info:
             self.status_label.setText("No matching release found.")
             return
-        if self.settings.download_artwork:
-            info.artwork = fetch_artwork(info)
+        if art is not None:
+            info.artwork = art
         self._apply_album(info)
 
     def _update_dest(self, *_) -> None:
@@ -287,7 +353,41 @@ class RipperView(QWidget):
             QMessageBox.information(self, "No Disc", "Read a disc first.")
             return
 
-        # Build album from current edits + table
+        album = self._album_from_edits()
+        if not album.tracks:
+            QMessageBox.information(self, "No Tracks", "No tracks are available to rip.")
+            return
+
+        folder = target_folder(self.settings, album)
+        existing = [target_file(folder, tr, len(album.tracks)) for tr in album.tracks]
+        existing = [p for p in existing if p.exists()]
+        if existing:
+            shown = "\n".join(str(p.name) for p in existing[:8])
+            if len(existing) > 8:
+                shown += f"\n...and {len(existing) - 8} more"
+            answer = QMessageBox.question(
+                self,
+                "Overwrite existing files?",
+                "The destination already contains files that will be overwritten:\n\n"
+                f"{shown}\n\nContinue and overwrite them?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                self.status_label.setText("Rip cancelled before overwriting existing files.")
+                return
+
+        folder = target_folder(self.settings, album, create=True)
+        self.start_btn.setEnabled(False)
+        self.cancel_btn.setEnabled(True)
+        self.detect_btn.setEnabled(False)
+        self.progress.setRange(0, len(album.tracks))
+        self.progress.setValue(0)
+
+        req = RipRequest(drive=self._toc.drive, album=album, target_dir=folder)
+        self.ripper.start(req)
+
+    def _album_from_edits(self) -> AlbumInfo:
         album = AlbumInfo(
             artist=self.artist_edit.text().strip() or "Unknown Artist",
             album=self.album_edit.text().strip() or "Unknown Album",
@@ -303,16 +403,7 @@ class RipperView(QWidget):
                 num = r + 1
             title = self.tracks_model.item(r, 1).text().strip() or f"Track {num:02d}"
             album.tracks.append(TrackInfo(number=num, title=title, artist=album.artist))
-
-        folder = target_folder(self.settings, album, create=True)
-        self.start_btn.setEnabled(False)
-        self.cancel_btn.setEnabled(True)
-        self.detect_btn.setEnabled(False)
-        self.progress.setRange(0, len(album.tracks))
-        self.progress.setValue(0)
-
-        req = RipRequest(drive=self._toc.drive, album=album, target_dir=folder)
-        self.ripper.start(req)
+        return album
 
     def cancel_rip(self) -> None:
         self.ripper.cancel()
