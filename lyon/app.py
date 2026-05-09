@@ -8,6 +8,7 @@ from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QApplication
 
 from . import __app_name__
+from .ui.branding import app_icon, create_startup_splash, finish_startup_splash
 from .ui.main_window import MainWindow
 
 
@@ -20,8 +21,14 @@ def main() -> int:
     app.setOrganizationName("Lyon")
     app.setFont(QFont("Segoe UI", 9))
 
+    icon = app_icon()
+    app.setWindowIcon(icon)
+    create_startup_splash(app)
+
     win = MainWindow()
+    win.setWindowIcon(icon)
     win.show()
+    finish_startup_splash(app, win)
     return app.exec()
 
 
