@@ -188,8 +188,9 @@ class MainWindow(QMainWindow):
         count = len(tracks)
         total = len(self.player.queue())
         plural = "" if count == 1 else "s"
+        queue_plural = "" if total == 1 else "s"
         self.statusBar().showMessage(
-            f"Enqueued {count} track{plural}. Queue now has {total}.", 3000
+            f"Enqueued {count} track{plural}. Queue now has {total} track{queue_plural}.", 3000
         )
 
     def _start_scan(self, roots: list[str], label: str) -> None:
