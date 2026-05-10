@@ -33,6 +33,8 @@ class Player(QObject):
         self._index: int = -1
         self._shuffle = False
         self._repeat = RepeatMode.OFF
+        self._equalizer_enabled = False
+        self._equalizer_bands = [0, 0, 0, 0, 0, 0]
 
         self._player.positionChanged.connect(self._emit_position)
         self._player.durationChanged.connect(self._emit_position_dur)
@@ -120,6 +122,21 @@ class Player(QObject):
 
     def volume(self) -> int:
         return int(round(self._audio.volume() * 100))
+
+    def set_equalizer(self, enabled: bool, bands: list[int]) -> None:
+        """Store the active six-band equalizer curve.
+
+        QMediaPlayer does not expose per-band DSP controls, so the player keeps
+        the curve as runtime state for the equalizer UI and any future audio
+        processing backend.
+        """
+        self._equalizer_enabled = bool(enabled)
+        normalized = list(bands[:6])
+        normalized.extend([0] * (6 - len(normalized)))
+        self._equalizer_bands = [max(-12, min(12, int(value))) for value in normalized]
+
+    def equalizer(self) -> tuple[bool, list[int]]:
+        return self._equalizer_enabled, list(self._equalizer_bands)
 
     def set_muted(self, muted: bool) -> None:
         self._audio.setMuted(muted)
