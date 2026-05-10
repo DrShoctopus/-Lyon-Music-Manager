@@ -1,7 +1,8 @@
 """Now Playing view + bottom transport bar."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QRectF, Qt, Signal
+from PySide6.QtGui import QColor, QPainter, QPainterPath
 from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QSizePolicy,
     QSlider, QToolButton, QVBoxLayout, QWidget,
@@ -74,6 +75,61 @@ PLAY_BUTTON_SIZE = 62
 SIDE_BUTTON_SIZE = (42, 40)
 
 
+class PlayPauseButton(QToolButton):
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self._playing = False
+        self.setText("")
+        self.setAccessibleName("Play")
+        self.setToolTip("Play/Pause")
+
+    def set_playing(self, playing: bool) -> None:
+        if self._playing == playing:
+            return
+        self._playing = playing
+        self.setAccessibleName("Pause" if playing else "Play")
+        self.update()
+
+    def paintEvent(self, ev) -> None:
+        super().paintEvent(ev)
+
+        r = self.rect()
+        size = min(r.width(), r.height())
+        if size <= 0:
+            return
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor("#ffffff"))
+
+        cx = r.center().x()
+        cy = r.center().y()
+
+        if self._playing:
+            bar_w = max(6.0, size * 0.14)
+            bar_h = size * 0.44
+            gap = max(3.0, size * 0.06)
+            top = cy - bar_h / 2
+            left_x = cx - gap / 2 - bar_w
+            right_x = cx + gap / 2
+            radius = max(1.0, bar_w * 0.08)
+            painter.drawRoundedRect(QRectF(left_x, top, bar_w, bar_h), radius, radius)
+            painter.drawRoundedRect(QRectF(right_x, top, bar_w, bar_h), radius, radius)
+            return
+
+        icon_w = size * 0.46
+        icon_h = size * 0.52
+        left_x = cx - icon_w * 0.34
+        right_x = cx + icon_w * 0.50
+        path = QPainterPath()
+        path.moveTo(left_x, cy - icon_h / 2)
+        path.lineTo(right_x, cy)
+        path.lineTo(left_x, cy + icon_h / 2)
+        path.closeSubpath()
+        painter.drawPath(path)
+
+
 class TransportBar(QWidget):
     """Bottom playback area with controls contained inside the glossy capsule."""
 
@@ -124,10 +180,9 @@ class TransportBar(QWidget):
         self.next_btn = self._make_btn("▶▶")
         self.next_btn.setToolTip("Next")
 
-        self.play_btn = QToolButton()
+        self.play_btn = PlayPauseButton()
         self.play_btn.setObjectName("transportPlay")
         self.play_btn.setFixedSize(PLAY_BUTTON_SIZE, PLAY_BUTTON_SIZE)
-        self.play_btn.setText("▶")
         self.play_btn.clicked.connect(player.toggle)
 
         self.prev_btn.clicked.connect(player.previous)
@@ -246,7 +301,7 @@ class TransportBar(QWidget):
         self.total_lbl.setText(format_ms(dur_ms))
 
     def _on_state(self, state: str) -> None:
-        self.play_btn.setText("❚❚" if state == "playing" else "▶")
+        self.play_btn.set_playing(state == "playing")
 
     def _on_seek_release(self) -> None:
         self.player.seek(self.seek.value())
