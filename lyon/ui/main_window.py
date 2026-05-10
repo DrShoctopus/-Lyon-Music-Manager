@@ -12,6 +12,7 @@ from .. import __app_name__, __version__
 from ..core.library import Library
 from ..core.player import Player
 from ..core.settings import Settings
+from .equalizer_dialog import EqualizerDialog
 from .library_view import LibraryView
 from .now_playing import NowPlayingView, TransportBar
 from .ripper_view import RipperView
@@ -45,7 +46,9 @@ class MainWindow(QMainWindow):
         self.library = Library()
         self.player = Player(self)
         self.player.set_volume(self.settings.last_volume)
+        self.player.set_equalizer(self.settings.equalizer_enabled, self.settings.equalizer_bands)
         self._scan_thread: _LibraryScanThread | None = None
+        self._equalizer_dialog: EqualizerDialog | None = None
 
         self.setWindowTitle(__app_name__)
         self.resize(1100, 720)
@@ -90,6 +93,10 @@ class MainWindow(QMainWindow):
         settings_btn.setObjectName("navTab")
         settings_btn.clicked.connect(self.open_settings)
         tlayout.addWidget(settings_btn)
+        equalizer_btn = QPushButton("6 Band EQ")
+        equalizer_btn.setObjectName("navTab")
+        equalizer_btn.clicked.connect(self.open_equalizer)
+        tlayout.addWidget(equalizer_btn)
         layout.addWidget(tabs)
 
         # ---- stacked content
@@ -225,7 +232,27 @@ class MainWindow(QMainWindow):
             self.settings = dlg.result_settings
             self.settings.save()
             self.ripper_view.apply_settings(self.settings)
+            self.player.set_equalizer(self.settings.equalizer_enabled, self.settings.equalizer_bands)
             self.statusBar().showMessage("Settings saved.", 3000)
+
+    def open_equalizer(self) -> None:
+        if self._equalizer_dialog is None:
+            self._equalizer_dialog = EqualizerDialog(self.settings, self)
+            self._equalizer_dialog.equalizer_changed.connect(self.player.set_equalizer)
+            self._equalizer_dialog.settings_saved.connect(self._apply_equalizer_settings)
+            self._equalizer_dialog.finished.connect(self._clear_equalizer_dialog)
+        self._equalizer_dialog.show()
+        self._equalizer_dialog.raise_()
+        self._equalizer_dialog.activateWindow()
+
+    def _apply_equalizer_settings(self, settings: Settings) -> None:
+        self.settings.equalizer_enabled = settings.equalizer_enabled
+        self.settings.equalizer_bands = list(settings.equalizer_bands)
+        self.player.set_equalizer(self.settings.equalizer_enabled, self.settings.equalizer_bands)
+        self.statusBar().showMessage("Equalizer settings saved.", 3000)
+
+    def _clear_equalizer_dialog(self, *_args) -> None:
+        self._equalizer_dialog = None
 
     def show_about(self) -> None:
         QMessageBox.about(

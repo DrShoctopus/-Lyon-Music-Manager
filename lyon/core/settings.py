@@ -54,6 +54,8 @@ class Settings:
     download_artwork: bool = True
     last_volume: int = 80
     library_paths: list[str] = field(default_factory=list)
+    equalizer_enabled: bool = False
+    equalizer_bands: list[int] = field(default_factory=lambda: [0, 0, 0, 0, 0, 0])
 
     @classmethod
     def load(cls) -> "Settings":
