@@ -140,6 +140,8 @@ def test_libcdio_command_extracts_one_audio_stream_with_toc_timing(tmp_path):
     assert cmd[cmd.index("-ss") + 1] == "200"
     assert cmd[cmd.index("-t") + 1] == "200"
     assert cmd[cmd.index("-map") + 1] == "0:a:0"
+    assert "-nostdin" in cmd
+    assert "-stats" not in cmd
     assert "0:a:1" not in cmd
     assert cmd[-1] == str(out)
 
