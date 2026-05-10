@@ -1,10 +1,8 @@
 """CD -> FLAC ripping using bundled ffmpeg.
 
-ffmpeg supports CDDA on Windows via libcdio. We invoke it once per track
-with `-f libcdio -i <DRIVE> -map 0:a -ss/-to` style arguments isn't ideal,
-so instead we use ffmpeg's CDDA "track=N" syntax which exposes individual
-tracks. If that's not available, we fall back to reading the whole disc and
-splitting by TOC offsets.
+FFmpeg's libcdio input exposes an audio CD as one audio stream with chapter
+metadata, not as one stream per CD track. We use the libdiscid TOC offsets read
+by ``cd_detect`` to seek and trim that one stream for each FLAC output file.
 """
 from __future__ import annotations
 
@@ -14,7 +12,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 from PySide6.QtCore import QObject, QThread, Signal
 
@@ -23,6 +21,8 @@ from .settings import Settings, bundled_bin_dir
 
 
 SAFE_CHARS_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+CD_SECTORS_PER_SECOND = 75
+FFMPEG_ERROR_LINES = 8
 
 # Suppress the console window ffmpeg would otherwise pop up per track on Windows.
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
@@ -45,7 +45,7 @@ def find_ffmpeg() -> Optional[str]:
 def target_folder(settings: Settings, album: AlbumInfo, create: bool = False) -> Path:
     """Compute the destination folder for an album rip.
 
-    Pure path arithmetic by default — pass ``create=True`` only when you
+    Pure path arithmetic by default -- pass ``create=True`` only when you
     actually intend to rip. The UI calls this on every keystroke to
     preview the path, which is why we never mkdir on the preview path.
     """
@@ -65,12 +65,73 @@ def target_file(folder: Path, track: TrackInfo, total: int) -> Path:
     return folder / base
 
 
+def _sector_seconds(sectors: int) -> str:
+    text = f"{sectors / CD_SECTORS_PER_SECOND:.6f}".rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def _track_sector_span(
+    track_no: int,
+    track_offsets: Sequence[int],
+    leadout_sector: int,
+) -> Optional[tuple[int, int]]:
+    """Return a track's start/end sector relative to the first audio track."""
+    if track_no < 1 or track_no > len(track_offsets) or leadout_sector <= 0:
+        return None
+
+    try:
+        offsets = [int(offset) for offset in track_offsets]
+        leadout = int(leadout_sector)
+    except (TypeError, ValueError):
+        return None
+
+    first_offset = offsets[0]
+    start = offsets[track_no - 1] - first_offset
+    end_absolute = offsets[track_no] if track_no < len(offsets) else leadout
+    end = end_absolute - first_offset
+
+    if start < 0 or end <= start:
+        return None
+    return start, end
+
+
+def _build_libcdio_track_command(
+    ffmpeg: str,
+    drive: str,
+    out: Path,
+    compression: int,
+    sector_span: tuple[int, int],
+    *,
+    input_seek: bool,
+) -> list[str]:
+    start, end = sector_span
+    duration = end - start
+    seek = _sector_seconds(start)
+    length = _sector_seconds(duration)
+    cmd = [ffmpeg, "-y", "-loglevel", "error", "-stats"]
+    if input_seek:
+        cmd += ["-f", "libcdio", "-ss", seek, "-i", drive]
+    else:
+        cmd += ["-f", "libcdio", "-i", drive, "-ss", seek]
+    cmd += [
+        "-t", length,
+        "-map", "0:a:0",
+        "-vn",
+        "-c:a", "flac",
+        "-compression_level", str(compression),
+        str(out),
+    ]
+    return cmd
+
+
 # ---------------------------------------------------------------- worker
 @dataclass
 class RipRequest:
     drive: str
     album: AlbumInfo
     target_dir: Path
+    track_offsets: tuple[int, ...] = ()
+    leadout_sector: int = 0
 
 
 class RipWorker(QObject):
@@ -86,6 +147,8 @@ class RipWorker(QObject):
         super().__init__()
         self.settings = settings
         self.request = request
+        self._track_offsets = tuple(request.track_offsets)
+        self._leadout_sector = request.leadout_sector
         self._cancel = False
 
     def cancel(self) -> None:
@@ -100,6 +163,13 @@ class RipWorker(QObject):
         album = self.request.album
         folder = self.request.target_dir
         folder.mkdir(parents=True, exist_ok=True)
+        if not self._track_offsets or self._leadout_sector <= 0:
+            self.log.emit("Reading disc TOC for track timing...")
+            from .cd_detect import read_disc
+            toc = read_disc(self.request.drive)
+            if toc is not None:
+                self._track_offsets = tuple(toc.track_offsets)
+                self._leadout_sector = toc.sectors
 
         # Save artwork once per album
         art_bytes = album.artwork
@@ -139,52 +209,65 @@ class RipWorker(QObject):
         self.finished.emit(success, "Rip complete." if success else "Rip finished with errors.")
 
     def _rip_track(self, ffmpeg: str, track_no: int, out: Path) -> bool:
-        # ffmpeg CDDA input: "cdda://<DRIVE>?track=N" works on builds with libcdio.
-        # Some builds prefer `-f libcdio -i D:`. We try the modern form first.
         drive = self.request.drive
         compression = max(0, min(8, int(self.settings.flac_compression)))
+        span = _track_sector_span(track_no, self._track_offsets, self._leadout_sector)
+        if span is None:
+            self.log.emit(
+                f"Track {track_no} failed: disc TOC offsets are unavailable or invalid."
+            )
+            return False
+
         attempts = [
-            [
-                ffmpeg, "-y", "-loglevel", "error", "-stats",
-                "-f", "libcdio", "-i", drive,
-                "-map", f"0:a:{track_no - 1}",
-                "-c:a", "flac", "-compression_level", str(compression),
-                str(out),
-            ],
-            [
-                ffmpeg, "-y", "-loglevel", "error", "-stats",
-                "-i", f"cdda://{drive}?track={track_no}",
-                "-c:a", "flac", "-compression_level", str(compression),
-                str(out),
-            ],
+            _build_libcdio_track_command(ffmpeg, drive, out, compression, span, input_seek=True),
+            _build_libcdio_track_command(ffmpeg, drive, out, compression, span, input_seek=False),
         ]
         for cmd in attempts:
-            try:
-                proc = subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                    text=True, bufsize=1,
-                    creationflags=_NO_WINDOW,
-                )
-            except OSError as e:
-                self.log.emit(f"ffmpeg launch error: {e}")
-                continue
+            if self._run_ffmpeg(cmd, track_no, out):
+                return True
+        return False
 
-            if proc.stdout is None:
-                proc.wait()
-                continue
+    def _run_ffmpeg(self, cmd: list[str], track_no: int, out: Path) -> bool:
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, bufsize=1,
+                creationflags=_NO_WINDOW,
+            )
+        except OSError as e:
+            self.log.emit(f"ffmpeg launch error: {e}")
+            return False
+
+        recent_output: list[str] = []
+        if proc.stdout is not None:
             for line in proc.stdout:
                 if self._cancel:
                     proc.kill()
                     proc.wait()
                     return False
+                line = line.strip()
+                if line:
+                    recent_output.append(line)
+                    recent_output = recent_output[-FFMPEG_ERROR_LINES:]
                 pct = _parse_progress(line)
                 if pct is not None:
                     self.track_progress.emit(track_no, pct)
-            proc.wait()
-            if proc.returncode == 0 and out.exists() and out.stat().st_size > 0:
-                self.track_progress.emit(track_no, 100)
-                return True
+        proc.wait()
+
+        if proc.returncode == 0 and out.exists() and out.stat().st_size > 0:
+            self.track_progress.emit(track_no, 100)
+            return True
+
+        try:
+            out.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+        if recent_output:
+            self.log.emit("ffmpeg: " + " | ".join(recent_output))
+        else:
+            self.log.emit(f"ffmpeg exited with code {proc.returncode}.")
         return False
 
 
