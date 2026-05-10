@@ -160,3 +160,19 @@ def test_rip_request_reuses_detected_disc_toc(tmp_path):
     assert request.target_dir == tmp_path
     assert request.track_offsets == (150, 15150)
     assert request.leadout_sector == 30150
+
+
+def test_target_file_includes_disc_number_for_later_discs(tmp_path):
+    from lyon.core.metadata import TrackInfo
+    from lyon.core.ripper import target_file
+
+    track = TrackInfo(number=1, title="Intro", disc_number=2)
+
+    assert target_file(tmp_path, track, total=12).name == "2-01 - Intro.flac"
+
+
+def test_artwork_file_name_matches_png_signature():
+    from lyon.core.ripper import artwork_file_name
+
+    assert artwork_file_name(b"\x89PNG\r\n\x1a\nrest") == "cover.png"
+    assert artwork_file_name(b"\xff\xd8\xffrest") == "cover.jpg"

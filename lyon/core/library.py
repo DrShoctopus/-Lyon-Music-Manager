@@ -6,7 +6,7 @@ import sqlite3
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable, Iterator
+from typing import Any, Callable, Iterable, Iterator
 
 from mutagen import File as MutagenFile
 
@@ -16,6 +16,9 @@ SUPPORTED_EXTS = {".flac", ".mp3", ".m4a", ".aac", ".ogg", ".opus", ".wav", ".wm
 
 DISPLAY_ARTIST_SQL = "COALESCE(NULLIF(album_artist,''), NULLIF(artist,''), 'Unknown Artist')"
 DISPLAY_ALBUM_SQL = "COALESCE(NULLIF(album,''), 'Unknown Album')"
+
+TRACK_SELECT_SQL = "SELECT * FROM tracks"
+TRACK_SORT_SQL = "disc_no, track_no, title COLLATE NOCASE"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS tracks (
@@ -99,13 +102,13 @@ class Library:
                     if ext not in SUPPORTED_EXTS:
                         continue
                     full = os.path.join(dirpath, name)
-                    if self.add_file(full):
+                    if self.add_file(full, commit=False):
                         added += 1
         with self._lock:
             self.conn.commit()
         return added
 
-    def add_file(self, path: str | os.PathLike) -> bool:
+    def add_file(self, path: str | os.PathLike, *, commit: bool = True) -> bool:
         path = str(path)
         with self._lock:
             cur = self.conn.execute("SELECT 1 FROM tracks WHERE path = ?", (path,))
@@ -114,33 +117,14 @@ class Library:
         meta = _read_tags(path)
         if meta is None:
             return False
-        # Look for adjacent cover art
         art = _find_local_artwork(Path(path).parent)
         with self._lock:
             try:
-                self.conn.execute(
-                    """INSERT INTO tracks
-                       (path, title, artist, album_artist, album, track_no, disc_no,
-                        year, genre, duration, bitrate, samplerate, artwork_path)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                    (
-                        path,
-                        meta["title"],
-                        meta["artist"],
-                        meta["album_artist"],
-                        meta["album"],
-                        meta["track_no"],
-                        meta["disc_no"],
-                        meta["year"],
-                        meta["genre"],
-                        meta["duration"],
-                        meta["bitrate"],
-                        meta["samplerate"],
-                        str(art) if art else None,
-                    ),
-                )
+                self.conn.execute(_insert_track_sql(), _track_insert_values(path, meta, art))
             except sqlite3.IntegrityError:
                 return False
+            if commit:
+                self.conn.commit()
         return True
 
     # ------------------------------------------------------------------ queries
@@ -179,9 +163,9 @@ class Library:
     def tracks_for_album(self, artist: str, album: str) -> list[Track]:
         with self._lock:
             rows = self.conn.execute(
-                f"""SELECT * FROM tracks
+                f"""{TRACK_SELECT_SQL}
                     WHERE {DISPLAY_ARTIST_SQL} = ? AND {DISPLAY_ALBUM_SQL} = ?
-                    ORDER BY disc_no, track_no, title COLLATE NOCASE""",
+                    ORDER BY {TRACK_SORT_SQL}""",
                 (artist, album),
             ).fetchall()
         return [_row_to_track(r) for r in rows]
@@ -190,14 +174,14 @@ class Library:
         like = f"%{query}%"
         with self._lock:
             rows = self.conn.execute(
-                f"""SELECT * FROM tracks
+                f"""{TRACK_SELECT_SQL}
                    WHERE title LIKE ?
                       OR artist LIKE ?
                       OR album_artist LIKE ?
                       OR album LIKE ?
                       OR {DISPLAY_ARTIST_SQL} LIKE ?
                       OR {DISPLAY_ALBUM_SQL} LIKE ?
-                   ORDER BY {DISPLAY_ARTIST_SQL}, {DISPLAY_ALBUM_SQL}, disc_no, track_no
+                   ORDER BY {DISPLAY_ARTIST_SQL}, {DISPLAY_ALBUM_SQL}, {TRACK_SORT_SQL}
                    LIMIT 500""",
                 (like, like, like, like, like, like),
             ).fetchall()
@@ -205,7 +189,7 @@ class Library:
 
     def all_tracks(self) -> Iterator[Track]:
         with self._lock:
-            rows = self.conn.execute("SELECT * FROM tracks ORDER BY id").fetchall()
+            rows = self.conn.execute(f"{TRACK_SELECT_SQL} ORDER BY id").fetchall()
         for r in rows:
             yield _row_to_track(r)
 
@@ -219,6 +203,31 @@ class Library:
                     n += 1
             self.conn.commit()
         return n
+
+
+def _insert_track_sql() -> str:
+    return """INSERT INTO tracks
+              (path, title, artist, album_artist, album, track_no, disc_no,
+               year, genre, duration, bitrate, samplerate, artwork_path)
+              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)"""
+
+
+def _track_insert_values(path: str, meta: dict[str, Any], art: Path | None) -> tuple[Any, ...]:
+    return (
+        path,
+        meta["title"],
+        meta["artist"],
+        meta["album_artist"],
+        meta["album"],
+        meta["track_no"],
+        meta["disc_no"],
+        meta["year"],
+        meta["genre"],
+        meta["duration"],
+        meta["bitrate"],
+        meta["samplerate"],
+        str(art) if art else None,
+    )
 
 
 def _row_to_track(r: sqlite3.Row) -> Track:

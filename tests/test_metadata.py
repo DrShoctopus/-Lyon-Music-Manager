@@ -57,6 +57,32 @@ def test_release_to_album_filters_to_matching_disc_medium():
     assert [track.disc_number for track in album.tracks] == [2, 2]
 
 
+def test_release_to_album_reads_recording_artist_credit():
+    release = {
+        "title": "Compilation",
+        "artist-credit-phrase": "Various Artists",
+        "medium-list": [
+            {
+                "position": "1",
+                "track-list": [
+                    {
+                        "position": "1",
+                        "recording": {
+                            "title": "Guest Song",
+                            "artist-credit": [{"artist": {"name": "Guest Artist"}}],
+                        },
+                    },
+                ],
+            },
+        ],
+    }
+
+    album = _release_to_album(release)
+
+    assert album.artist == "Various Artists"
+    assert album.tracks[0].artist == "Guest Artist"
+
+
 def test_musicbrainz_toc_converts_to_ctdb_offsets():
     toc = "1 3 45150 150 15150 30150"
 

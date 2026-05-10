@@ -61,8 +61,17 @@ def target_folder(settings: Settings, album: AlbumInfo, create: bool = False) ->
 
 def target_file(folder: Path, track: TrackInfo, total: int) -> Path:
     width = max(2, len(str(total)))
-    base = f"{track.number:0{width}d} - {safe_path_component(track.title)}.flac"
+    number = f"{track.number:0{width}d}"
+    if track.disc_number > 1:
+        number = f"{track.disc_number}-{number}"
+    base = f"{number} - {safe_path_component(track.title)}.flac"
     return folder / base
+
+
+def artwork_file_name(artwork: bytes) -> str:
+    if artwork.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "cover.png"
+    return "cover.jpg"
 
 
 def _sector_seconds(sectors: int) -> str:
@@ -183,7 +192,7 @@ class RipWorker(QObject):
             art_bytes = fetch_artwork(album)
         art_path: Optional[Path] = None
         if art_bytes:
-            art_path = folder / "cover.jpg"
+            art_path = folder / artwork_file_name(art_bytes)
             try:
                 art_path.write_bytes(art_bytes)
             except OSError as e:
