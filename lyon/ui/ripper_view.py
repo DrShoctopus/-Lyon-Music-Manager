@@ -1,6 +1,8 @@
 """Rip-from-CD view: detect disc, look up metadata, kick off rip."""
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QPixmap, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
@@ -68,6 +70,26 @@ class _AlbumSearchThread(QThread):
         if info and self.settings.download_artwork:
             art = fetch_artwork(info)
         self.finished_with.emit(info, art)
+
+
+def _rip_request_from_toc(
+    toc: cd_detect.DiscToc,
+    album: AlbumInfo,
+    folder: Path,
+) -> RipRequest:
+    """Build a rip request using the already-read disc TOC.
+
+    Reusing the cached offsets avoids a second libdiscid read at rip time, which
+    can fail independently of the initial disc detection and leave ffmpeg without
+    the timing data it needs to split tracks.
+    """
+    return RipRequest(
+        drive=toc.drive,
+        album=album,
+        target_dir=folder,
+        track_offsets=tuple(toc.track_offsets),
+        leadout_sector=toc.sectors,
+    )
 
 
 class RipperView(QWidget):
@@ -384,7 +406,7 @@ class RipperView(QWidget):
         self.progress.setRange(0, len(album.tracks))
         self.progress.setValue(0)
 
-        req = RipRequest(drive=self._toc.drive, album=album, target_dir=folder)
+        req = _rip_request_from_toc(self._toc, album, folder)
         self.ripper.start(req)
 
     def _album_from_edits(self) -> AlbumInfo:

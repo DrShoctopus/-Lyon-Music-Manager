@@ -162,7 +162,12 @@ class RipWorker(QObject):
 
         album = self.request.album
         folder = self.request.target_dir
-        folder.mkdir(parents=True, exist_ok=True)
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            self.finished.emit(False, f"Could not create rip folder: {e}")
+            return
+
         if not self._track_offsets or self._leadout_sector <= 0:
             self.log.emit("Reading disc TOC for track timing...")
             from .cd_detect import read_disc
@@ -181,8 +186,17 @@ class RipWorker(QObject):
             art_path = folder / "cover.jpg"
             try:
                 art_path.write_bytes(art_bytes)
-            except OSError:
+            except OSError as e:
+                self.log.emit(f"Could not save cover art: {e}")
                 art_path = None
+
+        if not self._track_offsets or self._leadout_sector <= 0:
+            self.finished.emit(
+                False,
+                "Could not read disc track timing. Try detecting the disc again, "
+                "then restart the rip.",
+            )
+            return
 
         total = len(album.tracks) or 1
         success = True
@@ -210,7 +224,11 @@ class RipWorker(QObject):
 
     def _rip_track(self, ffmpeg: str, track_no: int, out: Path) -> bool:
         drive = self.request.drive
-        compression = max(0, min(8, int(self.settings.flac_compression)))
+        try:
+            compression = int(self.settings.flac_compression)
+        except (TypeError, ValueError):
+            compression = 8
+        compression = max(0, min(8, compression))
         span = _track_sector_span(track_no, self._track_offsets, self._leadout_sector)
         if span is None:
             self.log.emit(
