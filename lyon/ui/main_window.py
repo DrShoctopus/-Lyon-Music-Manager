@@ -1,11 +1,14 @@
 """Top-level window with WMP-style title, tab bar, stacked views."""
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import dataclass
+
 from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QButtonGroup, QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow,
-    QMessageBox, QPushButton, QStackedWidget, QStatusBar, QVBoxLayout, QWidget,
+    QMenu, QMessageBox, QPushButton, QStackedWidget, QStatusBar, QVBoxLayout, QWidget,
 )
 
 from .. import __app_name__, __version__
@@ -18,6 +21,22 @@ from .now_playing import NowPlayingView, TransportBar
 from .ripper_view import RipperView
 from .styles import WMP_QSS
 from .youtube_view import YouTubeView
+
+
+@dataclass(frozen=True)
+class _TabSpec:
+    """Declarative metadata for the main navigation tabs."""
+
+    label: str
+    view_attr: str
+
+
+NAV_TABS = (
+    _TabSpec("Now Playing", "now_playing"),
+    _TabSpec("Library", "library_view"),
+    _TabSpec("Rip", "ripper_view"),
+    _TabSpec("YouTube", "youtube_view"),
+)
 
 
 class _LibraryScanThread(QThread):
@@ -42,6 +61,24 @@ class _LibraryScanThread(QThread):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+        self._init_services()
+        self._configure_window()
+
+        root, layout = self._build_root_container()
+        layout.addWidget(self._build_title_bar())
+        layout.addWidget(self._build_tab_bar())
+        self._build_views()
+        layout.addWidget(self.stack, 1)
+        self._build_transport_bar(layout)
+        self.setCentralWidget(root)
+
+        self._build_status_bar()
+        self._connect_library_actions()
+        self._build_menu()
+        self._start_initial_scan()
+
+    # ------------------------------------------------------------------ setup
+    def _init_services(self) -> None:
         self.settings = Settings.load()
         self.library = Library()
         self.player = Player(self)
@@ -50,127 +87,133 @@ class MainWindow(QMainWindow):
         self._scan_thread: _LibraryScanThread | None = None
         self._equalizer_dialog: EqualizerDialog | None = None
 
+    def _configure_window(self) -> None:
         self.setWindowTitle(__app_name__)
         self.resize(1100, 720)
         self.setMinimumSize(900, 600)
         self.setStyleSheet(WMP_QSS)
 
+    def _build_root_container(self) -> tuple[QWidget, QVBoxLayout]:
         root = QWidget()
         root.setObjectName("root")
         layout = QVBoxLayout(root)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
+        return root, layout
 
-        # ---- title bar
+    def _build_title_bar(self) -> QFrame:
         title = QFrame()
         title.setObjectName("titlebar")
-        tlay = QHBoxLayout(title)
-        tlay.setContentsMargins(12, 0, 12, 0)
-        tlay.addWidget(QLabel(f"{__app_name__}"))
-        tlay.itemAt(0).widget().setObjectName("titleLabel")
-        tlay.addStretch(1)
-        layout.addWidget(title)
+        layout = QHBoxLayout(title)
+        layout.setContentsMargins(12, 0, 12, 0)
 
-        # ---- tab strip
+        title_label = QLabel(__app_name__)
+        title_label.setObjectName("titleLabel")
+        layout.addWidget(title_label)
+        layout.addStretch(1)
+        return title
+
+    def _build_tab_bar(self) -> QFrame:
         tabs = QFrame()
         tabs.setObjectName("tabbar")
-        tlayout = QHBoxLayout(tabs)
-        tlayout.setContentsMargins(8, 0, 8, 0)
-        tlayout.setSpacing(0)
+        layout = QHBoxLayout(tabs)
+        layout.setContentsMargins(8, 0, 8, 0)
+        layout.setSpacing(0)
+
         self.tab_group = QButtonGroup(self)
         self.tab_group.setExclusive(True)
         self._tab_buttons: dict[str, QPushButton] = {}
-        for name in ("Now Playing", "Library", "Rip", "YouTube"):
-            btn = QPushButton(name)
-            btn.setObjectName("navTab")
-            btn.setCheckable(True)
-            btn.setCursor(Qt.PointingHandCursor)
-            tlayout.addWidget(btn)
-            self.tab_group.addButton(btn)
-            self._tab_buttons[name] = btn
-        tlayout.addStretch(1)
-        settings_btn = QPushButton("Settings")
-        settings_btn.setObjectName("navTab")
-        settings_btn.clicked.connect(self.open_settings)
-        tlayout.addWidget(settings_btn)
-        equalizer_btn = QPushButton("6 Band EQ")
-        equalizer_btn.setObjectName("navTab")
-        equalizer_btn.clicked.connect(self.open_equalizer)
-        tlayout.addWidget(equalizer_btn)
-        layout.addWidget(tabs)
 
-        # ---- stacked content
+        for tab in NAV_TABS:
+            button = self._create_nav_button(tab.label)
+            layout.addWidget(button)
+            self.tab_group.addButton(button)
+            self._tab_buttons[tab.label] = button
+
+        layout.addStretch(1)
+        layout.addWidget(self._create_command_button("Settings", self.open_settings))
+        layout.addWidget(self._create_command_button("6 Band EQ", self.open_equalizer))
+        return tabs
+
+    def _create_nav_button(self, label: str) -> QPushButton:
+        button = QPushButton(label)
+        button.setObjectName("navTab")
+        button.setCheckable(True)
+        button.setCursor(Qt.PointingHandCursor)
+        return button
+
+    def _create_command_button(self, label: str, handler: Callable[[], None]) -> QPushButton:
+        button = QPushButton(label)
+        button.setObjectName("navTab")
+        button.clicked.connect(handler)
+        return button
+
+    def _build_views(self) -> None:
         self.stack = QStackedWidget()
         self.now_playing = NowPlayingView(self.player)
         self.library_view = LibraryView(self.library)
         self.ripper_view = RipperView(self.settings, self.library)
         self.youtube_view = YouTubeView()
 
-        self.stack.addWidget(self.now_playing)
-        self.stack.addWidget(self.library_view)
-        self.stack.addWidget(self.ripper_view)
-        self.stack.addWidget(self.youtube_view)
+        for tab in NAV_TABS:
+            view = getattr(self, tab.view_attr)
+            self.stack.addWidget(view)
+            self._tab_buttons[tab.label].toggled.connect(
+                lambda checked, current_view=view: (
+                    checked and self.stack.setCurrentWidget(current_view)
+                )
+            )
 
-        self._tab_buttons["Now Playing"].toggled.connect(
-            lambda c: c and self.stack.setCurrentWidget(self.now_playing))
-        self._tab_buttons["Library"].toggled.connect(
-            lambda c: c and self.stack.setCurrentWidget(self.library_view))
-        self._tab_buttons["Rip"].toggled.connect(
-            lambda c: c and self.stack.setCurrentWidget(self.ripper_view))
-        self._tab_buttons["YouTube"].toggled.connect(
-            lambda c: c and self.stack.setCurrentWidget(self.youtube_view))
-        self._tab_buttons["Library"].setChecked(True)
-
-        layout.addWidget(self.stack, 1)
-
-        # ---- transport bar
-        self.transport = TransportBar(self.player)
-        self.transport.open_now_playing.connect(
-            lambda: self._tab_buttons["Now Playing"].setChecked(True))
-        layout.addWidget(self.transport)
-
+        self._select_tab("Library")
         self.stack.currentChanged.connect(self._on_view_changed)
 
-        self.setCentralWidget(root)
+    def _build_transport_bar(self, layout: QVBoxLayout) -> None:
+        self.transport = TransportBar(self.player)
+        self.transport.open_now_playing.connect(lambda: self._select_tab("Now Playing"))
+        layout.addWidget(self.transport)
 
-        # Status bar
-        sb = QStatusBar()
-        self.setStatusBar(sb)
-        sb.showMessage(f"{__app_name__} {__version__} - ready")
+    def _build_status_bar(self) -> None:
+        status_bar = QStatusBar()
+        self.setStatusBar(status_bar)
+        status_bar.showMessage(f"{__app_name__} {__version__} - ready")
 
-        # Wire library actions
+    def _connect_library_actions(self) -> None:
+        status_bar = self.statusBar()
         self.library_view.play_tracks.connect(self.player.set_queue)
         self.library_view.enqueue_tracks.connect(self._enqueue_tracks)
-        self.library_view.status_message.connect(lambda m: sb.showMessage(m, 3000))
+        self.library_view.status_message.connect(
+            lambda message: status_bar.showMessage(message, 3000)
+        )
         self.player.track_changed.connect(self.library_view.highlight_track)
         self.library_view.request_add_folder.connect(self.add_folder)
         self.library_view.request_rescan.connect(self.rescan)
         self.ripper_view.rip_completed.connect(self.library_view.refresh)
-        self.ripper_view.log.connect(lambda m: sb.showMessage(m, 4000))
+        self.ripper_view.log.connect(lambda message: status_bar.showMessage(message, 4000))
 
-        # Initial scan of saved roots.
+    def _start_initial_scan(self) -> None:
         if self.settings.library_paths:
             self._start_scan(self.settings.library_paths, "Scanned")
 
-        # Menu
-        self._build_menu()
-
     # ------------------------------------------------------------------ menu
     def _build_menu(self) -> None:
-        m = self.menuBar()
-        file_menu = m.addMenu("&File")
-        file_menu.addAction(QAction("Add Folder to Library...", self,
-                                    triggered=self.add_folder))
-        file_menu.addAction(QAction("Rescan Library", self, triggered=self.rescan))
-        file_menu.addAction(QAction("Remove Missing Files", self,
-                                    triggered=self.remove_missing))
+        menu_bar = self.menuBar()
+        file_menu = menu_bar.addMenu("&File")
+        self._add_action(file_menu, "Add Folder to Library...", self.add_folder)
+        self._add_action(file_menu, "Rescan Library", self.rescan)
+        self._add_action(file_menu, "Remove Missing Files", self.remove_missing)
         file_menu.addSeparator()
-        file_menu.addAction(QAction("Exit", self, triggered=self.close))
+        self._add_action(file_menu, "Exit", self.close)
 
-        help_menu = m.addMenu("&Help")
-        help_menu.addAction(QAction("About", self, triggered=self.show_about))
+        help_menu = menu_bar.addMenu("&Help")
+        self._add_action(help_menu, "About", self.show_about)
+
+    def _add_action(self, menu: QMenu, label: str, handler: Callable[[], None]) -> None:
+        menu.addAction(QAction(label, self, triggered=handler))
 
     # ------------------------------------------------------------------ tabs
+    def _select_tab(self, label: str) -> None:
+        self._tab_buttons[label].setChecked(True)
+
     def _on_view_changed(self, _idx: int) -> None:
         current = self.stack.currentWidget()
         is_youtube = current is self.youtube_view
@@ -232,7 +275,9 @@ class MainWindow(QMainWindow):
             self.settings = dlg.result_settings
             self.settings.save()
             self.ripper_view.apply_settings(self.settings)
-            self.player.set_equalizer(self.settings.equalizer_enabled, self.settings.equalizer_bands)
+            self.player.set_equalizer(
+                self.settings.equalizer_enabled, self.settings.equalizer_bands
+            )
             self.statusBar().showMessage("Settings saved.", 3000)
 
     def open_equalizer(self) -> None:
