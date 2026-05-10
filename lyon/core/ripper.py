@@ -117,7 +117,7 @@ def _build_libcdio_track_command(
     duration = end - start
     seek = _sector_seconds(start)
     length = _sector_seconds(duration)
-    cmd = [ffmpeg, "-y", "-loglevel", "error", "-stats"]
+    cmd = [ffmpeg, "-y", "-nostdin", "-loglevel", "error"]
     if input_seek:
         cmd += ["-f", "libcdio", "-ss", seek, "-i", drive]
     else:
