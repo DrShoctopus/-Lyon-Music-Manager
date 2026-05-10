@@ -1,128 +1,168 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="620" viewBox="0 0 1200 620" role="img" aria-labelledby="title desc">
   <title id="title">Lyon Music Manager</title>
-  <desc id="desc">Vintage robot branding for Lyon Music Manager with a robot mascot, sunburst, and wordmark.</desc>
+  <desc id="desc">Vintage poster-style Lyon Music Manager robot splash branding.</desc>
   <defs>
     <linearGradient id="paper" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#fff9ec"/>
-      <stop offset="1" stop-color="#f3dfbf"/>
+      <stop offset="0" stop-color="#fffaf0"/>
+      <stop offset="1" stop-color="#f5e4c6"/>
+    </linearGradient>
+    <linearGradient id="redGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ff7352"/>
+      <stop offset="1" stop-color="#c93625"/>
+    </linearGradient>
+    <linearGradient id="mintGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#eef4e7"/>
+      <stop offset="1" stop-color="#bfd7bd"/>
+    </linearGradient>
+    <linearGradient id="tealGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#a7cabb"/>
+      <stop offset="1" stop-color="#47766e"/>
+    </linearGradient>
+    <linearGradient id="blueGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#9fcfd7"/>
+      <stop offset="1" stop-color="#497f91"/>
     </linearGradient>
     <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
-      <feDropShadow dx="0" dy="12" stdDeviation="0" flood-color="#08223a" flood-opacity=".26"/>
+      <feDropShadow dx="0" dy="12" stdDeviation="0" flood-color="#08223a" flood-opacity=".28"/>
+    </filter>
+    <filter id="softText" x="-4%" y="-4%" width="108%" height="108%">
+      <feDropShadow dx="2" dy="2" stdDeviation="0" flood-color="#802014" flood-opacity=".22"/>
     </filter>
     <style>
       .ink{fill:#08223a}
-      .line{stroke:#08223a;stroke-width:10;stroke-linecap:square}
-      .outline{stroke:#08223a;stroke-width:10;stroke-linecap:round;stroke-linejoin:round}
-      .thin{stroke:#08223a;stroke-width:7;stroke-linecap:round;stroke-linejoin:round}
+      .cream{fill:#fff6e6}
       .red{fill:#df4932}
       .teal{fill:#9fc5b3}
-      .deep{fill:#5f8d85}
       .mint{fill:#dce9d2}
-      .cream{fill:#fff6e6}
       .blue{fill:#70a8bd}
+      .outline{stroke:#08223a;stroke-width:9;stroke-linecap:round;stroke-linejoin:round}
+      .outline-heavy{stroke:#08223a;stroke-width:12;stroke-linecap:round;stroke-linejoin:round}
+      .sticker{stroke:#fff6e6;stroke-width:22;stroke-linecap:round;stroke-linejoin:round}
+      .line{stroke:#08223a;stroke-width:9;stroke-linecap:square}
       .word{font-family:"Arial Black","Impact",sans-serif;font-weight:900}
     </style>
   </defs>
-  <rect width="1200" height="620" rx="20" fill="url(#paper)"/>
-  <circle cx="310" cy="318" r="244" fill="#df4932" opacity=".88"/>
-  <g fill="#fff6e6" opacity=".92" transform="translate(310 318)">
-    <path d="M0 0 244 -24 244 24z"/>
-    <path d="M0 0 222 101 201 145z"/>
-    <path d="M0 0 145 201 101 222z"/>
-    <path d="M0 0 24 244 -24 244z"/>
-    <path d="M0 0 -101 222 -145 201z"/>
-    <path d="M0 0 -201 145 -222 101z"/>
-    <path d="M0 0 -244 24 -244 -24z"/>
-    <path d="M0 0 -222 -101 -201 -145z"/>
-    <path d="M0 0 -145 -201 -101 -222z"/>
-    <path d="M0 0 -24 -244 24 -244z"/>
-    <path d="M0 0 101 -222 145 -201z"/>
-    <path d="M0 0 201 -145 222 -101z"/>
+  <rect width="1200" height="620" fill="url(#paper)"/>
+  <circle cx="302" cy="318" r="262" fill="url(#redGrad)"/>
+  <g fill="#fff6e6" opacity=".94" transform="translate(302 318)">
+    <path d="M0 0 262 -25 262 25z"/>
+    <path d="M0 0 239 109 216 156z"/>
+    <path d="M0 0 156 216 109 239z"/>
+    <path d="M0 0 25 262 -25 262z"/>
+    <path d="M0 0 -109 239 -156 216z"/>
+    <path d="M0 0 -216 156 -239 109z"/>
+    <path d="M0 0 -262 25 -262 -25z"/>
+    <path d="M0 0 -239 -109 -216 -156z"/>
+    <path d="M0 0 -156 -216 -109 -239z"/>
+    <path d="M0 0 -25 -262 25 -262z"/>
+    <path d="M0 0 109 -239 156 -216z"/>
+    <path d="M0 0 216 -156 239 -109z"/>
   </g>
-  <g opacity=".28" fill="#fff6e6">
-    <circle cx="96" cy="115" r="2"/>
-    <circle cx="154" cy="372" r="2"/>
-    <circle cx="254" cy="164" r="2"/>
-    <circle cx="382" cy="246" r="2"/>
-    <circle cx="452" cy="374" r="2"/>
-    <circle cx="306" cy="510" r="2"/>
-    <circle cx="171" cy="256" r="1.6"/>
-    <circle cx="424" cy="118" r="1.6"/>
+  <g opacity=".24" fill="#fff6e6">
+    <circle cx="119" cy="132" r="2"/>
+    <circle cx="170" cy="397" r="2"/>
+    <circle cx="287" cy="151" r="2"/>
+    <circle cx="435" cy="250" r="2"/>
+    <circle cx="457" cy="399" r="2"/>
+    <circle cx="332" cy="537" r="2"/>
+    <circle cx="210" cy="276" r="1.6"/>
+    <circle cx="406" cy="103" r="1.6"/>
+    <circle cx="258" cy="474" r="1.4"/>
+    <circle cx="94" cy="318" r="1.4"/>
   </g>
-  <g filter="url(#shadow)" transform="translate(114 52)">
-    <ellipse cx="200" cy="492" rx="130" ry="16" class="ink" opacity=".34"/>
-    <g id="head" transform="translate(72 0)">
-      <path d="M21 126 58 96v111l-37 22z" class="deep outline"/>
-      <path d="M32 134 52 118v79l-20 13z" fill="#fff6e6" opacity=".38"/>
-      <ellipse cx="16" cy="151" rx="22" ry="34" class="red outline"/>
-      <ellipse cx="221" cy="151" rx="22" ry="34" class="red outline"/>
-      <ellipse cx="18" cy="151" rx="10" ry="25" fill="#ff7657"/>
-      <ellipse cx="217" cy="151" rx="10" ry="25" fill="#ff7657"/>
-      <rect x="71" y="88" width="158" height="132" rx="10" fill="#e8f0dd" class="outline"/>
-      <rect x="86" y="103" width="126" height="82" rx="4" fill="#fff6e6" opacity=".56"/>
-      <rect x="117" y="66" width="66" height="23" rx="10" class="blue outline"/>
-      <line x1="150" y1="65" x2="150" y2="40" class="outline"/>
-      <circle cx="150" cy="19" r="21" class="red outline"/>
-      <circle cx="141" cy="10" r="9" fill="#ffe1ca"/>
-      <ellipse cx="145" cy="9" rx="15" ry="12" fill="#fff" opacity=".5"/>
-      <circle cx="108" cy="139" r="27" class="cream"/>
-      <circle cx="181" cy="139" r="27" class="cream"/>
-      <ellipse cx="117" cy="143" rx="17" ry="21" class="ink"/>
-      <ellipse cx="190" cy="143" rx="17" ry="21" class="ink"/>
-      <circle cx="128" cy="134" r="7" fill="#fffaf0"/>
-      <circle cx="201" cy="134" r="7" fill="#fffaf0"/>
-      <path d="M151 164 136 201h31z" fill="#8fc3cf" class="thin"/>
-      <g stroke="#08223a" stroke-width="9" stroke-linecap="round">
-        <line x1="106" y1="202" x2="106" y2="221"/>
-        <line x1="125" y1="202" x2="125" y2="221"/>
-        <line x1="144" y1="202" x2="144" y2="221"/>
-        <line x1="163" y1="202" x2="163" y2="221"/>
-        <line x1="182" y1="202" x2="182" y2="221"/>
-      </g>
-      <rect x="107" y="232" width="86" height="18" rx="5" class="blue outline"/>
-      <rect x="120" y="236" width="61" height="6" rx="3" fill="#fff" opacity=".35"/>
+
+  <g filter="url(#shadow)" transform="translate(37 28) scale(1.31)">
+    <ellipse cx="184" cy="424" rx="112" ry="13" class="ink" opacity=".32"/>
+    <g fill="#fff6e6" stroke="#fff6e6" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="71" y="9" width="236" height="212" rx="26" stroke-width="22"/>
+      <rect x="76" y="181" width="198" height="188" rx="18" stroke-width="22"/>
+      <ellipse cx="68" cy="254" rx="42" ry="42" stroke-width="20"/>
+      <ellipse cx="276" cy="254" rx="42" ry="42" stroke-width="20"/>
+      <ellipse cx="44" cy="363" rx="36" ry="39" stroke-width="20"/>
+      <ellipse cx="304" cy="363" rx="36" ry="39" stroke-width="20"/>
+      <rect x="70" y="404" width="210" height="54" rx="14" stroke-width="18"/>
+      <line x1="73" y1="276" x2="44" y2="349" stroke-width="26"/>
+      <line x1="270" y1="276" x2="294" y2="349" stroke-width="26"/>
     </g>
-    <g id="body">
-      <path d="M128 259 166 239v180l-38 21z" class="deep outline"/>
-      <rect x="161" y="235" width="188" height="185" rx="12" fill="#e5ecd9" class="outline"/>
-      <rect x="191" y="271" width="125" height="96" rx="5" class="cream outline"/>
-      <g>
-        <rect x="207" y="330" width="12" height="22" fill="#3f8ba0"/>
-        <rect x="225" y="310" width="12" height="42" fill="#3f8ba0"/>
-        <rect x="243" y="319" width="12" height="33" fill="#3f8ba0"/>
-        <rect x="261" y="292" width="12" height="60" class="red"/>
-        <rect x="279" y="326" width="12" height="26" class="red"/>
+
+    <g transform="translate(48 5) scale(1.05)">
+      <path d="M18 87 55 58v100l-37 22z" fill="url(#tealGrad)" class="outline"/>
+      <path d="M30 96 49 80v68l-19 12z" fill="#fff6e6" opacity=".38"/>
+      <ellipse cx="16" cy="117" rx="20" ry="28" fill="url(#redGrad)" class="outline"/>
+      <ellipse cx="200" cy="117" rx="20" ry="28" fill="url(#redGrad)" class="outline"/>
+      <ellipse cx="17" cy="117" rx="8" ry="20" fill="#ff8b68"/>
+      <ellipse cx="197" cy="117" rx="8" ry="20" fill="#ff8b68"/>
+      <rect x="51" y="54" width="136" height="114" rx="8" fill="url(#mintGrad)" class="outline"/>
+      <rect x="65" y="68" width="108" height="72" rx="4" class="cream" opacity=".58"/>
+      <rect x="88" y="34" width="58" height="20" rx="8" fill="url(#blueGrad)" class="outline"/>
+      <line x1="117" y1="34" x2="117" y2="12" class="outline"/>
+      <circle cx="117" cy="-2" r="18" fill="url(#redGrad)" class="outline"/>
+      <circle cx="108" cy="-8" r="7" fill="#ffe1ca"/>
+      <ellipse cx="112" cy="-8" rx="13" ry="10" fill="#fff" opacity=".45"/>
+      <circle cx="93" cy="110" r="23" class="cream"/>
+      <circle cx="156" cy="110" r="23" class="cream"/>
+      <ellipse cx="101" cy="114" rx="15" ry="19" class="ink"/>
+      <ellipse cx="164" cy="114" rx="15" ry="19" class="ink"/>
+      <circle cx="112" cy="106" r="6" fill="#fffaf0"/>
+      <circle cx="175" cy="106" r="6" fill="#fffaf0"/>
+      <path d="M121 128 108 160h28z" fill="#8fc3cf" class="outline"/>
+      <g stroke="#08223a" stroke-width="7" stroke-linecap="round">
+        <line x1="84" y1="161" x2="84" y2="178"/>
+        <line x1="101" y1="161" x2="101" y2="178"/>
+        <line x1="118" y1="161" x2="118" y2="178"/>
+        <line x1="135" y1="161" x2="135" y2="178"/>
+        <line x1="152" y1="161" x2="152" y2="178"/>
       </g>
-      <path d="M275 312v-39l29-7v39" fill="none" stroke="#df4932" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
-      <ellipse cx="259" cy="316" rx="16" ry="12" class="red"/>
-      <circle cx="129" cy="305" r="32" class="teal outline"/>
-      <circle cx="354" cy="305" r="32" class="teal outline"/>
-      <line x1="133" y1="335" x2="105" y2="410" class="outline"/>
-      <line x1="353" y1="335" x2="380" y2="410" class="outline"/>
-      <line x1="133" y1="335" x2="105" y2="410" stroke="#70a8bd" stroke-width="10" stroke-linecap="round"/>
-      <line x1="353" y1="335" x2="380" y2="410" stroke="#70a8bd" stroke-width="10" stroke-linecap="round"/>
-      <circle cx="92" cy="423" r="28" class="mint outline"/>
-      <circle cx="395" cy="423" r="28" class="mint outline"/>
-      <circle cx="101" cy="430" r="12" class="cream"/>
-      <circle cx="386" cy="430" r="12" class="cream"/>
-      <rect x="182" y="420" width="52" height="68" class="mint outline"/>
-      <rect x="274" y="420" width="52" height="68" class="mint outline"/>
-      <rect x="182" y="455" width="52" height="24" class="red"/>
-      <rect x="274" y="455" width="52" height="24" class="red"/>
-      <rect x="160" y="482" width="86" height="36" rx="8" fill="#c9dfd8" class="outline"/>
-      <rect x="262" y="482" width="86" height="36" rx="8" fill="#c9dfd8" class="outline"/>
+      <rect x="83" y="190" width="76" height="16" rx="4" fill="url(#blueGrad)" class="outline"/>
+      <rect x="96" y="194" width="50" height="5" rx="2" fill="#fff" opacity=".35"/>
     </g>
+
+    <path d="M61 216 94 196v159l-33 19z" fill="url(#tealGrad)" class="outline-heavy"/>
+    <rect x="88" y="190" width="168" height="164" rx="10" fill="url(#mintGrad)" class="outline-heavy"/>
+    <rect x="111" y="222" width="115" height="86" rx="4" fill="#fff8e9" class="outline"/>
+    <rect x="124" y="264" width="11" height="18" fill="#3f8ba0"/>
+    <rect x="140" y="244" width="11" height="38" fill="#3f8ba0"/>
+    <rect x="156" y="252" width="11" height="30" fill="#3f8ba0"/>
+    <rect x="172" y="224" width="11" height="58" class="red"/>
+    <rect x="188" y="254" width="11" height="28" class="red"/>
+    <path d="M186 251v-35l26-6v34" fill="none" stroke="#df4932" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+    <ellipse cx="180" cy="253" rx="13" ry="10" class="red"/>
+    <ellipse cx="68" cy="254" rx="29" ry="29" fill="url(#tealGrad)" class="outline-heavy"/>
+    <ellipse cx="276" cy="254" rx="29" ry="29" fill="url(#tealGrad)" class="outline-heavy"/>
+    <line x1="73" y1="276" x2="44" y2="349" stroke="#08223a" stroke-width="14" stroke-linecap="round"/>
+    <line x1="270" y1="276" x2="294" y2="349" stroke="#08223a" stroke-width="14" stroke-linecap="round"/>
+    <line x1="73" y1="276" x2="44" y2="349" stroke="#70a8bd" stroke-width="9" stroke-linecap="round"/>
+    <line x1="270" y1="276" x2="294" y2="349" stroke="#70a8bd" stroke-width="9" stroke-linecap="round"/>
+    <g stroke="#fff6e6" stroke-width="5" stroke-linecap="round">
+      <line x1="65" y1="297" x2="82" y2="303"/>
+      <line x1="58" y1="318" x2="74" y2="324"/>
+      <line x1="50" y1="338" x2="66" y2="344"/>
+      <line x1="278" y1="297" x2="262" y2="303"/>
+      <line x1="285" y1="318" x2="269" y2="324"/>
+      <line x1="291" y1="338" x2="276" y2="344"/>
+    </g>
+    <ellipse cx="44" cy="363" rx="28" ry="28" fill="url(#mintGrad)" class="outline-heavy"/>
+    <ellipse cx="304" cy="363" rx="28" ry="28" fill="url(#mintGrad)" class="outline-heavy"/>
+    <circle cx="54" cy="370" r="10" class="cream"/>
+    <circle cx="294" cy="370" r="10" class="cream"/>
+    <rect x="105" y="354" width="50" height="65" fill="url(#mintGrad)" class="outline"/>
+    <rect x="190" y="354" width="50" height="65" fill="url(#mintGrad)" class="outline"/>
+    <rect x="105" y="388" width="50" height="25" fill="url(#redGrad)"/>
+    <rect x="190" y="388" width="50" height="25" fill="url(#redGrad)"/>
+    <rect x="82" y="415" width="88" height="34" rx="6" fill="url(#blueGrad)" class="outline-heavy"/>
+    <rect x="178" y="415" width="88" height="34" rx="6" fill="url(#blueGrad)" class="outline-heavy"/>
   </g>
-  <g transform="translate(560 126)">
-    <line x1="0" y1="0" x2="420" y2="0" class="line"/>
-    <text x="0" y="120" class="word red" font-size="128">Lyon</text>
-    <path d="M508 72 522 112 565 113 531 138 543 180 508 156 473 180 485 138 451 113 494 112z" class="red"/>
-    <line x1="319" y1="159" x2="500" y2="159" class="line"/>
-    <text x="0" y="276" class="word ink" font-size="139">music</text>
-    <text x="0" y="408" class="word ink" font-size="118">manager</text>
-    <line x1="0" y1="447" x2="420" y2="447" class="line"/>
-    <rect x="438" y="434" width="29" height="22" class="teal"/>
-    <rect x="478" y="434" width="29" height="22" class="mint"/>
-    <rect x="518" y="434" width="29" height="22" class="red"/>
+
+  <g>
+    <line x1="575" y1="134" x2="985" y2="134" class="line"/>
+    <text x="575" y="295" class="word red" font-size="150" filter="url(#softText)">Lyon</text>
+    <path d="M1046 181 1060 220 1103 221 1068 246 1080 288 1046 264 1012 288 1024 246 989 221 1032 220z" class="red" filter="url(#softText)"/>
+    <line x1="918" y1="294" x2="1050" y2="294" class="line"/>
+    <text x="575" y="430" class="word ink" font-size="160">music</text>
+    <text x="575" y="565" class="word ink" font-size="126">manager</text>
+    <line x1="575" y1="585" x2="985" y2="585" class="line"/>
+    <rect x="1000" y="570" width="24" height="21" class="teal"/>
+    <rect x="1032" y="570" width="24" height="21" class="mint"/>
+    <rect x="1064" y="570" width="24" height="21" class="red"/>
   </g>
 </svg>
