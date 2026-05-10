@@ -4,50 +4,95 @@ import types
 
 
 def _install_dependency_stubs() -> None:
-    if importlib.util.find_spec("PySide6") is None:
-        pyside = types.ModuleType("PySide6")
-        qtcore = types.ModuleType("PySide6.QtCore")
+    pyside = types.ModuleType("PySide6")
+    qtcore = types.ModuleType("PySide6.QtCore")
 
-        class _Signal:
-            def __init__(self, *_, **__):
-                pass
+    class _Signal:
+        def __init__(self, *_, **__):
+            pass
 
-            def connect(self, *_):
-                pass
+        def connect(self, *_):
+            pass
 
-            def emit(self, *_):
-                pass
+        def emit(self, *_):
+            pass
 
-        class _QObject:
-            def __init__(self, *_, **__):
-                pass
+    class _QObject:
+        def __init__(self, *_, **__):
+            pass
 
-            def moveToThread(self, *_):
-                pass
+        def moveToThread(self, *_):
+            pass
 
-        class _QThread:
-            started = _Signal()
+    class _QThread:
+        started = _Signal()
 
-            def __init__(self, *_, **__):
-                pass
+        def __init__(self, *_, **__):
+            pass
 
-            def isRunning(self):
-                return False
+        def isRunning(self):
+            return False
 
-            def start(self):
-                pass
+        def start(self):
+            pass
 
-            def quit(self):
-                pass
+        def quit(self):
+            pass
 
-            def wait(self):
-                pass
+        def wait(self):
+            pass
 
-        qtcore.QObject = _QObject
-        qtcore.QThread = _QThread
-        qtcore.Signal = _Signal
-        sys.modules["PySide6"] = pyside
-        sys.modules["PySide6.QtCore"] = qtcore
+    qtgui = types.ModuleType("PySide6.QtGui")
+    qtwidgets = types.ModuleType("PySide6.QtWidgets")
+
+    class _Qt:
+        AlignCenter = 1
+        ElideRight = 1
+        KeepAspectRatio = 1
+        SmoothTransformation = 1
+
+    class _QSize:
+        def __init__(self, *_, **__):
+            pass
+
+    class _Widget:
+        def __init__(self, *_, **__):
+            pass
+
+    class _QMessageBox(_Widget):
+        Yes = 1
+        No = 0
+
+        @staticmethod
+        def information(*_, **__):
+            pass
+
+        @staticmethod
+        def question(*_, **__):
+            return _QMessageBox.No
+
+    qtcore.QObject = _QObject
+    qtcore.QThread = _QThread
+    qtcore.Signal = _Signal
+    qtcore.Qt = _Qt
+    qtcore.QSize = _QSize
+    qtgui.QColor = _Widget
+    qtgui.QPainter = _Widget
+    qtgui.QPainter.Antialiasing = 1
+    qtgui.QPixmap = _Widget
+    qtgui.QStandardItem = _Widget
+    qtgui.QStandardItemModel = _Widget
+    for name in (
+        "QAbstractItemView", "QComboBox", "QHBoxLayout", "QHeaderView",
+        "QLabel", "QLineEdit", "QProgressBar", "QPushButton",
+        "QTableView", "QVBoxLayout", "QWidget",
+    ):
+        setattr(qtwidgets, name, _Widget)
+    qtwidgets.QMessageBox = _QMessageBox
+    sys.modules["PySide6"] = pyside
+    sys.modules["PySide6.QtCore"] = qtcore
+    sys.modules["PySide6.QtGui"] = qtgui
+    sys.modules["PySide6.QtWidgets"] = qtwidgets
 
     if importlib.util.find_spec("musicbrainzngs") is None:
         musicbrainzngs = types.ModuleType("musicbrainzngs")
@@ -63,10 +108,13 @@ def _install_dependency_stubs() -> None:
 
 _install_dependency_stubs()
 
+from lyon.core.cd_detect import DiscToc  # noqa: E402
+from lyon.core.metadata import AlbumInfo  # noqa: E402
 from lyon.core.ripper import (  # noqa: E402
     _build_libcdio_track_command,
     _track_sector_span,
 )
+from lyon.ui.ripper_view import _rip_request_from_toc  # noqa: E402
 
 
 def test_track_sector_span_normalises_musicbrainz_toc_offsets():
@@ -94,3 +142,21 @@ def test_libcdio_command_extracts_one_audio_stream_with_toc_timing(tmp_path):
     assert cmd[cmd.index("-map") + 1] == "0:a:0"
     assert "0:a:1" not in cmd
     assert cmd[-1] == str(out)
+
+
+def test_rip_request_reuses_detected_disc_toc(tmp_path):
+    album = AlbumInfo(artist="Artist", album="Album")
+    toc = DiscToc(
+        drive="D:",
+        track_count=2,
+        track_offsets=[150, 15150],
+        sectors=30150,
+    )
+
+    request = _rip_request_from_toc(toc, album, tmp_path)
+
+    assert request.drive == "D:"
+    assert request.album is album
+    assert request.target_dir == tmp_path
+    assert request.track_offsets == (150, 15150)
+    assert request.leadout_sector == 30150
