@@ -74,6 +74,16 @@ QHeaderView::section {
     border-bottom: 1px solid #050607;
 }
 
+/* Keep hover tooltips readable when Windows high contrast themes alter the
+   native tooltip palette. Palette roles preserve OS-selected contrast while
+   avoiding the app-wide foreground color from blending into the tooltip. */
+QToolTip {
+    background-color: palette(tool-tip-base);
+    color: palette(tool-tip-text);
+    border: 1px solid palette(tool-tip-text);
+    padding: 4px 6px;
+}
+
 /* Buttons */
 QPushButton {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
