@@ -1,70 +1,128 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="620" viewBox="0 0 1200 620" role="img" aria-labelledby="title desc">
   <title id="title">Lyon Music Manager</title>
-  <desc id="desc">Vintage robot branding for the Lyon Music Manager README.</desc>
+  <desc id="desc">Vintage robot branding for Lyon Music Manager with a robot mascot, sunburst, and wordmark.</desc>
   <defs>
     <linearGradient id="paper" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#fff9ec"/>
-      <stop offset="1" stop-color="#f2dfbf"/>
+      <stop offset="1" stop-color="#f3dfbf"/>
     </linearGradient>
     <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
-      <feDropShadow dx="0" dy="12" stdDeviation="0" flood-color="#08223a" flood-opacity=".22"/>
+      <feDropShadow dx="0" dy="12" stdDeviation="0" flood-color="#08223a" flood-opacity=".26"/>
     </filter>
+    <style>
+      .ink{fill:#08223a}
+      .line{stroke:#08223a;stroke-width:10;stroke-linecap:square}
+      .outline{stroke:#08223a;stroke-width:10;stroke-linecap:round;stroke-linejoin:round}
+      .thin{stroke:#08223a;stroke-width:7;stroke-linecap:round;stroke-linejoin:round}
+      .red{fill:#df4932}
+      .teal{fill:#9fc5b3}
+      .deep{fill:#5f8d85}
+      .mint{fill:#dce9d2}
+      .cream{fill:#fff6e6}
+      .blue{fill:#70a8bd}
+      .word{font-family:"Arial Black","Impact",sans-serif;font-weight:900}
+    </style>
   </defs>
-  <rect width="1200" height="360" rx="18" fill="url(#paper)"/>
-  <g transform="translate(212 180)" opacity=".34">
-    <g fill="#df4932">
-      <path d="M0 0 210 -18 210 18z"/>
-      <path d="M0 0 191 89 174 122z"/>
-      <path d="M0 0 122 174 89 191z"/>
-      <path d="M0 0 18 210 -18 210z"/>
-      <path d="M0 0 -89 191 -122 174z"/>
-      <path d="M0 0 -174 122 -191 89z"/>
-      <path d="M0 0 -210 18 -210 -18z"/>
-      <path d="M0 0 -191 -89 -174 -122z"/>
-      <path d="M0 0 -122 -174 -89 -191z"/>
-      <path d="M0 0 -18 -210 18 -210z"/>
-      <path d="M0 0 89 -191 122 -174z"/>
-      <path d="M0 0 174 -122 191 -89z"/>
+  <rect width="1200" height="620" rx="20" fill="url(#paper)"/>
+  <circle cx="310" cy="318" r="244" fill="#df4932" opacity=".88"/>
+  <g fill="#fff6e6" opacity=".92" transform="translate(310 318)">
+    <path d="M0 0 244 -24 244 24z"/>
+    <path d="M0 0 222 101 201 145z"/>
+    <path d="M0 0 145 201 101 222z"/>
+    <path d="M0 0 24 244 -24 244z"/>
+    <path d="M0 0 -101 222 -145 201z"/>
+    <path d="M0 0 -201 145 -222 101z"/>
+    <path d="M0 0 -244 24 -244 -24z"/>
+    <path d="M0 0 -222 -101 -201 -145z"/>
+    <path d="M0 0 -145 -201 -101 -222z"/>
+    <path d="M0 0 -24 -244 24 -244z"/>
+    <path d="M0 0 101 -222 145 -201z"/>
+    <path d="M0 0 201 -145 222 -101z"/>
+  </g>
+  <g opacity=".28" fill="#fff6e6">
+    <circle cx="96" cy="115" r="2"/>
+    <circle cx="154" cy="372" r="2"/>
+    <circle cx="254" cy="164" r="2"/>
+    <circle cx="382" cy="246" r="2"/>
+    <circle cx="452" cy="374" r="2"/>
+    <circle cx="306" cy="510" r="2"/>
+    <circle cx="171" cy="256" r="1.6"/>
+    <circle cx="424" cy="118" r="1.6"/>
+  </g>
+  <g filter="url(#shadow)" transform="translate(114 52)">
+    <ellipse cx="200" cy="492" rx="130" ry="16" class="ink" opacity=".34"/>
+    <g id="head" transform="translate(72 0)">
+      <path d="M21 126 58 96v111l-37 22z" class="deep outline"/>
+      <path d="M32 134 52 118v79l-20 13z" fill="#fff6e6" opacity=".38"/>
+      <ellipse cx="16" cy="151" rx="22" ry="34" class="red outline"/>
+      <ellipse cx="221" cy="151" rx="22" ry="34" class="red outline"/>
+      <ellipse cx="18" cy="151" rx="10" ry="25" fill="#ff7657"/>
+      <ellipse cx="217" cy="151" rx="10" ry="25" fill="#ff7657"/>
+      <rect x="71" y="88" width="158" height="132" rx="10" fill="#e8f0dd" class="outline"/>
+      <rect x="86" y="103" width="126" height="82" rx="4" fill="#fff6e6" opacity=".56"/>
+      <rect x="117" y="66" width="66" height="23" rx="10" class="blue outline"/>
+      <line x1="150" y1="65" x2="150" y2="40" class="outline"/>
+      <circle cx="150" cy="19" r="21" class="red outline"/>
+      <circle cx="141" cy="10" r="9" fill="#ffe1ca"/>
+      <ellipse cx="145" cy="9" rx="15" ry="12" fill="#fff" opacity=".5"/>
+      <circle cx="108" cy="139" r="27" class="cream"/>
+      <circle cx="181" cy="139" r="27" class="cream"/>
+      <ellipse cx="117" cy="143" rx="17" ry="21" class="ink"/>
+      <ellipse cx="190" cy="143" rx="17" ry="21" class="ink"/>
+      <circle cx="128" cy="134" r="7" fill="#fffaf0"/>
+      <circle cx="201" cy="134" r="7" fill="#fffaf0"/>
+      <path d="M151 164 136 201h31z" fill="#8fc3cf" class="thin"/>
+      <g stroke="#08223a" stroke-width="9" stroke-linecap="round">
+        <line x1="106" y1="202" x2="106" y2="221"/>
+        <line x1="125" y1="202" x2="125" y2="221"/>
+        <line x1="144" y1="202" x2="144" y2="221"/>
+        <line x1="163" y1="202" x2="163" y2="221"/>
+        <line x1="182" y1="202" x2="182" y2="221"/>
+      </g>
+      <rect x="107" y="232" width="86" height="18" rx="5" class="blue outline"/>
+      <rect x="120" y="236" width="61" height="6" rx="3" fill="#fff" opacity=".35"/>
+    </g>
+    <g id="body">
+      <path d="M128 259 166 239v180l-38 21z" class="deep outline"/>
+      <rect x="161" y="235" width="188" height="185" rx="12" fill="#e5ecd9" class="outline"/>
+      <rect x="191" y="271" width="125" height="96" rx="5" class="cream outline"/>
+      <g>
+        <rect x="207" y="330" width="12" height="22" fill="#3f8ba0"/>
+        <rect x="225" y="310" width="12" height="42" fill="#3f8ba0"/>
+        <rect x="243" y="319" width="12" height="33" fill="#3f8ba0"/>
+        <rect x="261" y="292" width="12" height="60" class="red"/>
+        <rect x="279" y="326" width="12" height="26" class="red"/>
+      </g>
+      <path d="M275 312v-39l29-7v39" fill="none" stroke="#df4932" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+      <ellipse cx="259" cy="316" rx="16" ry="12" class="red"/>
+      <circle cx="129" cy="305" r="32" class="teal outline"/>
+      <circle cx="354" cy="305" r="32" class="teal outline"/>
+      <line x1="133" y1="335" x2="105" y2="410" class="outline"/>
+      <line x1="353" y1="335" x2="380" y2="410" class="outline"/>
+      <line x1="133" y1="335" x2="105" y2="410" stroke="#70a8bd" stroke-width="10" stroke-linecap="round"/>
+      <line x1="353" y1="335" x2="380" y2="410" stroke="#70a8bd" stroke-width="10" stroke-linecap="round"/>
+      <circle cx="92" cy="423" r="28" class="mint outline"/>
+      <circle cx="395" cy="423" r="28" class="mint outline"/>
+      <circle cx="101" cy="430" r="12" class="cream"/>
+      <circle cx="386" cy="430" r="12" class="cream"/>
+      <rect x="182" y="420" width="52" height="68" class="mint outline"/>
+      <rect x="274" y="420" width="52" height="68" class="mint outline"/>
+      <rect x="182" y="455" width="52" height="24" class="red"/>
+      <rect x="274" y="455" width="52" height="24" class="red"/>
+      <rect x="160" y="482" width="86" height="36" rx="8" fill="#c9dfd8" class="outline"/>
+      <rect x="262" y="482" width="86" height="36" rx="8" fill="#c9dfd8" class="outline"/>
     </g>
   </g>
-  <g filter="url(#shadow)" transform="translate(98 54)">
-    <rect x="0" y="0" width="248" height="248" rx="36" fill="#fff6e6" stroke="#08223a" stroke-width="10"/>
-    <rect x="16" y="16" width="216" height="216" rx="28" fill="#9fc5b3"/>
-    <ellipse cx="124" cy="223" rx="72" ry="14" fill="#08223a" opacity=".18"/>
-    <path d="M70 112 98 84v104l-28 16z" fill="#6d938b" stroke="#08223a" stroke-width="9" stroke-linejoin="round"/>
-    <rect x="94" y="76" width="124" height="104" rx="9" fill="#dce9d2" stroke="#08223a" stroke-width="9"/>
-    <line x1="156" y1="66" x2="156" y2="44" stroke="#08223a" stroke-width="8" stroke-linecap="round"/>
-    <circle cx="156" cy="30" r="17" fill="#df4932" stroke="#08223a" stroke-width="7"/>
-    <circle cx="151" cy="25" r="6" fill="#ffe1ca"/>
-    <ellipse cx="60" cy="132" rx="17" ry="25" fill="#df4932" stroke="#08223a" stroke-width="7"/>
-    <ellipse cx="224" cy="132" rx="17" ry="25" fill="#df4932" stroke="#08223a" stroke-width="7"/>
-    <circle cx="116" cy="118" r="18" fill="#fff6e6" stroke="#08223a" stroke-width="6"/>
-    <circle cx="176" cy="118" r="18" fill="#fff6e6" stroke="#08223a" stroke-width="6"/>
-    <ellipse cx="123" cy="118" rx="9" ry="13" fill="#08223a"/>
-    <ellipse cx="183" cy="118" rx="9" ry="13" fill="#08223a"/>
-    <circle cx="127" cy="112" r="4" fill="#fff6e6"/>
-    <circle cx="187" cy="112" r="4" fill="#fff6e6"/>
-    <path d="M158 133 146 156h24z" fill="#78aebe" stroke="#08223a" stroke-width="5" stroke-linejoin="round"/>
-    <g stroke="#08223a" stroke-width="7" stroke-linecap="round">
-      <line x1="121" y1="174" x2="121" y2="190"/>
-      <line x1="137" y1="174" x2="137" y2="190"/>
-      <line x1="153" y1="174" x2="153" y2="190"/>
-      <line x1="169" y1="174" x2="169" y2="190"/>
-      <line x1="185" y1="174" x2="185" y2="190"/>
-    </g>
-    <rect x="120" y="202" width="76" height="15" rx="4" fill="#70a8bd" stroke="#08223a" stroke-width="7"/>
+  <g transform="translate(560 126)">
+    <line x1="0" y1="0" x2="420" y2="0" class="line"/>
+    <text x="0" y="120" class="word red" font-size="128">Lyon</text>
+    <path d="M508 72 522 112 565 113 531 138 543 180 508 156 473 180 485 138 451 113 494 112z" class="red"/>
+    <line x1="319" y1="159" x2="500" y2="159" class="line"/>
+    <text x="0" y="276" class="word ink" font-size="139">music</text>
+    <text x="0" y="408" class="word ink" font-size="118">manager</text>
+    <line x1="0" y1="447" x2="420" y2="447" class="line"/>
+    <rect x="438" y="434" width="29" height="22" class="teal"/>
+    <rect x="478" y="434" width="29" height="22" class="mint"/>
+    <rect x="518" y="434" width="29" height="22" class="red"/>
   </g>
-  <g transform="translate(410 75)">
-    <line x1="0" y1="0" x2="470" y2="0" stroke="#08223a" stroke-width="8"/>
-    <text x="0" y="92" font-family="Arial Narrow, Impact, sans-serif" font-size="86" font-weight="900" fill="#df4932">LYON</text>
-    <text x="0" y="170" font-family="Arial Narrow, Impact, sans-serif" font-size="78" font-weight="900" fill="#08223a">MUSIC</text>
-    <text x="0" y="248" font-family="Arial Narrow, Impact, sans-serif" font-size="78" font-weight="900" fill="#08223a">MANAGER</text>
-    <line x1="0" y1="274" x2="470" y2="274" stroke="#08223a" stroke-width="8"/>
-    <rect x="495" y="250" width="24" height="24" fill="#9fc5b3"/>
-    <rect x="530" y="238" width="24" height="36" fill="#df4932"/>
-    <rect x="565" y="256" width="24" height="18" fill="#dce9d2"/>
-  </g>
-  <text x="905" y="166" font-family="Segoe UI, Arial, sans-serif" font-size="30" font-weight="700" fill="#08223a">Rip CDs</text>
-  <text x="905" y="207" font-family="Segoe UI, Arial, sans-serif" font-size="30" font-weight="700" fill="#08223a">Manage Library</text>
-  <text x="905" y="248" font-family="Segoe UI, Arial, sans-serif" font-size="30" font-weight="700" fill="#08223a">Play Music</text>
 </svg>
