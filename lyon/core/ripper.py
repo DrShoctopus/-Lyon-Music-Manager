@@ -237,6 +237,25 @@ class Ripper(QObject):
         if self._worker:
             self._worker.cancel()
 
+    def shutdown(self, timeout_ms: int = 10000) -> None:
+        """Cancel any in-flight rip and join the worker thread.
+
+        Used by the main window's closeEvent. The normal cancel path
+        relies on _on_finished firing as a queued slot, but during a
+        close the main event loop is blocked, so we drive quit/wait
+        directly here. Falls back to terminate() if the worker is wedged
+        (e.g. ffmpeg unresponsive) past the timeout.
+        """
+        if self._thread is None:
+            return
+        self.cancel()
+        self._thread.quit()
+        if not self._thread.wait(timeout_ms):
+            self._thread.terminate()
+            self._thread.wait(2000)
+        self._thread = None
+        self._worker = None
+
     def _on_finished(self, ok: bool, msg: str) -> None:
         self.finished.emit(ok, msg)
         if self._thread:
