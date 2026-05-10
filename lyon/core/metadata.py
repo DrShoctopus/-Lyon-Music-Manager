@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Iterator, Optional
 from urllib.parse import urljoin
 
 import musicbrainzngs
@@ -170,38 +170,54 @@ def fetch_artwork(album: AlbumInfo) -> bytes | None:
 
 
 def _release_to_album(release: dict, discid: str | None = None) -> AlbumInfo:
-    artist_credit = release.get("artist-credit") or []
-    artist = ""
-    if artist_credit:
-        first = artist_credit[0]
-        if isinstance(first, dict):
-            artist = first.get("artist", {}).get("name", "")
-        else:
-            artist = str(first)
     info = AlbumInfo(
-        artist=artist or release.get("artist-credit-phrase", ""),
+        artist=_artist_name(release),
         album=release.get("title", ""),
         date=release.get("date", ""),
         musicbrainz_albumid=release.get("id", ""),
     )
     media = _matching_media(release.get("medium-list") or [], discid)
-    n = 1
-    for medium in media:
-        disc_number = _safe_int(medium.get("position"), 1)
-        for tr in medium.get("track-list", []) or []:
-            rec = tr.get("recording", {}) or {}
-            length_ms = _safe_int(tr.get("length") or rec.get("length"), 0)
-            track_number = _safe_int(tr.get("position"), n)
-            info.tracks.append(
-                TrackInfo(
-                    number=track_number,
-                    title=rec.get("title") or tr.get("title") or f"Track {n}",
-                    length_ms=length_ms,
-                    disc_number=disc_number,
-                )
+    for fallback_number, medium, track in _iter_release_tracks(media):
+        rec = track.get("recording", {}) or {}
+        info.tracks.append(
+            TrackInfo(
+                number=_safe_int(track.get("position"), fallback_number),
+                title=rec.get("title") or track.get("title") or f"Track {fallback_number}",
+                length_ms=_safe_int(track.get("length") or rec.get("length"), 0),
+                artist=_track_artist_name(track),
+                disc_number=_safe_int(medium.get("position"), 1),
             )
-            n += 1
+        )
     return info
+
+
+def _artist_name(release: dict) -> str:
+    artist_credit = release.get("artist-credit") or []
+    if artist_credit:
+        first = artist_credit[0]
+        if isinstance(first, dict):
+            return first.get("artist", {}).get("name", "")
+        return str(first)
+    return release.get("artist-credit-phrase", "")
+
+
+def _track_artist_name(track: dict) -> str:
+    recording = track.get("recording", {}) or {}
+    credit = recording.get("artist-credit") or track.get("artist-credit") or []
+    if not credit:
+        return ""
+    first = credit[0]
+    if isinstance(first, dict):
+        return first.get("artist", {}).get("name", "")
+    return str(first)
+
+
+def _iter_release_tracks(media: list[dict]) -> Iterator[tuple[int, dict, dict]]:
+    fallback_number = 1
+    for medium in media:
+        for track in medium.get("track-list", []) or []:
+            yield fallback_number, medium, track
+            fallback_number += 1
 
 
 def _ctdb_meta_to_album(meta: ET.Element) -> Optional[AlbumInfo]:

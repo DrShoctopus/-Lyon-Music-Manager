@@ -77,3 +77,37 @@ def test_search_matches_album_artist_and_display_fallbacks(tmp_path):
     assert [track.path for track in library.search("Unknown Album")] == [
         "/music/unknowns.flac"
     ]
+
+
+def test_add_file_commits_standalone_insert(tmp_path, monkeypatch):
+    import sqlite3
+    from lyon.core import library as library_module
+
+    db = tmp_path / "library.db"
+    audio = tmp_path / "song.flac"
+    audio.write_bytes(b"fake")
+    library = Library(db)
+
+    monkeypatch.setattr(
+        library_module,
+        "_read_tags",
+        lambda path: {
+            "title": "Song",
+            "artist": "Artist",
+            "album_artist": "Artist",
+            "album": "Album",
+            "track_no": 1,
+            "disc_no": 1,
+            "year": 2026,
+            "genre": "",
+            "duration": 60.0,
+            "bitrate": 0,
+            "samplerate": 0,
+        },
+    )
+
+    assert library.add_file(audio)
+
+    with sqlite3.connect(db) as conn:
+        rows = conn.execute("SELECT path, title FROM tracks").fetchall()
+    assert rows == [(str(audio), "Song")]
