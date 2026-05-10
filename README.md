@@ -13,7 +13,7 @@ Mutagen, MusicBrainz, Cover Art Archive, ffmpeg, and libdiscid.
 
 ## Current Status
 
-`LMM-DEV` is an active desktop application branch. It includes the core music
+`main` is an active desktop application branch. It includes the core music
 library, playback, CD-ripping, YouTube, Windows build, and vintage robot branding
 work. The app can be run from source for development, and Windows packaging is
 available through PyInstaller and a manual GitHub Actions workflow.
