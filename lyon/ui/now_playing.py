@@ -29,7 +29,7 @@ class NowPlayingView(QWidget):
         self.title = QLabel("Nothing playing")
         f = self.title.font(); f.setPointSize(20); f.setBold(True)
         self.title.setFont(f)
-        self.title.setStyleSheet("color:#ffb24d;")
+        self.title.setStyleSheet("color:#72f4ff;")
         self.artist = QLabel("")
         f2 = self.artist.font(); f2.setPointSize(12)
         self.artist.setFont(f2)

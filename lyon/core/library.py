@@ -6,7 +6,7 @@ import sqlite3
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Iterator
+from typing import Callable, Iterable, Iterator
 
 from mutagen import File as MutagenFile
 
@@ -72,14 +72,28 @@ class Library:
             self.conn.commit()
 
     # ------------------------------------------------------------------ scan
-    def scan_paths(self, roots: Iterable[str | os.PathLike]) -> int:
-        """Walk the given roots and add new audio files. Returns count added."""
+    def scan_paths(
+        self,
+        roots: Iterable[str | os.PathLike],
+        should_cancel: "Callable[[], bool] | None" = None,
+    ) -> int:
+        """Walk the given roots and add new audio files. Returns count added.
+
+        ``should_cancel`` is checked inside the directory walk; when it
+        returns True the scan commits whatever has been added so far and
+        returns early. This lets callers (typically a worker QThread) get
+        out cleanly when the user closes the app mid-scan.
+        """
         added = 0
         for root in roots:
             root = Path(root)
             if not root.exists():
                 continue
             for dirpath, _dirs, files in os.walk(root):
+                if should_cancel is not None and should_cancel():
+                    with self._lock:
+                        self.conn.commit()
+                    return added
                 for name in files:
                     ext = os.path.splitext(name)[1].lower()
                     if ext not in SUPPORTED_EXTS:

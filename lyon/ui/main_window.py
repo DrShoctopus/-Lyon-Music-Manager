@@ -27,9 +27,14 @@ class _LibraryScanThread(QThread):
         self.library = library
         self.roots = roots
         self.label = label
+        self._cancel = False
+
+    def request_stop(self) -> None:
+        """Ask the scan loop to bail out at the next directory boundary."""
+        self._cancel = True
 
     def run(self) -> None:
-        n = self.library.scan_paths(self.roots)
+        n = self.library.scan_paths(self.roots, should_cancel=lambda: self._cancel)
         self.finished_with.emit(n, self.label)
 
 
@@ -233,9 +238,17 @@ class MainWindow(QMainWindow):
         )
 
     def closeEvent(self, ev) -> None:
+        # Stop audio first so it doesn't bleed past the visible window.
+        self.player.stop()
+        # Tell the library scan to bail at the next directory boundary, then
+        # block until it actually exits. quit() alone is a no-op because the
+        # scan thread overrides run() and never enters an event loop.
         if self._scan_thread is not None and self._scan_thread.isRunning():
-            self._scan_thread.quit()
-            self._scan_thread.wait(1000)
+            self._scan_thread.request_stop()
+            self._scan_thread.wait()
+        # Cancel any in-flight rip / disc lookup so worker threads don't
+        # outlive the window.
+        self.ripper_view.shutdown()
         self.settings.last_volume = self.player.volume()
         self.settings.save()
         super().closeEvent(ev)

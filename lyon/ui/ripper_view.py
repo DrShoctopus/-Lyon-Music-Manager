@@ -409,6 +409,14 @@ class RipperView(QWidget):
         self.ripper.cancel()
         self.status_label.setText("Cancelling...")
 
+    def shutdown(self) -> None:
+        """Stop ripper + worker threads. Called from MainWindow.closeEvent."""
+        self.ripper.shutdown()
+        for thread_attr in ("_disc_reader", "_lookup", "_search"):
+            t = getattr(self, thread_attr, None)
+            if t is not None and t.isRunning():
+                t.wait(5000)
+
     # ------------------------------------------------------------------ progress
     def _on_track_started(self, n: int, title: str) -> None:
         self.status_label.setText(f"Ripping {n:02d}: {title}")
