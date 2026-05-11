@@ -58,6 +58,6 @@ which trades faster startup for a slower first launch.
 - **CD not detected** — confirm `bin\libdiscid.dll` exists. The app uses
   Windows API `GetDriveType` to find optical drives, so virtual drives may
   not show up.
-- **Metadata never resolves** — check internet access and the MusicBrainz
+- **Metadata never resolves** — check internet access, CTDB availability, and the MusicBrainz
   contact value in *Settings*. Hammering MusicBrainz with a generic
   user-agent gets your IP rate-limited.

@@ -58,16 +58,29 @@ def _init():
 
 
 def lookup_disc(discid_str: str, toc: str | None = None) -> Optional[AlbumInfo]:
-    """Look up an album by MusicBrainz disc ID, falling back to CTDB."""
+    """Look up an album from CTDB first, falling back to MusicBrainz."""
+    ctdb_info = lookup_ctdb_disc(toc)
+    if ctdb_info is not None:
+        return ctdb_info
+    return lookup_musicbrainz_disc(discid_str, toc)
+
+
+def lookup_disc_with_fallback(discid_str: str, toc: str | None = None) -> Optional[AlbumInfo]:
+    """Try CTDB metadata first, then MusicBrainz if CTDB has no match."""
+    return lookup_disc(discid_str, toc)
+
+
+def lookup_musicbrainz_disc(discid_str: str, toc: str | None = None) -> Optional[AlbumInfo]:
+    """Look up an album by MusicBrainz disc ID."""
     _init()
     try:
         result = musicbrainzngs.get_releases_by_discid(
             discid_str, includes=["recordings", "artists"], toc=toc, cdstubs=True
         )
     except musicbrainzngs.ResponseError:
-        return lookup_ctdb_disc(toc)
+        return None
     except musicbrainzngs.NetworkError:
-        return lookup_ctdb_disc(toc)
+        return None
 
     release = None
     if "disc" in result and result["disc"].get("release-list"):
@@ -84,13 +97,8 @@ def lookup_disc(discid_str: str, toc: str | None = None) -> Optional[AlbumInfo]:
         return info
 
     if not release:
-        return lookup_ctdb_disc(toc)
+        return None
     return _release_to_album(release, discid_str)
-
-
-def lookup_disc_with_fallback(discid_str: str, toc: str | None = None) -> Optional[AlbumInfo]:
-    """Try MusicBrainz first, then CTDB metadata if MusicBrainz has no match."""
-    return lookup_disc(discid_str, toc)
 
 
 def lookup_ctdb_disc(toc: str | None) -> Optional[AlbumInfo]:
