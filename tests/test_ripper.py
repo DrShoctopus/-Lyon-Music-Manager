@@ -39,7 +39,7 @@ def _install_dependency_stubs() -> None:
         def quit(self):
             pass
 
-        def wait(self):
+        def wait(self, *_):
             pass
 
     qtgui = types.ModuleType("PySide6.QtGui")
@@ -111,9 +111,13 @@ _install_dependency_stubs()
 from lyon.core.cd_detect import DiscToc  # noqa: E402
 from lyon.core.metadata import AlbumInfo  # noqa: E402
 from lyon.core.ripper import (  # noqa: E402
+    RipRequest,
+    RipWorker,
+    _build_cdda_track_command,
     _build_libcdio_track_command,
     _track_sector_span,
 )
+from lyon.core.settings import Settings  # noqa: E402
 from lyon.ui.ripper_view import _rip_request_from_toc  # noqa: E402
 
 
@@ -144,6 +148,40 @@ def test_libcdio_command_extracts_one_audio_stream_with_toc_timing(tmp_path):
     assert "-stats" not in cmd
     assert "0:a:1" not in cmd
     assert cmd[-1] == str(out)
+
+
+def test_cdda_command_addresses_a_single_track(tmp_path):
+    out = tmp_path / "track.flac"
+
+    cmd = _build_cdda_track_command("ffmpeg", "D:\\", out, 5, 3)
+
+    assert cmd[cmd.index("-i") + 1] == "cdda://D:?track=3"
+    assert "-nostdin" in cmd
+    assert "-vn" in cmd
+    assert cmd[-1] == str(out)
+
+
+def test_rip_track_tries_direct_cdda_after_toc_slicing_fails(tmp_path):
+    album = AlbumInfo(artist="Artist", album="Album")
+    request = RipRequest(
+        drive="D:",
+        album=album,
+        target_dir=tmp_path,
+        track_offsets=(150, 15150),
+        leadout_sector=30150,
+    )
+    worker = RipWorker(Settings(), request)
+    seen: list[list[str]] = []
+
+    def fake_run(cmd: list[str], _track_no: int, _out):
+        seen.append(cmd)
+        return cmd[cmd.index("-i") + 1].startswith("cdda://")
+
+    worker._run_ffmpeg = fake_run
+
+    assert worker._rip_track("ffmpeg", 1, tmp_path / "track.flac") is True
+    assert len(seen) == 3
+    assert seen[-1][seen[-1].index("-i") + 1] == "cdda://D:?track=1"
 
 
 def test_rip_request_reuses_detected_disc_toc(tmp_path):
