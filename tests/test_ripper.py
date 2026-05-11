@@ -114,7 +114,9 @@ from lyon.core.metadata import AlbumInfo  # noqa: E402
 from lyon.core.ripper import (  # noqa: E402
     RipRequest,
     RipWorker,
+    _available_external_rippers,
     _build_cdda_track_command,
+    _build_external_ripper_command,
     _build_libcdio_track_command,
     _build_wav_to_flac_command,
     _ffmpeg_supports_input_format,
@@ -164,6 +166,38 @@ def test_cdda_command_addresses_a_single_track(tmp_path):
     assert cmd[-1] == str(out)
 
 
+def test_external_ripper_commands_match_jack_style_helpers(tmp_path):
+    wav = tmp_path / "track.wav"
+
+    assert _build_external_ripper_command(
+        "cdparanoia", "cdparanoia", "D:", 4, wav
+    ) == ["cdparanoia", "--abort-on-skip", "-d", "D:", "4", str(wav)]
+    assert _build_external_ripper_command(
+        "cdda2wav", "cdda2wav", "D:", 4, wav
+    ) == [
+        "cdda2wav", "--no-infofile", "-H", "-v", "1",
+        "-D", "D:", "-O", "wav", "-t", "4", str(wav),
+    ]
+    assert _build_external_ripper_command(
+        "tosha", "tosha", "D:", 4, wav
+    ) == ["tosha", "-d", "D:", "-f", "wav", "-t", "4", "-o", str(wav)]
+    assert _build_external_ripper_command(
+        "dagrab", "dagrab", "D:", 4, wav
+    ) == ["dagrab", "-d", "D:", "-f", str(wav), "4"]
+
+
+def test_available_external_rippers_prefers_bundled_helpers(monkeypatch, tmp_path):
+    helper_dir = tmp_path / "bin"
+    helper_dir.mkdir()
+    helper = helper_dir / "cdda2wav"
+    helper.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(ripper, "bundled_bin_dir", lambda: helper_dir)
+    monkeypatch.setattr(ripper.shutil, "which", lambda _name: None)
+
+    assert _available_external_rippers() == [("cdda2wav", str(helper))]
+
+
 def test_wav_to_flac_command_encodes_existing_audio(tmp_path):
     wav = tmp_path / "track.wav"
     out = tmp_path / "track.flac"
@@ -184,6 +218,57 @@ def test_ffmpeg_support_detection_parses_input_formats(monkeypatch):
 
     assert _ffmpeg_supports_input_format("ffmpeg", "libcdio") is True
     assert _ffmpeg_supports_input_format("ffmpeg", "missing") is False
+
+
+def test_external_helper_wav_is_encoded_then_removed(monkeypatch, tmp_path):
+    album = AlbumInfo(artist="Artist", album="Album")
+    request = RipRequest(drive="D:", album=album, target_dir=tmp_path)
+    worker = RipWorker(Settings(), request)
+    worker._external_rippers = [("cdda2wav", "cdda2wav")]
+    out = tmp_path / "track.flac"
+    labels: list[str] = []
+
+    def fake_run(cmd, _track_no, produced, label, *, emit_progress=False):
+        labels.append(label)
+        produced.write_bytes(b"audio")
+        return True
+
+    monkeypatch.setattr(worker, "_run_command", fake_run)
+
+    assert worker._rip_track_external_helper("ffmpeg", 1, out, 8) is True
+    assert labels == ["cdda2wav", "ffmpeg"]
+    assert out.exists()
+    assert not (tmp_path / ".track.cdda2wav.wav").exists()
+
+
+def test_rip_track_prefers_external_helper_before_builtin(monkeypatch, tmp_path):
+    album = AlbumInfo(artist="Artist", album="Album")
+    request = RipRequest(
+        drive="D:",
+        album=album,
+        target_dir=tmp_path,
+        track_offsets=(150, 15150),
+        leadout_sector=30150,
+    )
+    worker = RipWorker(Settings(), request)
+    worker._external_rippers = [("cdda2wav", "cdda2wav")]
+    worker._ffmpeg_has_libcdio = False
+    calls: list[str] = []
+
+    monkeypatch.setattr(ripper.sys, "platform", "win32")
+    monkeypatch.setattr(
+        worker,
+        "_rip_track_external_helper",
+        lambda *_args: calls.append("external") or True,
+    )
+    monkeypatch.setattr(
+        worker,
+        "_rip_track_windows_raw",
+        lambda *_args: calls.append("raw") or False,
+    )
+
+    assert worker._rip_track("ffmpeg", 1, tmp_path / "track.flac") is True
+    assert calls == ["external"]
 
 
 def test_rip_track_tries_direct_cdda_after_toc_slicing_fails(tmp_path):
