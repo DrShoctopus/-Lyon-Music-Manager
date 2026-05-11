@@ -296,7 +296,7 @@ class RipperView(QWidget):
         self._lookup = None
         if info is None:
             self.status_label.setText(
-                "Disc not found in MusicBrainz. Edit titles manually or click Search Online."
+                "Disc not found in CTDB or MusicBrainz. Edit titles manually or click Search Online."
             )
             self.start_btn.setEnabled(True)
             return
