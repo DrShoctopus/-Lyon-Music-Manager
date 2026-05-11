@@ -58,10 +58,12 @@ class Settings:
     library_paths: list[str] = field(default_factory=list)
     equalizer_enabled: bool = False
     equalizer_bands: list[int] = field(default_factory=lambda: list(DEFAULT_EQUALIZER_BANDS))
+    setup_completed: bool = False
 
     def __post_init__(self) -> None:
         self.equalizer_enabled = bool(self.equalizer_enabled)
         self.equalizer_bands = normalize_equalizer_bands(self.equalizer_bands)
+        self.setup_completed = bool(self.setup_completed)
 
     @classmethod
     def load(cls) -> "Settings":

@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QButtonGroup, QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow,
@@ -19,6 +19,7 @@ from .equalizer_dialog import EqualizerDialog
 from .library_view import LibraryView
 from .now_playing import NowPlayingView, TransportBar
 from .ripper_view import RipperView
+from .setup_dialog import SetupDialog
 from .styles import WMP_QSS
 from .youtube_view import YouTubeView
 
@@ -76,6 +77,7 @@ class MainWindow(QMainWindow):
         self._connect_library_actions()
         self._build_menu()
         self._start_initial_scan()
+        QTimer.singleShot(500, self._show_first_run_setup)
 
     # ------------------------------------------------------------------ setup
     def _init_services(self) -> None:
@@ -86,6 +88,7 @@ class MainWindow(QMainWindow):
         self.player.set_equalizer(self.settings.equalizer_enabled, self.settings.equalizer_bands)
         self._scan_thread: _LibraryScanThread | None = None
         self._equalizer_dialog: EqualizerDialog | None = None
+        self._setup_dialog: SetupDialog | None = None
 
     def _configure_window(self) -> None:
         self.setWindowTitle(__app_name__)
@@ -205,6 +208,7 @@ class MainWindow(QMainWindow):
         self._add_action(file_menu, "Exit", self.close)
 
         help_menu = menu_bar.addMenu("&Help")
+        self._add_action(help_menu, "Setup && Health Check", self.show_setup_health)
         self._add_action(help_menu, "About", self.show_about)
 
     def _add_action(self, menu: QMenu, label: str, handler: Callable[[], None]) -> None:
@@ -275,6 +279,9 @@ class MainWindow(QMainWindow):
             self.settings = dlg.result_settings
             self.settings.save()
             self.ripper_view.apply_settings(self.settings)
+            if self._setup_dialog is not None:
+                self._setup_dialog.settings = self.settings
+                self._setup_dialog.refresh()
             self.player.set_equalizer(
                 self.settings.equalizer_enabled, self.settings.equalizer_bands
             )
@@ -298,6 +305,28 @@ class MainWindow(QMainWindow):
 
     def _clear_equalizer_dialog(self, *_args) -> None:
         self._equalizer_dialog = None
+
+
+    def _show_first_run_setup(self) -> None:
+        if not self.settings.setup_completed:
+            self.show_setup_health(mark_complete_on_close=True)
+
+    def show_setup_health(self, *, mark_complete_on_close: bool = False) -> None:
+        if self._setup_dialog is not None:
+            self._setup_dialog.raise_()
+            self._setup_dialog.activateWindow()
+            return
+        dlg = SetupDialog(self.settings, self)
+        self._setup_dialog = dlg
+        dlg.open_settings_requested.connect(self.open_settings)
+        dlg.finished.connect(lambda *_: self._clear_setup_dialog(mark_complete_on_close))
+        dlg.show()
+
+    def _clear_setup_dialog(self, mark_complete: bool) -> None:
+        self._setup_dialog = None
+        if mark_complete and not self.settings.setup_completed:
+            self.settings.setup_completed = True
+            self.settings.save()
 
     def show_about(self) -> None:
         QMessageBox.about(
