@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSignalBlocker, Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..core.equalizer import MAX_GAIN_DB, MIN_GAIN_DB, normalize_equalizer_bands
 from ..core.settings import Settings
 
 
@@ -28,9 +29,6 @@ EQ_BANDS: tuple[tuple[str, str], ...] = (
     ("3 kHz", "Presence"),
     ("10 kHz", "Brilliance"),
 )
-
-MIN_GAIN_DB = -12
-MAX_GAIN_DB = 12
 
 
 class EqualizerDialog(QDialog):
@@ -117,9 +115,13 @@ class EqualizerDialog(QDialog):
         layout.addLayout(buttons)
 
     def reset_flat(self) -> None:
+        blockers = [QSignalBlocker(self.enable_box)]
+        blockers.extend(QSignalBlocker(slider) for slider in self._sliders)
         self.enable_box.setChecked(False)
         for slider in self._sliders:
             slider.setValue(0)
+        del blockers
+        self._update_value_labels()
         self._emit_change()
 
     def save_settings(self) -> None:
@@ -152,6 +154,4 @@ class EqualizerDialog(QDialog):
 
     @staticmethod
     def _normalized_bands(values: list[int]) -> list[int]:
-        normalized = list(values[: len(EQ_BANDS)])
-        normalized.extend([0] * (len(EQ_BANDS) - len(normalized)))
-        return [max(MIN_GAIN_DB, min(MAX_GAIN_DB, int(value))) for value in normalized]
+        return normalize_equalizer_bands(values)
