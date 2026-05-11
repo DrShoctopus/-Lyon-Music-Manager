@@ -101,8 +101,18 @@ def lookup_musicbrainz_disc(discid_str: str, toc: str | None = None) -> Optional
     return _release_to_album(release, discid_str)
 
 
-def lookup_ctdb_disc(toc: str | None) -> Optional[AlbumInfo]:
-    """Look up album metadata through the CUETools Database metadata endpoint."""
+def lookup_disc_with_fallback(discid_str: str, toc: str | None = None) -> Optional[AlbumInfo]:
+    """Try MusicBrainz first, then CTDB metadata if MusicBrainz has no match."""
+    return lookup_disc(discid_str, toc)
+
+
+def lookup_ctdb_disc(toc: str | None, *, fuzzy: bool = False) -> Optional[AlbumInfo]:
+    """Look up album metadata through the CUETools Database metadata endpoint.
+
+    CTDB fuzzy matches may describe a similar, but not identical, disc TOC.
+    Keep the default lookup exact so CTDB metadata cannot mask an exact
+    MusicBrainz disc ID resolution elsewhere in the automatic metadata flow.
+    """
     ctdb_toc = _musicbrainz_toc_to_ctdb_toc(toc)
     if not ctdb_toc:
         return None
@@ -116,7 +126,7 @@ def lookup_ctdb_disc(toc: str | None) -> Optional[AlbumInfo]:
                 "version": "3",
                 "ctdb": "0",
                 "metadata": "extensive",
-                "fuzzy": "1",
+                "fuzzy": "1" if fuzzy else "0",
                 "toc": ctdb_toc,
             },
             headers={"User-Agent": user_agent},

@@ -112,6 +112,69 @@ def test_lookup_musicbrainz_disc_returns_none_when_no_release(monkeypatch):
     assert metadata.lookup_musicbrainz_disc("disc-id", "toc-data") is None
 
 
+def test_lookup_ctdb_disc_uses_exact_toc_matching_by_default(monkeypatch):
+    captured = {}
+
+    monkeypatch.setattr(
+        metadata._settings.Settings,
+        "load",
+        lambda: types.SimpleNamespace(
+            musicbrainz_app="LyonTest",
+            musicbrainz_version="1.0",
+            musicbrainz_contact="test@example.invalid",
+        ),
+    )
+
+    class FakeResponse:
+        status_code = 200
+        content = b'<ctdb><metadata source="musicbrainz" artist="Artist" album="Album" /></ctdb>'
+
+    def fake_get(url, params, headers, timeout):
+        captured["url"] = url
+        captured["params"] = params
+        captured["headers"] = headers
+        captured["timeout"] = timeout
+        return FakeResponse()
+
+    monkeypatch.setattr(metadata.requests, "get", fake_get)
+
+    album = metadata.lookup_ctdb_disc("1 1 45150 150")
+
+    assert album is not None
+    assert album.album == "Album"
+    assert captured["url"] == metadata.CTDB_LOOKUP_URL
+    assert captured["params"]["fuzzy"] == "0"
+    assert captured["params"]["toc"] == "0:45000"
+
+
+def test_lookup_ctdb_disc_allows_explicit_fuzzy_lookup(monkeypatch):
+    captured = {}
+
+    monkeypatch.setattr(
+        metadata._settings.Settings,
+        "load",
+        lambda: types.SimpleNamespace(
+            musicbrainz_app="LyonTest",
+            musicbrainz_version="1.0",
+            musicbrainz_contact="test@example.invalid",
+        ),
+    )
+
+    class FakeResponse:
+        status_code = 200
+        content = b'<ctdb><metadata source="musicbrainz" artist="Artist" album="Album" /></ctdb>'
+
+    def fake_get(url, params, headers, timeout):
+        captured["params"] = params
+        return FakeResponse()
+
+    monkeypatch.setattr(metadata.requests, "get", fake_get)
+
+    album = metadata.lookup_ctdb_disc("1 1 45150 150", fuzzy=True)
+
+    assert album is not None
+    assert captured["params"]["fuzzy"] == "1"
+
 def test_ctdb_meta_to_album_maps_tracks_and_primary_art():
     meta = ET.fromstring(
         """
