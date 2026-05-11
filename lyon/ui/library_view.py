@@ -74,7 +74,7 @@ class LibraryView(QWidget):
             v = QVBoxLayout(box)
             v.setContentsMargins(0, 0, 0, 0)
             heading = QLabel(label)
-            heading.setStyleSheet("color:#ffb24d;font-weight:600;padding:4px 6px;")
+            heading.setStyleSheet("color:#72f4ff;font-weight:600;padding:4px 6px;")
             v.addWidget(heading)
             v.addWidget(w)
             splitter.addWidget(box)
@@ -82,7 +82,7 @@ class LibraryView(QWidget):
         rv = QVBoxLayout(right)
         rv.setContentsMargins(0, 0, 0, 0)
         rh = QLabel("Tracks")
-        rh.setStyleSheet("color:#ffb24d;font-weight:600;padding:4px 6px;")
+        rh.setStyleSheet("color:#72f4ff;font-weight:600;padding:4px 6px;")
         rv.addWidget(rh)
         rv.addWidget(self.tracks)
         splitter.addWidget(right)
@@ -162,7 +162,31 @@ class LibraryView(QWidget):
         file_type = Path(track.path).suffix.lstrip(".").upper() or "Unknown"
         artist = track.display_artist
         album = track.album or "Unknown Album"
-        return f"Artist: {artist}\nAlbum: {album}\nTime: {duration}\nFile type: {file_type}"
+        bitrate = self._format_bitrate(self._track_bitrate(track))
+        return (
+            f"Artist: {artist}\n"
+            f"Album: {album}\n"
+            f"Time: {duration}\n"
+            f"Bitrate: {bitrate}\n"
+            f"File type: {file_type}"
+        )
+
+    @staticmethod
+    def _format_bitrate(bitrate: int) -> str:
+        if bitrate <= 0:
+            return "Unknown"
+        kbps = round(bitrate / 1000)
+        if kbps <= 0:
+            return f"{bitrate} bps"
+        return f"{kbps} kbps"
+
+    def _track_bitrate(self, track: Track) -> int:
+        with self.library._lock:
+            row = self.library.conn.execute(
+                "SELECT bitrate FROM tracks WHERE id = ?",
+                (track.id,),
+            ).fetchone()
+        return int(row["bitrate"] or 0) if row else 0
 
     # ------------------------------------------------------------------ search
     def _on_search(self, q: str) -> None:

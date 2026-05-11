@@ -74,6 +74,16 @@ QHeaderView::section {
     border-bottom: 1px solid #050607;
 }
 
+/* Keep hover tooltips readable when Windows high contrast themes alter the
+   native tooltip palette. Palette roles preserve OS-selected contrast while
+   avoiding the app-wide foreground color from blending into the tooltip. */
+QToolTip {
+    background-color: palette(tool-tip-base);
+    color: palette(tool-tip-text);
+    border: 1px solid palette(tool-tip-text);
+    padding: 4px 6px;
+}
+
 /* Buttons */
 QPushButton {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
@@ -241,4 +251,17 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 QSplitter::handle { background: #161c23; }
 QMenu { background: #111820; border: 1px solid #27313b; }
 QMenu::item:selected { background: #1466c7; }
+
+QFrame#equalizerPanel {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #101923, stop:1 #05080c);
+    border: 1px solid #27313b;
+    border-radius: 10px;
+}
+QLabel#sectionTitle {
+    color: #72f4ff;
+    font-weight: 700;
+    font-size: 14pt;
+}
+QLabel#mutedText { color: #aeb9c4; }
 """

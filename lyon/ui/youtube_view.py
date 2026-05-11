@@ -89,7 +89,7 @@ class YouTubeView(QWidget):
         layout.setAlignment(Qt.AlignCenter)
         title = QLabel("YouTube playback requires PySide6-Addons")
         f = title.font(); f.setPointSize(14); f.setBold(True); title.setFont(f)
-        title.setStyleSheet("color:#ffb24d;")
+        title.setStyleSheet("color:#72f4ff;")
         title.setAlignment(Qt.AlignCenter)
         body = QLabel(
             "QtWebEngine is not installed in this environment. Install it with:\n\n"

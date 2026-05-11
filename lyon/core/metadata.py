@@ -1,13 +1,20 @@
-"""MusicBrainz + Cover Art Archive lookups."""
+"""MusicBrainz, CTDB, and Cover Art Archive lookups."""
 from __future__ import annotations
 
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from typing import Optional
+from urllib.parse import urljoin
 
 import musicbrainzngs
 import requests
 
 from . import settings as _settings
+
+
+CTDB_LOOKUP_URL = "http://db.cuetools.net/lookup2.php"
+CTDB_BASE_URL = "http://db.cuetools.net/"
+CTDB_TIMEOUT_SECONDS = 20
 
 
 @dataclass
@@ -28,6 +35,8 @@ class AlbumInfo:
     tracks: list[TrackInfo] = field(default_factory=list)
     artwork: bytes | None = None
     genre: str = ""
+    artwork_url: str = ""
+    metadata_source: str = "musicbrainz"
 
     @property
     def year(self) -> int:
@@ -49,16 +58,16 @@ def _init():
 
 
 def lookup_disc(discid_str: str, toc: str | None = None) -> Optional[AlbumInfo]:
-    """Look up an album by MusicBrainz disc ID."""
+    """Look up an album by MusicBrainz disc ID, falling back to CTDB."""
     _init()
     try:
         result = musicbrainzngs.get_releases_by_discid(
             discid_str, includes=["recordings", "artists"], toc=toc, cdstubs=True
         )
     except musicbrainzngs.ResponseError:
-        return None
+        return lookup_ctdb_disc(toc)
     except musicbrainzngs.NetworkError:
-        return None
+        return lookup_ctdb_disc(toc)
 
     release = None
     if "disc" in result and result["disc"].get("release-list"):
@@ -68,14 +77,60 @@ def lookup_disc(discid_str: str, toc: str | None = None) -> Optional[AlbumInfo]:
         info = AlbumInfo(
             artist=stub.get("artist", ""),
             album=stub.get("title", ""),
+            metadata_source="musicbrainz-cdstub",
         )
         for i, tr in enumerate(stub.get("track-list", []), start=1):
             info.tracks.append(TrackInfo(number=i, title=tr.get("title", f"Track {i}")))
         return info
 
     if not release:
-        return None
+        return lookup_ctdb_disc(toc)
     return _release_to_album(release, discid_str)
+
+
+def lookup_disc_with_fallback(discid_str: str, toc: str | None = None) -> Optional[AlbumInfo]:
+    """Try MusicBrainz first, then CTDB metadata if MusicBrainz has no match."""
+    return lookup_disc(discid_str, toc)
+
+
+def lookup_ctdb_disc(toc: str | None) -> Optional[AlbumInfo]:
+    """Look up album metadata through the CUETools Database metadata endpoint."""
+    ctdb_toc = _musicbrainz_toc_to_ctdb_toc(toc)
+    if not ctdb_toc:
+        return None
+
+    s = _settings.Settings.load()
+    user_agent = f"{s.musicbrainz_app}/{s.musicbrainz_version} ({s.musicbrainz_contact})"
+    try:
+        response = requests.get(
+            CTDB_LOOKUP_URL,
+            params={
+                "version": "3",
+                "ctdb": "0",
+                "metadata": "extensive",
+                "fuzzy": "1",
+                "toc": ctdb_toc,
+            },
+            headers={"User-Agent": user_agent},
+            timeout=CTDB_TIMEOUT_SECONDS,
+        )
+        if response.status_code != 200 or not response.content:
+            return None
+    except requests.RequestException:
+        return None
+
+    try:
+        root = ET.fromstring(response.content)
+    except ET.ParseError:
+        return None
+
+    candidates = [_ctdb_meta_to_album(meta) for meta in root.findall(".//metadata")]
+    candidates = [info for info in candidates if info is not None]
+    if not candidates:
+        return None
+
+    candidates.sort(key=_ctdb_album_score, reverse=True)
+    return candidates[0]
 
 
 def search_album(artist: str, album: str) -> Optional[AlbumInfo]:
@@ -98,9 +153,13 @@ def search_album(artist: str, album: str) -> Optional[AlbumInfo]:
 
 
 def fetch_artwork(album: AlbumInfo) -> bytes | None:
-    if not album.musicbrainz_albumid:
+    url = ""
+    if album.musicbrainz_albumid:
+        url = f"https://coverartarchive.org/release/{album.musicbrainz_albumid}/front-500"
+    elif album.artwork_url:
+        url = album.artwork_url
+    if not url:
         return None
-    url = f"https://coverartarchive.org/release/{album.musicbrainz_albumid}/front-500"
     try:
         r = requests.get(url, timeout=15)
         if r.status_code == 200 and r.content:
@@ -143,6 +202,84 @@ def _release_to_album(release: dict, discid: str | None = None) -> AlbumInfo:
             )
             n += 1
     return info
+
+
+def _ctdb_meta_to_album(meta: ET.Element) -> Optional[AlbumInfo]:
+    artist = (meta.get("artist") or "").strip()
+    album = (meta.get("album") or "").strip()
+    if not (artist or album):
+        return None
+
+    date = (meta.get("year") or "").strip()
+    for release in meta.findall("release"):
+        release_date = (release.get("date") or "").strip()
+        if release_date:
+            date = release_date
+            break
+
+    info = AlbumInfo(
+        artist=artist,
+        album=album,
+        date=date,
+        genre=(meta.get("genre") or "").strip(),
+        metadata_source=f"ctdb:{(meta.get('source') or 'unknown').strip()}",
+    )
+
+    disc_number = _safe_int(meta.get("discnumber"), 1)
+    for number, track in enumerate(meta.findall("track"), start=1):
+        title = (track.get("name") or "").strip() or f"Track {number:02d}"
+        info.tracks.append(
+            TrackInfo(
+                number=number,
+                title=title,
+                artist=(track.get("artist") or "").strip() or artist,
+                disc_number=disc_number,
+            )
+        )
+
+    cover = _select_ctdb_cover(meta.findall("coverart"))
+    if cover:
+        info.artwork_url = cover
+    return info
+
+
+def _select_ctdb_cover(covers: list[ET.Element]) -> str:
+    if not covers:
+        return ""
+    ordered = sorted(covers, key=lambda c: c.get("primary", "").lower() == "true", reverse=True)
+    for cover in ordered:
+        uri = (cover.get("uri") or cover.get("uri150") or "").strip()
+        if uri:
+            return urljoin(CTDB_BASE_URL, uri)
+    return ""
+
+
+def _musicbrainz_toc_to_ctdb_toc(toc: str | None) -> str:
+    """Convert a MusicBrainz TOC string into CTDB's colon-delimited offsets."""
+    if not toc:
+        return ""
+    try:
+        parts = [int(part) for part in toc.replace("+", " ").split()]
+    except ValueError:
+        return ""
+    if len(parts) < 4:
+        return ""
+
+    first_track, last_track, leadout = parts[:3]
+    offsets = parts[3:]
+    track_count = last_track - first_track + 1
+    if first_track != 1 or track_count < 1 or len(offsets) < track_count:
+        return ""
+
+    sector_zero = offsets[0]
+    ctdb_offsets = offsets[:track_count] + [leadout]
+    return ":".join(str(offset - sector_zero) for offset in ctdb_offsets)
+
+
+def _ctdb_album_score(info: AlbumInfo) -> tuple[int, int, int]:
+    source = info.metadata_source.lower()
+    source_score = 3 if "musicbrainz" in source else 2 if "discogs" in source else 1
+    return source_score, len(info.tracks), 1 if info.artwork_url else 0
 
 
 def _matching_media(media: list[dict], discid: str | None) -> list[dict]:
