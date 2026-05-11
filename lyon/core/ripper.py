@@ -1,14 +1,14 @@
 """CD -> FLAC ripping using bundled ffmpeg.
 
-FFmpeg's libcdio input exposes an audio CD as one audio stream with chapter
-metadata, not as one stream per CD track. We use the libdiscid TOC offsets read
-by ``cd_detect`` to seek and trim that one stream for each FLAC output file,
-falling back to Windows raw CD audio reads when the bundled FFmpeg was built
-without libcdio input support.
+The preferred CD extraction path mirrors JACK's architecture: use a dedicated
+Digital Audio Extraction helper (cdparanoia, cdda2wav/icedax, tosha, or dagrab)
+to produce a WAV, then encode/tag that WAV inside Lyon. FFmpeg/libcdio and the
+Windows raw CD reader remain as fallbacks for machines without helper binaries.
 """
 from __future__ import annotations
 
 import ctypes
+import os
 import re
 import shutil
 import subprocess
@@ -33,8 +33,15 @@ FFMPEG_ERROR_LINES = 8
 IOCTL_CDROM_RAW_READ = 0x0002403E
 TRACK_MODE_CDDA = 2
 
-# Suppress the console window ffmpeg would otherwise pop up per track on Windows.
+# Suppress the console window helpers would otherwise pop up per track on Windows.
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+
+JACK_STYLE_RIPPERS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("cdparanoia", ("cdparanoia",)),
+    ("cdda2wav", ("cdda2wav", "icedax")),
+    ("tosha", ("tosha",)),
+    ("dagrab", ("dagrab",)),
+)
 
 
 class _RawReadInfo(ctypes.Structure):
@@ -172,6 +179,29 @@ def _build_cdda_track_command(
     ]
 
 
+def _build_external_ripper_command(
+    ripper_name: str,
+    executable: str,
+    drive: str,
+    track_no: int,
+    wav_path: Path,
+) -> list[str]:
+    track = str(track_no)
+    out = str(wav_path)
+    if ripper_name == "cdparanoia":
+        return [executable, "--abort-on-skip", "-d", drive, track, out]
+    if ripper_name == "cdda2wav":
+        return [
+            executable, "--no-infofile", "-H", "-v", "1",
+            "-D", drive, "-O", "wav", "-t", track, out,
+        ]
+    if ripper_name == "tosha":
+        return [executable, "-d", drive, "-f", "wav", "-t", track, "-o", out]
+    if ripper_name == "dagrab":
+        return [executable, "-d", drive, "-f", out, track]
+    raise ValueError(f"Unsupported ripper helper: {ripper_name}")
+
+
 def _build_wav_to_flac_command(
     ffmpeg: str,
     wav_path: Path,
@@ -186,6 +216,36 @@ def _build_wav_to_flac_command(
         "-compression_level", str(compression),
         str(out),
     ]
+
+
+def _candidate_executable_names(name: str) -> Iterator[str]:
+    yield name
+    if sys.platform == "win32" and not Path(name).suffix:
+        for ext in (".exe", ".cmd", ".bat"):
+            yield name + ext
+
+
+def _find_helper_executable(names: Sequence[str]) -> str | None:
+    bundled = bundled_bin_dir()
+    for name in names:
+        for candidate in _candidate_executable_names(name):
+            path = bundled / candidate
+            if path.exists() and path.is_file():
+                return str(path)
+    for name in names:
+        found = shutil.which(name)
+        if found:
+            return found
+    return None
+
+
+def _available_external_rippers() -> list[tuple[str, str]]:
+    available: list[tuple[str, str]] = []
+    for ripper_name, executable_names in JACK_STYLE_RIPPERS:
+        executable = _find_helper_executable(executable_names)
+        if executable:
+            available.append((ripper_name, executable))
+    return available
 
 
 def _ffmpeg_supports_input_format(ffmpeg: str, input_format: str) -> bool:
@@ -336,6 +396,7 @@ class RipWorker(QObject):
         self.request = request
         self._track_offsets = tuple(request.track_offsets)
         self._leadout_sector = request.leadout_sector
+        self._external_rippers: list[tuple[str, str]] = []
         self._ffmpeg_has_libcdio: bool | None = None
         self._cancel = False
 
@@ -347,12 +408,18 @@ class RipWorker(QObject):
         if not ff:
             self.finished.emit(False, "ffmpeg not found. Bundle it in /bin or install on PATH.")
             return
+        self._external_rippers = _available_external_rippers()
+        if self._external_rippers:
+            helpers = ", ".join(name for name, _ in self._external_rippers)
+            self.log.emit(f"Using JACK-style CD ripper helper fallback: {helpers}.")
+        else:
+            self.log.emit(
+                "No JACK-style CD ripper helper found. Put cdparanoia, "
+                "cdda2wav/icedax, tosha, or dagrab in the app bin folder or PATH."
+            )
         self._ffmpeg_has_libcdio = _ffmpeg_supports_input_format(ff, "libcdio")
         if not self._ffmpeg_has_libcdio:
-            self.log.emit(
-                "FFmpeg does not include libcdio input support; "
-                "using the Windows CD reader fallback."
-            )
+            self.log.emit("FFmpeg does not include libcdio input support.")
 
         album = self.request.album
         folder = self.request.target_dir
@@ -418,6 +485,16 @@ class RipWorker(QObject):
         span = _track_sector_span(track_no, self._track_offsets, self._leadout_sector)
         has_libcdio = bool(self._ffmpeg_has_libcdio)
 
+        if self._external_rippers:
+            if self._rip_track_external_helper(ffmpeg, track_no, out, compression):
+                return True
+            if self._cancel:
+                return False
+            self.log.emit(
+                f"Track {track_no}: JACK-style ripper helpers failed; "
+                "trying built-in fallback."
+            )
+
         if span is not None and sys.platform == "win32" and not has_libcdio:
             if self._rip_track_windows_raw(ffmpeg, track_no, out, compression, span):
                 return True
@@ -456,6 +533,44 @@ class RipWorker(QObject):
                 return True
         return False
 
+    def _rip_track_external_helper(
+        self,
+        ffmpeg: str,
+        track_no: int,
+        out: Path,
+        compression: int,
+    ) -> bool:
+        for ripper_name, executable in self._external_rippers:
+            wav_path = out.with_name(f".{out.stem}.{ripper_name}.wav")
+            try:
+                wav_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            cmd = _build_external_ripper_command(
+                ripper_name, executable, self.request.drive, track_no, wav_path
+            )
+            self.log.emit(f"Trying {ripper_name} for track {track_no}.")
+            if not self._run_command(cmd, track_no, wav_path, ripper_name):
+                try:
+                    wav_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                if self._cancel:
+                    return False
+                continue
+            if self._cancel:
+                return False
+            encode_cmd = _build_wav_to_flac_command(ffmpeg, wav_path, out, compression)
+            try:
+                if self._run_ffmpeg(encode_cmd, track_no, out):
+                    return True
+            finally:
+                try:
+                    wav_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+        return False
+
     def _rip_track_windows_raw(
         self,
         ffmpeg: str,
@@ -486,6 +601,17 @@ class RipWorker(QObject):
                 pass
 
     def _run_ffmpeg(self, cmd: list[str], track_no: int, out: Path) -> bool:
+        return self._run_command(cmd, track_no, out, "ffmpeg", emit_progress=True)
+
+    def _run_command(
+        self,
+        cmd: list[str],
+        track_no: int,
+        out: Path,
+        label: str,
+        *,
+        emit_progress: bool = False,
+    ) -> bool:
         try:
             proc = subprocess.Popen(
                 cmd,
@@ -494,7 +620,7 @@ class RipWorker(QObject):
                 creationflags=_NO_WINDOW,
             )
         except OSError as e:
-            self.log.emit(f"ffmpeg launch error: {e}")
+            self.log.emit(f"{label} launch error: {e}")
             return False
 
         recent_output: list[str] = []
@@ -508,13 +634,15 @@ class RipWorker(QObject):
                 if line:
                     recent_output.append(line)
                     recent_output = recent_output[-FFMPEG_ERROR_LINES:]
-                pct = _parse_progress(line)
-                if pct is not None:
-                    self.track_progress.emit(track_no, pct)
+                if emit_progress:
+                    pct = _parse_progress(line)
+                    if pct is not None:
+                        self.track_progress.emit(track_no, pct)
         proc.wait()
 
         if proc.returncode == 0 and out.exists() and out.stat().st_size > 0:
-            self.track_progress.emit(track_no, 100)
+            if emit_progress:
+                self.track_progress.emit(track_no, 100)
             return True
 
         try:
@@ -523,9 +651,9 @@ class RipWorker(QObject):
             pass
 
         if recent_output:
-            self.log.emit("ffmpeg: " + " | ".join(recent_output))
+            self.log.emit(f"{label}: " + " | ".join(recent_output))
         else:
-            self.log.emit(f"ffmpeg exited with code {proc.returncode}.")
+            self.log.emit(f"{label} exited with code {proc.returncode}.")
         return False
 
 
