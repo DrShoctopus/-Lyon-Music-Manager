@@ -108,6 +108,7 @@ def _install_dependency_stubs() -> None:
 
 _install_dependency_stubs()
 
+from lyon.core import ripper  # noqa: E402
 from lyon.core.cd_detect import DiscToc  # noqa: E402
 from lyon.core.metadata import AlbumInfo  # noqa: E402
 from lyon.core.ripper import (  # noqa: E402
@@ -115,6 +116,8 @@ from lyon.core.ripper import (  # noqa: E402
     RipWorker,
     _build_cdda_track_command,
     _build_libcdio_track_command,
+    _build_wav_to_flac_command,
+    _ffmpeg_supports_input_format,
     _track_sector_span,
 )
 from lyon.core.settings import Settings  # noqa: E402
@@ -161,6 +164,28 @@ def test_cdda_command_addresses_a_single_track(tmp_path):
     assert cmd[-1] == str(out)
 
 
+def test_wav_to_flac_command_encodes_existing_audio(tmp_path):
+    wav = tmp_path / "track.wav"
+    out = tmp_path / "track.flac"
+
+    cmd = _build_wav_to_flac_command("ffmpeg", wav, out, 4)
+
+    assert cmd[cmd.index("-i") + 1] == str(wav)
+    assert cmd[cmd.index("-compression_level") + 1] == "4"
+    assert "libcdio" not in cmd
+    assert cmd[-1] == str(out)
+
+
+def test_ffmpeg_support_detection_parses_input_formats(monkeypatch):
+    class Result:
+        stdout = " D  libcdio         Audio CD input\n E  flac            raw FLAC\n"
+
+    monkeypatch.setattr(ripper.subprocess, "run", lambda *_args, **_kwargs: Result())
+
+    assert _ffmpeg_supports_input_format("ffmpeg", "libcdio") is True
+    assert _ffmpeg_supports_input_format("ffmpeg", "missing") is False
+
+
 def test_rip_track_tries_direct_cdda_after_toc_slicing_fails(tmp_path):
     album = AlbumInfo(artist="Artist", album="Album")
     request = RipRequest(
@@ -171,6 +196,7 @@ def test_rip_track_tries_direct_cdda_after_toc_slicing_fails(tmp_path):
         leadout_sector=30150,
     )
     worker = RipWorker(Settings(), request)
+    worker._ffmpeg_has_libcdio = True
     seen: list[list[str]] = []
 
     def fake_run(cmd: list[str], _track_no: int, _out):
@@ -182,6 +208,60 @@ def test_rip_track_tries_direct_cdda_after_toc_slicing_fails(tmp_path):
     assert worker._rip_track("ffmpeg", 1, tmp_path / "track.flac") is True
     assert len(seen) == 3
     assert seen[-1][seen[-1].index("-i") + 1] == "cdda://D:?track=1"
+
+
+def test_rip_track_uses_windows_raw_reader_when_libcdio_is_missing(monkeypatch, tmp_path):
+    album = AlbumInfo(artist="Artist", album="Album")
+    request = RipRequest(
+        drive="D:",
+        album=album,
+        target_dir=tmp_path,
+        track_offsets=(150, 15150),
+        leadout_sector=30150,
+    )
+    worker = RipWorker(Settings(), request)
+    worker._ffmpeg_has_libcdio = False
+    calls: list[tuple[int, tuple[int, int]]] = []
+
+    monkeypatch.setattr(ripper.sys, "platform", "win32")
+
+    def fake_raw(_ffmpeg, track_no, _out, _compression, sector_span):
+        calls.append((track_no, sector_span))
+        return True
+
+    monkeypatch.setattr(worker, "_rip_track_windows_raw", fake_raw)
+    monkeypatch.setattr(worker, "_run_ffmpeg", lambda *_args: False)
+
+    assert worker._rip_track("ffmpeg", 1, tmp_path / "track.flac") is True
+    assert calls == [(1, (0, 15000))]
+
+
+def test_rip_track_skips_libcdio_when_windows_raw_reader_fails(monkeypatch, tmp_path):
+    album = AlbumInfo(artist="Artist", album="Album")
+    request = RipRequest(
+        drive="D:",
+        album=album,
+        target_dir=tmp_path,
+        track_offsets=(150, 15150),
+        leadout_sector=30150,
+    )
+    worker = RipWorker(Settings(), request)
+    worker._ffmpeg_has_libcdio = False
+    seen: list[list[str]] = []
+
+    monkeypatch.setattr(ripper.sys, "platform", "win32")
+    monkeypatch.setattr(worker, "_rip_track_windows_raw", lambda *_args: False)
+
+    def fake_run(cmd: list[str], _track_no: int, _out):
+        seen.append(cmd)
+        return False
+
+    monkeypatch.setattr(worker, "_run_ffmpeg", fake_run)
+
+    assert worker._rip_track("ffmpeg", 1, tmp_path / "track.flac") is False
+    assert len(seen) == 1
+    assert "libcdio" not in seen[0]
+    assert seen[0][seen[0].index("-i") + 1] == "cdda://D:?track=1"
 
 
 def test_rip_request_reuses_detected_disc_toc(tmp_path):

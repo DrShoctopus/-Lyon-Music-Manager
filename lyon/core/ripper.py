@@ -3,18 +3,20 @@
 FFmpeg's libcdio input exposes an audio CD as one audio stream with chapter
 metadata, not as one stream per CD track. We use the libdiscid TOC offsets read
 by ``cd_detect`` to seek and trim that one stream for each FLAC output file,
-then fall back to direct CDDA track addressing for FFmpeg builds that support it
-better than stream slicing.
+falling back to Windows raw CD audio reads when the bundled FFmpeg was built
+without libcdio input support.
 """
 from __future__ import annotations
 
+import ctypes
 import re
 import shutil
 import subprocess
 import sys
+import wave
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Callable, Iterator, Optional, Sequence
 
 from PySide6.QtCore import QObject, QThread, Signal
 
@@ -24,10 +26,23 @@ from .settings import Settings, bundled_bin_dir
 
 SAFE_CHARS_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 CD_SECTORS_PER_SECOND = 75
+CD_COOKED_SECTOR_SIZE = 2048
+CD_RAW_AUDIO_SECTOR_SIZE = 2352
+CD_RAW_READ_CHUNK_SECTORS = 75
 FFMPEG_ERROR_LINES = 8
+IOCTL_CDROM_RAW_READ = 0x0002403E
+TRACK_MODE_CDDA = 2
 
 # Suppress the console window ffmpeg would otherwise pop up per track on Windows.
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+
+
+class _RawReadInfo(ctypes.Structure):
+    _fields_ = [
+        ("DiskOffset", ctypes.c_longlong),
+        ("SectorCount", ctypes.c_ulong),
+        ("TrackMode", ctypes.c_int),
+    ]
 
 
 def safe_path_component(name: str) -> str:
@@ -157,6 +172,145 @@ def _build_cdda_track_command(
     ]
 
 
+def _build_wav_to_flac_command(
+    ffmpeg: str,
+    wav_path: Path,
+    out: Path,
+    compression: int,
+) -> list[str]:
+    return [
+        ffmpeg, "-y", "-nostdin", "-loglevel", "error",
+        "-i", str(wav_path),
+        "-vn",
+        "-c:a", "flac",
+        "-compression_level", str(compression),
+        str(out),
+    ]
+
+
+def _ffmpeg_supports_input_format(ffmpeg: str, input_format: str) -> bool:
+    try:
+        proc = subprocess.run(
+            [ffmpeg, "-hide_banner", "-formats"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            creationflags=_NO_WINDOW,
+            check=False,
+        )
+    except OSError:
+        return False
+    pattern = rf"^\s*D\s+{re.escape(input_format)}\b"
+    return re.search(pattern, proc.stdout or "", re.MULTILINE) is not None
+
+
+def _windows_cd_device_path(drive: str) -> str:
+    device = drive.strip().rstrip("\\/")
+    if len(device) == 1:
+        device += ":"
+    return f"\\\\.\\{device}"
+
+
+def _iter_windows_raw_cdda_chunks(
+    drive: str,
+    sector_span: tuple[int, int],
+    should_cancel: Callable[[], bool] | None = None,
+) -> Iterator[bytes]:
+    if sys.platform != "win32":
+        raise OSError("Windows raw CD reading is only available on Windows.")
+
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateFileW.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    kernel32.CreateFileW.restype = wintypes.HANDLE
+    kernel32.DeviceIoControl.argtypes = [
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+        wintypes.LPVOID,
+    ]
+    kernel32.DeviceIoControl.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+
+    generic_read = 0x80000000
+    file_share_read = 0x00000001
+    file_share_write = 0x00000002
+    open_existing = 3
+    invalid_handle_value = ctypes.c_void_p(-1).value
+
+    handle = kernel32.CreateFileW(
+        _windows_cd_device_path(drive),
+        generic_read,
+        file_share_read | file_share_write,
+        None,
+        open_existing,
+        0,
+        None,
+    )
+    if handle == invalid_handle_value:
+        raise ctypes.WinError(ctypes.get_last_error())
+
+    start, end = sector_span
+    sector = start
+    try:
+        while sector < end:
+            if should_cancel is not None and should_cancel():
+                return
+            count = min(CD_RAW_READ_CHUNK_SECTORS, end - sector)
+            info = _RawReadInfo(
+                sector * CD_COOKED_SECTOR_SIZE,
+                count,
+                TRACK_MODE_CDDA,
+            )
+            out_size = count * CD_RAW_AUDIO_SECTOR_SIZE
+            out_buf = ctypes.create_string_buffer(out_size)
+            returned = wintypes.DWORD(0)
+            ok = kernel32.DeviceIoControl(
+                handle,
+                IOCTL_CDROM_RAW_READ,
+                ctypes.byref(info),
+                ctypes.sizeof(info),
+                out_buf,
+                out_size,
+                ctypes.byref(returned),
+                None,
+            )
+            if not ok:
+                raise ctypes.WinError(ctypes.get_last_error())
+            yield out_buf.raw[:returned.value]
+            sector += count
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _write_windows_cdda_wav(
+    drive: str,
+    sector_span: tuple[int, int],
+    wav_path: Path,
+    should_cancel: Callable[[], bool] | None = None,
+) -> None:
+    with wave.open(str(wav_path), "wb") as wav:
+        wav.setnchannels(2)
+        wav.setsampwidth(2)
+        wav.setframerate(44100)
+        for chunk in _iter_windows_raw_cdda_chunks(drive, sector_span, should_cancel):
+            wav.writeframesraw(chunk)
+
+
 # ---------------------------------------------------------------- worker
 @dataclass
 class RipRequest:
@@ -182,6 +336,7 @@ class RipWorker(QObject):
         self.request = request
         self._track_offsets = tuple(request.track_offsets)
         self._leadout_sector = request.leadout_sector
+        self._ffmpeg_has_libcdio: bool | None = None
         self._cancel = False
 
     def cancel(self) -> None:
@@ -192,6 +347,12 @@ class RipWorker(QObject):
         if not ff:
             self.finished.emit(False, "ffmpeg not found. Bundle it in /bin or install on PATH.")
             return
+        self._ffmpeg_has_libcdio = _ffmpeg_supports_input_format(ff, "libcdio")
+        if not self._ffmpeg_has_libcdio:
+            self.log.emit(
+                "FFmpeg does not include libcdio input support; "
+                "using the Windows CD reader fallback."
+            )
 
         album = self.request.album
         folder = self.request.target_dir
@@ -255,13 +416,25 @@ class RipWorker(QObject):
             compression = 8
         compression = max(0, min(8, compression))
         span = _track_sector_span(track_no, self._track_offsets, self._leadout_sector)
+        has_libcdio = bool(self._ffmpeg_has_libcdio)
+
+        if span is not None and sys.platform == "win32" and not has_libcdio:
+            if self._rip_track_windows_raw(ffmpeg, track_no, out, compression, span):
+                return True
+            if self._cancel:
+                return False
+            self.log.emit(
+                f"Track {track_no}: Windows CD reader fallback failed; "
+                "trying direct track access."
+            )
+
         attempts: list[list[str]] = []
         if span is None:
             self.log.emit(
                 f"Track {track_no}: disc TOC offsets are unavailable or invalid; "
                 "trying direct track access."
             )
-        else:
+        elif has_libcdio:
             attempts.extend([
                 _build_libcdio_track_command(
                     ffmpeg, drive, out, compression, span, input_seek=True
@@ -270,12 +443,47 @@ class RipWorker(QObject):
                     ffmpeg, drive, out, compression, span, input_seek=False
                 ),
             ])
+        elif sys.platform != "win32":
+            self.log.emit(
+                f"Track {track_no}: FFmpeg lacks libcdio input support, "
+                "and the raw CD reader fallback is Windows-only."
+            )
+
         attempts.append(_build_cdda_track_command(ffmpeg, drive, out, compression, track_no))
 
         for cmd in attempts:
             if self._run_ffmpeg(cmd, track_no, out):
                 return True
         return False
+
+    def _rip_track_windows_raw(
+        self,
+        ffmpeg: str,
+        track_no: int,
+        out: Path,
+        compression: int,
+        sector_span: tuple[int, int],
+    ) -> bool:
+        wav_path = out.with_name(f".{out.stem}.rip.wav")
+        try:
+            _write_windows_cdda_wav(
+                self.request.drive,
+                sector_span,
+                wav_path,
+                should_cancel=lambda: self._cancel,
+            )
+            if self._cancel:
+                return False
+            cmd = _build_wav_to_flac_command(ffmpeg, wav_path, out, compression)
+            return self._run_ffmpeg(cmd, track_no, out)
+        except OSError as e:
+            self.log.emit(f"Windows CD read failed: {e}")
+            return False
+        finally:
+            try:
+                wav_path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     def _run_ffmpeg(self, cmd: list[str], track_no: int, out: Path) -> bool:
         try:
