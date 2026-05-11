@@ -4,8 +4,7 @@ from __future__ import annotations
 from PySide6.QtCore import QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPainterPath
 from PySide6.QtWidgets import (
-    QAbstractItemView, QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
-    QPushButton, QSizePolicy, QSlider, QToolButton, QVBoxLayout, QWidget,
+    QFrame, QHBoxLayout, QLabel, QSizePolicy, QSlider, QToolButton, QVBoxLayout, QWidget,
 )
 
 from ..core.library import Track
@@ -54,111 +53,9 @@ class NowPlayingView(QWidget):
         layout.setContentsMargins(20, 20, 20, 20)
         layout.addStretch(1)
         layout.addLayout(top)
-        layout.addSpacing(16)
-        layout.addWidget(self._build_queue_panel())
         layout.addStretch(1)
 
         player.track_changed.connect(self._on_track)
-        player.queue_changed.connect(self._refresh_queue)
-        self._refresh_queue()
-
-
-    def _build_queue_panel(self) -> QWidget:
-        panel = QFrame()
-        panel.setObjectName("queuePanel")
-        panel.setMinimumHeight(190)
-
-        title = QLabel("Up Next")
-        title.setStyleSheet("color:#72f4ff;font-weight:600;padding:4px 0;")
-        self.queue_list = QListWidget()
-        self.queue_list.setAlternatingRowColors(True)
-        self.queue_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
-        self.queue_list.itemDoubleClicked.connect(self._play_queue_item)
-        self.queue_list.itemSelectionChanged.connect(self._update_queue_buttons)
-
-        self.queue_play_btn = QPushButton("Play Selected")
-        self.queue_play_btn.clicked.connect(self._play_selected_queue_item)
-        self.queue_up_btn = QPushButton("Move Up")
-        self.queue_up_btn.clicked.connect(lambda: self._move_selected_queue_item(-1))
-        self.queue_down_btn = QPushButton("Move Down")
-        self.queue_down_btn.clicked.connect(lambda: self._move_selected_queue_item(1))
-        self.queue_remove_btn = QPushButton("Remove")
-        self.queue_remove_btn.clicked.connect(self._remove_selected_queue_items)
-        self.queue_clear_btn = QPushButton("Clear Queue")
-        self.queue_clear_btn.clicked.connect(self.player.clear_queue)
-
-        buttons = QHBoxLayout()
-        buttons.addWidget(self.queue_play_btn)
-        buttons.addWidget(self.queue_up_btn)
-        buttons.addWidget(self.queue_down_btn)
-        buttons.addWidget(self.queue_remove_btn)
-        buttons.addStretch(1)
-        buttons.addWidget(self.queue_clear_btn)
-
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(12, 8, 12, 12)
-        layout.addWidget(title)
-        layout.addWidget(self.queue_list, 1)
-        layout.addLayout(buttons)
-        return panel
-
-    def _refresh_queue(self) -> None:
-        if not hasattr(self, "queue_list"):
-            return
-        selected_rows = {idx.row() for idx in self.queue_list.selectedIndexes()}
-        self.queue_list.clear()
-        current = self.player.current_index()
-        for row, track in enumerate(self.player.queue()):
-            prefix = "▶ " if row == current else "   "
-            item = QListWidgetItem(
-                f"{prefix}{row + 1:02d}. {track.title} — {track.display_artist}"
-            )
-            item.setData(Qt.UserRole, row)
-            item.setToolTip(
-                f"Artist: {track.display_artist}\n"
-                f"Album: {track.album or 'Unknown Album'}\n"
-                f"File location: {track.path}"
-            )
-            if row == current:
-                item.setForeground(QColor("#72f4ff"))
-            self.queue_list.addItem(item)
-            if row in selected_rows:
-                item.setSelected(True)
-        self._update_queue_buttons()
-
-    def _queue_selected_rows(self) -> list[int]:
-        rows = [idx.row() for idx in self.queue_list.selectedIndexes()]
-        return sorted(set(rows))
-
-    def _play_queue_item(self, item: QListWidgetItem) -> None:
-        self.player.play_index(item.data(Qt.UserRole))
-
-    def _play_selected_queue_item(self) -> None:
-        rows = self._queue_selected_rows()
-        if rows:
-            self.player.play_index(rows[0])
-
-    def _move_selected_queue_item(self, offset: int) -> None:
-        rows = self._queue_selected_rows()
-        if len(rows) != 1:
-            return
-        row = rows[0]
-        self.player.move_queue_item(row, row + offset)
-        self.queue_list.setCurrentRow(max(0, min(row + offset, self.queue_list.count() - 1)))
-
-    def _remove_selected_queue_items(self) -> None:
-        self.player.remove_queue_indices(self._queue_selected_rows())
-
-    def _update_queue_buttons(self) -> None:
-        rows = self._queue_selected_rows()
-        has_queue = self.queue_list.count() > 0
-        has_selection = bool(rows)
-        single = len(rows) == 1
-        self.queue_play_btn.setEnabled(has_selection)
-        self.queue_remove_btn.setEnabled(has_selection)
-        self.queue_up_btn.setEnabled(single and rows[0] > 0)
-        self.queue_down_btn.setEnabled(single and rows[0] < self.queue_list.count() - 1)
-        self.queue_clear_btn.setEnabled(has_queue)
 
     def _on_track(self, track: Track | None) -> None:
         if track is None:
@@ -382,7 +279,6 @@ class TransportBar(QWidget):
         self.repeat_btn.setChecked(mode != RepeatMode.OFF)
         labels = {RepeatMode.OFF: "⟳", RepeatMode.ALL: "⟳A", RepeatMode.ONE: "⟳1"}
         self.repeat_btn.setText(labels[mode])
-
 
     def _on_track(self, track: Track | None) -> None:
         if track is None:

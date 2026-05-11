@@ -9,6 +9,8 @@ from pathlib import Path
 
 from .equalizer import DEFAULT_EQUALIZER_BANDS, normalize_equalizer_bands
 
+DEFAULT_VOLUME = 80
+
 
 def _default_music_root() -> Path:
     if sys.platform == "win32":
@@ -42,6 +44,18 @@ def _app_version() -> str:
     return __version__
 
 
+def _normalize_last_volume(value: object) -> int:
+    try:
+        volume = float(value)
+    except (TypeError, ValueError):
+        return DEFAULT_VOLUME
+    if volume != volume:
+        return DEFAULT_VOLUME
+    if 0 < volume <= 1:
+        volume *= 100
+    return max(0, min(100, int(round(volume))))
+
+
 @dataclass
 class Settings:
     music_root: str = field(default_factory=lambda: str(_default_music_root()))
@@ -54,13 +68,14 @@ class Settings:
     eject_after_rip: bool = True
     auto_lookup_metadata: bool = True
     download_artwork: bool = True
-    last_volume: int = 80
+    last_volume: int = DEFAULT_VOLUME
     library_paths: list[str] = field(default_factory=list)
     equalizer_enabled: bool = False
     equalizer_bands: list[int] = field(default_factory=lambda: list(DEFAULT_EQUALIZER_BANDS))
     setup_completed: bool = False
 
     def __post_init__(self) -> None:
+        self.last_volume = _normalize_last_volume(self.last_volume)
         self.equalizer_enabled = bool(self.equalizer_enabled)
         self.equalizer_bands = normalize_equalizer_bands(self.equalizer_bands)
         self.setup_completed = bool(self.setup_completed)
