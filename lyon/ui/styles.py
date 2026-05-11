@@ -252,6 +252,12 @@ QSplitter::handle { background: #161c23; }
 QMenu { background: #111820; border: 1px solid #27313b; }
 QMenu::item:selected { background: #1466c7; }
 
+QFrame#queuePanel {
+    background: #090d13;
+    border: 1px solid #27313b;
+    border-radius: 10px;
+}
+
 QFrame#equalizerPanel {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
         stop:0 #101923, stop:1 #05080c);

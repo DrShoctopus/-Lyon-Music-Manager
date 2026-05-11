@@ -49,6 +49,8 @@ class Player(QObject):
         self.queue_changed.emit()
         if self._queue:
             self.play_index(max(0, min(start_index, len(self._queue) - 1)))
+        else:
+            self.track_changed.emit(None)
 
     def enqueue(self, tracks: list[Track]) -> None:
         was_empty = not self._queue
@@ -60,10 +62,55 @@ class Player(QObject):
     def queue(self) -> list[Track]:
         return list(self._queue)
 
+    def current_index(self) -> int:
+        return self._index
+
     def current(self) -> Optional[Track]:
         if 0 <= self._index < len(self._queue):
             return self._queue[self._index]
         return None
+
+    def remove_queue_indices(self, indices: list[int]) -> None:
+        """Remove queued tracks by row, preserving playback where possible."""
+        removed_current = self._index in indices
+        for idx in sorted(set(indices), reverse=True):
+            if not 0 <= idx < len(self._queue):
+                continue
+            del self._queue[idx]
+            if idx < self._index:
+                self._index -= 1
+        if not self._queue:
+            self._index = -1
+            self.stop()
+            self.track_changed.emit(None)
+        elif removed_current:
+            self._index = max(0, min(self._index, len(self._queue) - 1))
+            self.play_index(self._index)
+        self.queue_changed.emit()
+
+    def move_queue_item(self, source: int, destination: int) -> None:
+        if not (0 <= source < len(self._queue)):
+            return
+        destination = max(0, min(destination, len(self._queue) - 1))
+        if source == destination:
+            return
+        track = self._queue.pop(source)
+        self._queue.insert(destination, track)
+        if self._index == source:
+            self._index = destination
+        elif source < self._index <= destination:
+            self._index -= 1
+        elif destination <= self._index < source:
+            self._index += 1
+        self.queue_changed.emit()
+        self.track_changed.emit(self.current())
+
+    def clear_queue(self) -> None:
+        self._queue.clear()
+        self._index = -1
+        self.stop()
+        self.queue_changed.emit()
+        self.track_changed.emit(None)
 
     # --------------------------------------------------------------- transport
     def play_index(self, idx: int) -> None:
@@ -74,6 +121,7 @@ class Player(QObject):
         self._player.setSource(QUrl.fromLocalFile(track.path))
         self._player.play()
         self.track_changed.emit(track)
+        self.queue_changed.emit()
 
     def play(self) -> None:
         if self._index < 0 and self._queue:
@@ -104,6 +152,7 @@ class Player(QObject):
             self.stop()
             self._index = -1
             self.track_changed.emit(None)
+            self.queue_changed.emit()
             return
         self.play_index(nxt)
 

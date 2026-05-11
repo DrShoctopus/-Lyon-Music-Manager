@@ -111,3 +111,25 @@ def test_add_file_commits_standalone_insert(tmp_path, monkeypatch):
     with sqlite3.connect(db) as conn:
         rows = conn.execute("SELECT path, title FROM tracks").fetchall()
     assert rows == [(str(audio), "Song")]
+
+
+def test_filtered_tracks_can_filter_genre_year_and_sort(tmp_path):
+    library = Library(tmp_path / "library.db")
+    library.conn.execute(
+        """INSERT INTO tracks
+           (path, title, artist, album_artist, album, track_no, disc_no, year, genre, duration, added_at)
+           VALUES
+           ('/music/jazz.flac', 'Jazz Song', 'B Artist', '', 'Blue', 1, 1, 1999, 'Jazz', 60.0, 10),
+           ('/music/rock.flac', 'Rock Song', 'A Artist', '', 'Red', 1, 1, 2020, 'Rock', 60.0, 20),
+           ('/music/rock2.flac', 'Another Rock', 'C Artist', '', 'Red', 2, 1, 2020, 'Rock', 60.0, 30)
+        """
+    )
+    library.conn.commit()
+
+    assert library.all_genres() == ["Jazz", "Rock"]
+    assert library.all_years() == [2020, 1999]
+    assert [track.path for track in library.filtered_tracks(genre="Rock", year=2020, sort="title")] == [
+        "/music/rock2.flac",
+        "/music/rock.flac",
+    ]
+    assert [track.path for track in library.filtered_tracks("jazz")] == ["/music/jazz.flac"]

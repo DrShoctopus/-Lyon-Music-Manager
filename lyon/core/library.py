@@ -20,6 +20,14 @@ DISPLAY_ALBUM_SQL = "COALESCE(NULLIF(album,''), 'Unknown Album')"
 TRACK_SELECT_SQL = "SELECT * FROM tracks"
 TRACK_SORT_SQL = "disc_no, track_no, title COLLATE NOCASE"
 
+SORT_OPTIONS = {
+    "artist": f"{DISPLAY_ARTIST_SQL} COLLATE NOCASE, {DISPLAY_ALBUM_SQL} COLLATE NOCASE, {TRACK_SORT_SQL}",
+    "album": f"{DISPLAY_ALBUM_SQL} COLLATE NOCASE, {TRACK_SORT_SQL}",
+    "title": "title COLLATE NOCASE",
+    "year": f"year DESC, {DISPLAY_ARTIST_SQL} COLLATE NOCASE, {DISPLAY_ALBUM_SQL} COLLATE NOCASE, {TRACK_SORT_SQL}",
+    "added": "added_at DESC, id DESC",
+}
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS tracks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -185,6 +193,59 @@ class Library:
                    LIMIT 500""",
                 (like, like, like, like, like, like),
             ).fetchall()
+        return [_row_to_track(r) for r in rows]
+
+    def all_genres(self) -> list[str]:
+        with self._lock:
+            rows = self.conn.execute(
+                """SELECT DISTINCT genre FROM tracks
+                   WHERE genre IS NOT NULL AND genre != ''
+                   ORDER BY genre COLLATE NOCASE"""
+            ).fetchall()
+        return [r["genre"] for r in rows]
+
+    def all_years(self) -> list[int]:
+        with self._lock:
+            rows = self.conn.execute(
+                """SELECT DISTINCT year FROM tracks
+                   WHERE year IS NOT NULL AND year > 0
+                   ORDER BY year DESC"""
+            ).fetchall()
+        return [int(r["year"]) for r in rows]
+
+    def filtered_tracks(
+        self,
+        query: str = "",
+        *,
+        genre: str = "",
+        year: int | None = None,
+        sort: str = "artist",
+        limit: int = 1000,
+    ) -> list[Track]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        query = query.strip()
+        if query:
+            like = f"%{query}%"
+            clauses.append(
+                "("
+                "title LIKE ? OR artist LIKE ? OR album_artist LIKE ? OR album LIKE ? "
+                f"OR {DISPLAY_ARTIST_SQL} LIKE ? OR {DISPLAY_ALBUM_SQL} LIKE ?"
+                ")"
+            )
+            params.extend([like, like, like, like, like, like])
+        if genre:
+            clauses.append("genre = ?")
+            params.append(genre)
+        if year is not None:
+            clauses.append("year = ?")
+            params.append(int(year))
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        order = SORT_OPTIONS.get(sort, SORT_OPTIONS["artist"])
+        sql = f"{TRACK_SELECT_SQL}{where} ORDER BY {order} LIMIT ?"
+        params.append(max(1, int(limit)))
+        with self._lock:
+            rows = self.conn.execute(sql, tuple(params)).fetchall()
         return [_row_to_track(r) for r in rows]
 
     def all_tracks(self) -> Iterator[Track]:
