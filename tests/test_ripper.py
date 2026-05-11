@@ -109,10 +109,15 @@ def _install_dependency_stubs() -> None:
 _install_dependency_stubs()
 
 from lyon.core.cd_detect import DiscToc  # noqa: E402
-from lyon.core.metadata import AlbumInfo  # noqa: E402
+from lyon.core.metadata import AlbumInfo, TrackInfo  # noqa: E402
 from lyon.core.ripper import (  # noqa: E402
+    FfmpegAttemptFailure,
+    RipFailure,
+    RipRequest,
     _build_libcdio_track_command,
+    _summarize_ffmpeg_failure,
     _track_sector_span,
+    _write_failure_log,
 )
 from lyon.ui.ripper_view import _rip_request_from_toc  # noqa: E402
 
@@ -160,3 +165,55 @@ def test_rip_request_reuses_detected_disc_toc(tmp_path):
     assert request.target_dir == tmp_path
     assert request.track_offsets == (150, 15150)
     assert request.leadout_sector == 30150
+
+
+def test_libcdio_failure_summary_recommends_supported_ffmpeg():
+    reason = _summarize_ffmpeg_failure(
+        ["Unknown input format: 'libcdio'"],
+        1,
+    )
+
+    assert "libcdio CD input format" in reason
+    assert "compiled with libcdio/CDDA support" in reason
+
+
+def test_rip_failure_log_includes_track_reason_command_and_output(tmp_path):
+    album = AlbumInfo(artist="Artist", album="Album", date="1999")
+    album.tracks = [TrackInfo(number=1, title="First Track")]
+    request = RipRequest(
+        drive="D:",
+        album=album,
+        target_dir=tmp_path,
+        track_offsets=(150,),
+        leadout_sector=15150,
+    )
+    failure = RipFailure(
+        1,
+        "First Track",
+        tmp_path / "01 - First Track.flac",
+        "ffmpeg does not recognize the libcdio CD input format.",
+        [
+            FfmpegAttemptFailure(
+                ["ffmpeg", "-f", "libcdio", "-i", "D:"],
+                1,
+                "ffmpeg does not recognize the libcdio CD input format.",
+                ["Unknown input format: 'libcdio'"],
+            ),
+        ],
+    )
+
+    path = _write_failure_log(
+        tmp_path,
+        request,
+        "ffmpeg",
+        [failure],
+        message="Rip finished with errors.",
+    )
+
+    assert path is not None
+    text = path.read_text(encoding="utf-8")
+    assert "Lyon Music Manager rip failure log" in text
+    assert "Track 1: First Track" in text
+    assert "Command:" in text
+    assert "Unknown input format: 'libcdio'" in text
+    assert "Leadout sector: 15150" in text
