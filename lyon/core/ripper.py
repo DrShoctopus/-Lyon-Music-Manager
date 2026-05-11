@@ -2,7 +2,9 @@
 
 FFmpeg's libcdio input exposes an audio CD as one audio stream with chapter
 metadata, not as one stream per CD track. We use the libdiscid TOC offsets read
-by ``cd_detect`` to seek and trim that one stream for each FLAC output file.
+by ``cd_detect`` to seek and trim that one stream for each FLAC output file,
+then fall back to direct CDDA track addressing for FFmpeg builds that support it
+better than stream slicing.
 """
 from __future__ import annotations
 
@@ -133,6 +135,28 @@ def _build_libcdio_track_command(
     return cmd
 
 
+def _cdda_track_uri(drive: str, track_no: int) -> str:
+    device = drive.rstrip("\\/")
+    return f"cdda://{device}?track={track_no}"
+
+
+def _build_cdda_track_command(
+    ffmpeg: str,
+    drive: str,
+    out: Path,
+    compression: int,
+    track_no: int,
+) -> list[str]:
+    return [
+        ffmpeg, "-y", "-nostdin", "-loglevel", "error",
+        "-i", _cdda_track_uri(drive, track_no),
+        "-vn",
+        "-c:a", "flac",
+        "-compression_level", str(compression),
+        str(out),
+    ]
+
+
 # ---------------------------------------------------------------- worker
 @dataclass
 class RipRequest:
@@ -199,14 +223,6 @@ class RipWorker(QObject):
                 self.log.emit(f"Could not save cover art: {e}")
                 art_path = None
 
-        if not self._track_offsets or self._leadout_sector <= 0:
-            self.finished.emit(
-                False,
-                "Could not read disc track timing. Try detecting the disc again, "
-                "then restart the rip.",
-            )
-            return
-
         total = len(album.tracks) or 1
         success = True
         for tr in album.tracks:
@@ -239,16 +255,23 @@ class RipWorker(QObject):
             compression = 8
         compression = max(0, min(8, compression))
         span = _track_sector_span(track_no, self._track_offsets, self._leadout_sector)
+        attempts: list[list[str]] = []
         if span is None:
             self.log.emit(
-                f"Track {track_no} failed: disc TOC offsets are unavailable or invalid."
+                f"Track {track_no}: disc TOC offsets are unavailable or invalid; "
+                "trying direct track access."
             )
-            return False
+        else:
+            attempts.extend([
+                _build_libcdio_track_command(
+                    ffmpeg, drive, out, compression, span, input_seek=True
+                ),
+                _build_libcdio_track_command(
+                    ffmpeg, drive, out, compression, span, input_seek=False
+                ),
+            ])
+        attempts.append(_build_cdda_track_command(ffmpeg, drive, out, compression, track_no))
 
-        attempts = [
-            _build_libcdio_track_command(ffmpeg, drive, out, compression, span, input_seek=True),
-            _build_libcdio_track_command(ffmpeg, drive, out, compression, span, input_seek=False),
-        ]
         for cmd in attempts:
             if self._run_ffmpeg(cmd, track_no, out):
                 return True
