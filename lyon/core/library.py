@@ -1,4 +1,5 @@
 """SQLite-backed music library."""
+
 from __future__ import annotations
 
 import os
@@ -6,7 +7,7 @@ import sqlite3
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Iterable, Iterator
+from typing import Any, Callable, Iterable, Literal
 
 from mutagen import File as MutagenFile
 
@@ -14,11 +15,21 @@ from .settings import app_data_dir
 
 SUPPORTED_EXTS = {".flac", ".mp3", ".m4a", ".aac", ".ogg", ".opus", ".wav", ".wma"}
 
-DISPLAY_ARTIST_SQL = "COALESCE(NULLIF(album_artist,''), NULLIF(artist,''), 'Unknown Artist')"
+DISPLAY_ARTIST_SQL = (
+    "COALESCE(NULLIF(album_artist,''), NULLIF(artist,''), 'Unknown Artist')"
+)
 DISPLAY_ALBUM_SQL = "COALESCE(NULLIF(album,''), 'Unknown Album')"
 
 TRACK_SELECT_SQL = "SELECT * FROM tracks"
 TRACK_SORT_SQL = "disc_no, track_no, title COLLATE NOCASE"
+ALL_TRACK_SORTS: dict[str, str] = {
+    "artist": f"{DISPLAY_ARTIST_SQL} COLLATE NOCASE, {DISPLAY_ALBUM_SQL} COLLATE NOCASE, {TRACK_SORT_SQL}",
+    "album": f"{DISPLAY_ALBUM_SQL} COLLATE NOCASE, {TRACK_SORT_SQL}",
+    "title": "title COLLATE NOCASE, id",
+    "year": f"year, {DISPLAY_ARTIST_SQL} COLLATE NOCASE, {DISPLAY_ALBUM_SQL} COLLATE NOCASE, {TRACK_SORT_SQL}",
+    "added": "added_at DESC, id DESC",
+}
+AllTrackSort = Literal["artist", "album", "title", "year", "added"]
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS tracks (
@@ -120,7 +131,9 @@ class Library:
         art = _find_local_artwork(Path(path).parent)
         with self._lock:
             try:
-                self.conn.execute(_insert_track_sql(), _track_insert_values(path, meta, art))
+                self.conn.execute(
+                    _insert_track_sql(), _track_insert_values(path, meta, art)
+                )
             except sqlite3.IntegrityError:
                 return False
             if commit:
@@ -130,11 +143,9 @@ class Library:
     # ------------------------------------------------------------------ queries
     def all_artists(self) -> list[str]:
         with self._lock:
-            rows = self.conn.execute(
-                f"""SELECT DISTINCT {DISPLAY_ARTIST_SQL} AS a
+            rows = self.conn.execute(f"""SELECT DISTINCT {DISPLAY_ARTIST_SQL} AS a
                     FROM tracks
-                    ORDER BY a COLLATE NOCASE"""
-            ).fetchall()
+                    ORDER BY a COLLATE NOCASE""").fetchall()
         return [r["a"] for r in rows]
 
     def albums_for_artist(self, artist: str) -> list[tuple[str, str | None]]:
@@ -187,11 +198,60 @@ class Library:
             ).fetchall()
         return [_row_to_track(r) for r in rows]
 
-    def all_tracks(self) -> Iterator[Track]:
+    def all_tracks(
+        self,
+        query: str = "",
+        *,
+        artist: str = "",
+        album: str = "",
+        genre: str = "",
+        sort: AllTrackSort = "artist",
+        limit: int | None = None,
+    ) -> list[Track]:
+        """Return tracks across the library with safe filters and sorting.
+
+        The UI uses this for the all-tracks table, so sorting is intentionally
+        allow-listed instead of interpolating arbitrary SQL from widgets.
+        """
+        clauses: list[str] = []
+        params: list[Any] = []
+
+        q = query.strip()
+        if q:
+            like = f"%{q}%"
+            clauses.append(
+                "(title LIKE ? OR artist LIKE ? OR album_artist LIKE ? OR album LIKE ? "
+                f"OR {DISPLAY_ARTIST_SQL} LIKE ? OR {DISPLAY_ALBUM_SQL} LIKE ? OR genre LIKE ?)"
+            )
+            params.extend([like, like, like, like, like, like, like])
+        if artist:
+            clauses.append(f"{DISPLAY_ARTIST_SQL} = ?")
+            params.append(artist)
+        if album:
+            clauses.append(f"{DISPLAY_ALBUM_SQL} = ?")
+            params.append(album)
+        if genre:
+            clauses.append("COALESCE(genre, '') = ?")
+            params.append(genre)
+
+        sql = TRACK_SELECT_SQL
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY " + ALL_TRACK_SORTS.get(sort, ALL_TRACK_SORTS["artist"])
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(max(0, int(limit)))
+
         with self._lock:
-            rows = self.conn.execute(f"{TRACK_SELECT_SQL} ORDER BY id").fetchall()
-        for r in rows:
-            yield _row_to_track(r)
+            rows = self.conn.execute(sql, params).fetchall()
+        return [_row_to_track(r) for r in rows]
+
+    def all_genres(self) -> list[str]:
+        with self._lock:
+            rows = self.conn.execute("""SELECT DISTINCT genre FROM tracks
+                   WHERE COALESCE(genre, '') <> ''
+                   ORDER BY genre COLLATE NOCASE""").fetchall()
+        return [r["genre"] for r in rows]
 
     def remove_missing(self) -> int:
         n = 0
@@ -212,7 +272,9 @@ def _insert_track_sql() -> str:
               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)"""
 
 
-def _track_insert_values(path: str, meta: dict[str, Any], art: Path | None) -> tuple[Any, ...]:
+def _track_insert_values(
+    path: str, meta: dict[str, Any], art: Path | None
+) -> tuple[Any, ...]:
     return (
         path,
         meta["title"],
@@ -255,11 +317,13 @@ def _read_tags(path: str) -> dict | None:
     if f is None:
         return None
     info = getattr(f, "info", None)
+
     def first(key: str) -> str:
         v = f.get(key)
         if isinstance(v, list) and v:
             return str(v[0])
         return ""
+
     def to_int(s: str) -> int:
         if not s:
             return 0
@@ -271,6 +335,7 @@ def _read_tags(path: str) -> dict | None:
                 return int(s[:4])
             except ValueError:
                 return 0
+
     return {
         "title": first("title") or Path(path).stem,
         "artist": first("artist"),

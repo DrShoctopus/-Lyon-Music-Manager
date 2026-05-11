@@ -1,4 +1,5 @@
 """Music player wrapping QMediaPlayer."""
+
 from __future__ import annotations
 
 from enum import Enum
@@ -18,9 +19,9 @@ class RepeatMode(Enum):
 
 
 class Player(QObject):
-    track_changed = Signal(object)        # Track or None
-    state_changed = Signal(str)           # "playing"/"paused"/"stopped"
-    position_changed = Signal(int, int)   # (ms, total_ms)
+    track_changed = Signal(object)  # Track or None
+    state_changed = Signal(str)  # "playing"/"paused"/"stopped"
+    position_changed = Signal(int, int)  # (ms, total_ms)
     queue_changed = Signal()
 
     def __init__(self, parent: Optional[QObject] = None):
@@ -60,6 +61,65 @@ class Player(QObject):
     def queue(self) -> list[Track]:
         return list(self._queue)
 
+    def current_index(self) -> int:
+        return self._index
+
+    def move_queue_item(self, source: int, destination: int) -> bool:
+        return self.move_queue_items(source, source, destination)
+
+    def move_queue_items(
+        self, source_start: int, source_end: int, destination: int
+    ) -> bool:
+        if not (0 <= source_start <= source_end < len(self._queue)):
+            return False
+        count = source_end - source_start + 1
+        if not (0 <= destination <= len(self._queue)):
+            return False
+        if source_start <= destination <= source_end + 1:
+            return True
+
+        current = self.current()
+        moving = self._queue[source_start : source_end + 1]
+        del self._queue[source_start : source_end + 1]
+        if destination > source_start:
+            destination -= count
+        destination = max(0, min(destination, len(self._queue)))
+        self._queue[destination:destination] = moving
+        self._index = self._queue.index(current) if current in self._queue else -1
+        self.queue_changed.emit()
+        return True
+
+    def remove_queue_indices(self, indices: list[int]) -> int:
+        removed = 0
+        removed_current = False
+        for idx in sorted(set(indices), reverse=True):
+            if not (0 <= idx < len(self._queue)):
+                continue
+            self._queue.pop(idx)
+            removed += 1
+            if idx == self._index:
+                removed_current = True
+            elif idx < self._index:
+                self._index -= 1
+        if not removed:
+            return 0
+        if not self._queue:
+            self._index = -1
+            self._player.stop()
+            self.track_changed.emit(None)
+        elif removed_current:
+            self._index = min(self._index, len(self._queue) - 1)
+            self.play_index(self._index)
+        self.queue_changed.emit()
+        return removed
+
+    def clear_queue(self) -> None:
+        self._queue.clear()
+        self._index = -1
+        self._player.stop()
+        self.track_changed.emit(None)
+        self.queue_changed.emit()
+
     def current(self) -> Optional[Track]:
         if 0 <= self._index < len(self._queue):
             return self._queue[self._index]
@@ -74,6 +134,7 @@ class Player(QObject):
         self._player.setSource(QUrl.fromLocalFile(track.path))
         self._player.play()
         self.track_changed.emit(track)
+        self.queue_changed.emit()
 
     def play(self) -> None:
         if self._index < 0 and self._queue:
@@ -162,6 +223,7 @@ class Player(QObject):
     def _next_index(self) -> Optional[int]:
         if self._shuffle:
             import random
+
             candidates = [i for i in range(len(self._queue)) if i != self._index]
             if not candidates:
                 return self._index if self._repeat == RepeatMode.ALL else None

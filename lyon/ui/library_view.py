@@ -1,4 +1,5 @@
 """Library browser: artists -> albums -> tracks, plus search."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -6,8 +7,18 @@ from pathlib import Path
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
-    QAbstractItemView, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
-    QListView, QPushButton, QSplitter, QTableView, QVBoxLayout, QWidget,
+    QAbstractItemView,
+    QComboBox,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLineEdit,
+    QListView,
+    QPushButton,
+    QSplitter,
+    QTableView,
+    QVBoxLayout,
+    QWidget,
 )
 
 from ..core.library import Library, Track
@@ -15,7 +26,7 @@ from .widgets import format_duration
 
 
 class LibraryView(QWidget):
-    play_tracks = Signal(list, int)        # (tracks, start_index)
+    play_tracks = Signal(list, int)  # (tracks, start_index)
     enqueue_tracks = Signal(list)
     status_message = Signal(str)
     request_rescan = Signal()
@@ -44,6 +55,26 @@ class LibraryView(QWidget):
         top.addWidget(add_btn)
         top.addWidget(rescan_btn)
 
+        filters = QHBoxLayout()
+        filters.addWidget(QLabel("Genre:"))
+        self.genre_filter = QComboBox()
+        self.genre_filter.currentTextChanged.connect(
+            lambda *_: self._refresh_all_tracks_if_active()
+        )
+        filters.addWidget(self.genre_filter)
+        filters.addWidget(QLabel("Sort:"))
+        self.sort_filter = QComboBox()
+        self.sort_filter.addItem("Artist / Album / Track", "artist")
+        self.sort_filter.addItem("Album / Track", "album")
+        self.sort_filter.addItem("Title", "title")
+        self.sort_filter.addItem("Year", "year")
+        self.sort_filter.addItem("Recently Added", "added")
+        self.sort_filter.currentIndexChanged.connect(
+            lambda *_: self._refresh_all_tracks_if_active()
+        )
+        filters.addWidget(self.sort_filter)
+        filters.addStretch(1)
+
         # Splitter: artists | albums | tracks
         self.artists = QListView()
         self.artists.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -63,7 +94,9 @@ class LibraryView(QWidget):
         self.tracks.setMouseTracking(True)
         self.tracks.verticalHeader().setVisible(False)
         self.tracks_model = QStandardItemModel(0, 5)
-        self.tracks_model.setHorizontalHeaderLabels(["#", "Title", "Artist", "Album", "Time"])
+        self.tracks_model.setHorizontalHeaderLabels(
+            ["#", "Title", "Artist", "Album", "Time"]
+        )
         self.tracks.setModel(self.tracks_model)
         self.tracks.horizontalHeader().setStretchLastSection(False)
         self.tracks.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
@@ -91,10 +124,15 @@ class LibraryView(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.addLayout(top)
+        layout.addLayout(filters)
         layout.addWidget(splitter, 1)
 
-        self.artists.selectionModel().currentChanged.connect(lambda *_: self._refresh_albums())
-        self.albums.selectionModel().currentChanged.connect(lambda *_: self._refresh_tracks())
+        self.artists.selectionModel().currentChanged.connect(
+            lambda *_: self._refresh_albums()
+        )
+        self.albums.selectionModel().currentChanged.connect(
+            lambda *_: self._refresh_tracks()
+        )
         self.tracks.doubleClicked.connect(self._on_track_double)
 
         self._current_tracks: list[Track] = []
@@ -102,11 +140,21 @@ class LibraryView(QWidget):
 
     # ------------------------------------------------------------------ data
     def refresh(self) -> None:
+        selected_artist = self.artists.currentIndex().data(Qt.DisplayRole)
+        self._refresh_genres()
         self.artists_model.clear()
+        all_item = QStandardItem("All Tracks")
+        all_item.setData("__all_tracks__", Qt.UserRole)
+        self.artists_model.appendRow(all_item)
         for a in self.library.all_artists():
             self.artists_model.appendRow(QStandardItem(a))
         if self.artists_model.rowCount():
-            self.artists.setCurrentIndex(self.artists_model.index(0, 0))
+            row = (
+                self._find_model_row(self.artists_model, selected_artist)
+                if selected_artist
+                else 0
+            )
+            self.artists.setCurrentIndex(self.artists_model.index(max(0, row), 0))
         else:
             self.albums_model.clear()
             self.tracks_model.removeRows(0, self.tracks_model.rowCount())
@@ -118,6 +166,11 @@ class LibraryView(QWidget):
         if not idx.isValid():
             self._current_tracks = []
             self.tracks_model.removeRows(0, self.tracks_model.rowCount())
+            return
+        if idx.data(Qt.UserRole) == "__all_tracks__":
+            self.albums_model.appendRow(QStandardItem("All Albums"))
+            self.albums.setCurrentIndex(self.albums_model.index(0, 0))
+            self._refresh_all_tracks()
             return
         artist = idx.data(Qt.DisplayRole)
         for album, _art in self.library.albums_for_artist(artist):
@@ -137,9 +190,38 @@ class LibraryView(QWidget):
         if not ai.isValid() or not bi.isValid():
             self._current_tracks = []
             return
+        if ai.data(Qt.UserRole) == "__all_tracks__":
+            self._refresh_all_tracks()
+            return
         artist = ai.data(Qt.DisplayRole)
         album = bi.data(Qt.DisplayRole)
         self._current_tracks = self.library.tracks_for_album(artist, album)
+        self._populate_tracks(self._current_tracks)
+
+    def _refresh_genres(self) -> None:
+        current = (
+            self.genre_filter.currentText() if hasattr(self, "genre_filter") else ""
+        )
+        self.genre_filter.blockSignals(True)
+        self.genre_filter.clear()
+        self.genre_filter.addItem("All Genres", "")
+        for genre in self.library.all_genres():
+            self.genre_filter.addItem(genre, genre)
+        row = self.genre_filter.findText(current)
+        if row >= 0:
+            self.genre_filter.setCurrentIndex(row)
+        self.genre_filter.blockSignals(False)
+
+    def _refresh_all_tracks_if_active(self) -> None:
+        if self.artists.currentIndex().data(Qt.UserRole) == "__all_tracks__":
+            self._refresh_all_tracks()
+
+    def _refresh_all_tracks(self) -> None:
+        query = self.search.text().strip()
+        genre = self.genre_filter.currentData() or ""
+        sort = self.sort_filter.currentData() or "artist"
+        self.tracks_model.removeRows(0, self.tracks_model.rowCount())
+        self._current_tracks = self.library.all_tracks(query, genre=genre, sort=sort)
         self._populate_tracks(self._current_tracks)
 
     def _populate_tracks(self, tracks: list[Track]) -> None:
@@ -153,6 +235,7 @@ class LibraryView(QWidget):
                 QStandardItem(tr.album),
                 QStandardItem(duration),
             ]
+            row[0].setData(tr, Qt.UserRole)
             for it in row:
                 it.setEditable(False)
                 it.setToolTip(tooltip)
@@ -192,6 +275,9 @@ class LibraryView(QWidget):
     def _on_search(self, q: str) -> None:
         q = q.strip()
         self.tracks_model.removeRows(0, self.tracks_model.rowCount())
+        if self.artists.currentIndex().data(Qt.UserRole) == "__all_tracks__":
+            self._refresh_all_tracks()
+            return
         if not q:
             self._refresh_tracks()
             return
@@ -206,15 +292,28 @@ class LibraryView(QWidget):
         idx = self.tracks.currentIndex()
         return [idx.row()] if idx.isValid() else []
 
+    def _track_at_row(self, row: int) -> Track | None:
+        item = self.tracks_model.item(row, 0)
+        track = item.data(Qt.UserRole) if item is not None else None
+        if isinstance(track, Track):
+            return track
+        return self._current_tracks[row] if row < len(self._current_tracks) else None
+
     def _selected_tracks(self) -> list[Track]:
-        return [self._current_tracks[i] for i in self._selected_rows() if i < len(self._current_tracks)]
+        return [
+            track
+            for row in self._selected_rows()
+            if (track := self._track_at_row(row)) is not None
+        ]
 
     def _play_selected(self) -> None:
         if not self._current_tracks:
             return
         rows = self._selected_rows()
         if rows:
-            tracks = [self._current_tracks[i] for i in rows if i < len(self._current_tracks)]
+            tracks = [
+                track for row in rows if (track := self._track_at_row(row)) is not None
+            ]
             if tracks:
                 self.play_tracks.emit(tracks, 0)
             return
@@ -230,7 +329,15 @@ class LibraryView(QWidget):
     def _on_track_double(self, index) -> None:
         if not index.isValid() or not self._current_tracks:
             return
-        self.play_tracks.emit(self._current_tracks, index.row())
+        track = self._track_at_row(index.row())
+        if track is None:
+            return
+        row = (
+            self._current_tracks.index(track)
+            if track in self._current_tracks
+            else index.row()
+        )
+        self.play_tracks.emit(self._current_tracks, row)
 
     def highlight_track(self, track: Track | None) -> None:
         if track is None:

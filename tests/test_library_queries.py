@@ -52,12 +52,12 @@ def test_album_artist_falls_back_to_track_artist_only_when_blank(tmp_path):
     add_track(library, "/music/track_artist.flac", artist="Track Artist", album="Album")
 
     assert library.all_artists() == ["Album Artist", "Track Artist"]
-    assert [track.path for track in library.tracks_for_album("Album Artist", "Album")] == [
-        "/music/album_artist.flac"
-    ]
-    assert [track.path for track in library.tracks_for_album("Track Artist", "Album")] == [
-        "/music/track_artist.flac"
-    ]
+    assert [
+        track.path for track in library.tracks_for_album("Album Artist", "Album")
+    ] == ["/music/album_artist.flac"]
+    assert [
+        track.path for track in library.tracks_for_album("Track Artist", "Album")
+    ] == ["/music/track_artist.flac"]
 
 
 def test_search_matches_album_artist_and_display_fallbacks(tmp_path):
@@ -111,3 +111,36 @@ def test_add_file_commits_standalone_insert(tmp_path, monkeypatch):
     with sqlite3.connect(db) as conn:
         rows = conn.execute("SELECT path, title FROM tracks").fetchall()
     assert rows == [(str(audio), "Song")]
+
+
+def test_all_tracks_filters_by_search_genre_and_sorts_safely(tmp_path):
+    library = Library(tmp_path / "library.db")
+    add_track(library, "/music/b.flac", artist="Beta", album="Second")
+    add_track(library, "/music/a.flac", artist="Alpha", album="First")
+    library.conn.execute(
+        "UPDATE tracks SET genre = 'Rock' WHERE path = ?", ("/music/b.flac",)
+    )
+    library.conn.execute(
+        "UPDATE tracks SET genre = 'Jazz' WHERE path = ?", ("/music/a.flac",)
+    )
+    library.conn.commit()
+
+    assert [track.path for track in library.all_tracks(sort="artist")] == [
+        "/music/a.flac",
+        "/music/b.flac",
+    ]
+    assert [
+        track.path for track in library.all_tracks("sec", genre="Rock", sort="title")
+    ] == ["/music/b.flac"]
+
+
+def test_all_genres_omits_blank_values(tmp_path):
+    library = Library(tmp_path / "library.db")
+    add_track(library, "/music/blank.flac")
+    add_track(library, "/music/rock.flac")
+    library.conn.execute(
+        "UPDATE tracks SET genre = 'Rock' WHERE path = ?", ("/music/rock.flac",)
+    )
+    library.conn.commit()
+
+    assert library.all_genres() == ["Rock"]

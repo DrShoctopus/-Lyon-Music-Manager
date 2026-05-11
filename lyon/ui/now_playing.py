@@ -1,11 +1,21 @@
 """Now Playing view + bottom transport bar."""
+
 from __future__ import annotations
 
 from PySide6.QtCore import QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPainterPath
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QSizePolicy,
-    QSlider, QToolButton, QVBoxLayout, QWidget,
+    QAbstractItemView,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QListWidget,
+    QPushButton,
+    QSizePolicy,
+    QSlider,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
 )
 
 from ..core.library import Track
@@ -27,11 +37,14 @@ class NowPlayingView(QWidget):
         self.cover.setPixmap(cover_pixmap(None, 360, "♪"))
 
         self.title = QLabel("Nothing playing")
-        f = self.title.font(); f.setPointSize(20); f.setBold(True)
+        f = self.title.font()
+        f.setPointSize(20)
+        f.setBold(True)
         self.title.setFont(f)
         self.title.setStyleSheet("color:#72f4ff;")
         self.artist = QLabel("")
-        f2 = self.artist.font(); f2.setPointSize(12)
+        f2 = self.artist.font()
+        f2.setPointSize(12)
         self.artist.setFont(f2)
         self.album = QLabel("")
         self.album.setStyleSheet("color:#aab3c0;")
@@ -54,9 +67,64 @@ class NowPlayingView(QWidget):
         layout.setContentsMargins(20, 20, 20, 20)
         layout.addStretch(1)
         layout.addLayout(top)
+
+        queue_label = QLabel("Up Next")
+        queue_label.setStyleSheet("color:#72f4ff;font-weight:600;")
+        self.queue_list = QListWidget()
+        self.queue_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.queue_list.setDragDropMode(QAbstractItemView.InternalMove)
+        self.queue_list.model().rowsMoved.connect(self._on_rows_moved)
+        self.queue_list.itemDoubleClicked.connect(
+            lambda item: self.player.play_index(self.queue_list.row(item))
+        )
+
+        queue_buttons = QHBoxLayout()
+        remove_btn = QPushButton("Remove")
+        remove_btn.clicked.connect(self._remove_selected_queue_items)
+        clear_btn = QPushButton("Clear Queue")
+        clear_btn.clicked.connect(self.player.clear_queue)
+        queue_buttons.addWidget(remove_btn)
+        queue_buttons.addWidget(clear_btn)
+        queue_buttons.addStretch(1)
+
+        layout.addWidget(queue_label)
+        layout.addWidget(self.queue_list, 1)
+        layout.addLayout(queue_buttons)
         layout.addStretch(1)
 
+        self._syncing_queue = False
         player.track_changed.connect(self._on_track)
+        player.queue_changed.connect(self._refresh_queue)
+        self._refresh_queue()
+
+    def _refresh_queue(self) -> None:
+        if self._syncing_queue:
+            return
+        self._syncing_queue = True
+        try:
+            self.queue_list.clear()
+            current = self.player.current_index()
+            for idx, track in enumerate(self.player.queue()):
+                prefix = "▶ " if idx == current else "   "
+                self.queue_list.addItem(
+                    f"{prefix}{track.title} — {track.display_artist}"
+                )
+            if 0 <= current < self.queue_list.count():
+                self.queue_list.setCurrentRow(current)
+        finally:
+            self._syncing_queue = False
+
+    def _on_rows_moved(
+        self, _parent, start: int, end: int, _dest_parent, destination: int
+    ) -> None:
+        if self._syncing_queue:
+            return
+        if self.player.move_queue_items(start, end, destination):
+            self._refresh_queue()
+
+    def _remove_selected_queue_items(self) -> None:
+        rows = [idx.row() for idx in self.queue_list.selectedIndexes()]
+        self.player.remove_queue_indices(rows)
 
     def _on_track(self, track: Track | None) -> None:
         if track is None:

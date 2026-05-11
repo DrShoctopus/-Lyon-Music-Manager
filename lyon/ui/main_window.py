@@ -1,4 +1,5 @@
 """Top-level window with WMP-style title, tab bar, stacked views."""
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -7,11 +8,23 @@ from dataclasses import dataclass
 from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
-    QButtonGroup, QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow,
-    QMenu, QMessageBox, QPushButton, QStackedWidget, QStatusBar, QVBoxLayout, QWidget,
+    QButtonGroup,
+    QFileDialog,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QMenu,
+    QMessageBox,
+    QPushButton,
+    QStackedWidget,
+    QStatusBar,
+    QVBoxLayout,
+    QWidget,
 )
 
 from .. import __app_name__, __version__
+from ..core.health import run_health_checks
 from ..core.library import Library
 from ..core.player import Player
 from ..core.settings import Settings
@@ -75,6 +88,7 @@ class MainWindow(QMainWindow):
         self._build_status_bar()
         self._connect_library_actions()
         self._build_menu()
+        self._run_startup_health_checks()
         self._start_initial_scan()
 
     # ------------------------------------------------------------------ setup
@@ -83,7 +97,9 @@ class MainWindow(QMainWindow):
         self.library = Library()
         self.player = Player(self)
         self.player.set_volume(self.settings.last_volume)
-        self.player.set_equalizer(self.settings.equalizer_enabled, self.settings.equalizer_bands)
+        self.player.set_equalizer(
+            self.settings.equalizer_enabled, self.settings.equalizer_bands
+        )
         self._scan_thread: _LibraryScanThread | None = None
         self._equalizer_dialog: EqualizerDialog | None = None
 
@@ -142,7 +158,9 @@ class MainWindow(QMainWindow):
         button.setCursor(Qt.PointingHandCursor)
         return button
 
-    def _create_command_button(self, label: str, handler: Callable[[], None]) -> QPushButton:
+    def _create_command_button(
+        self, label: str, handler: Callable[[], None]
+    ) -> QPushButton:
         button = QPushButton(label)
         button.setObjectName("navTab")
         button.clicked.connect(handler)
@@ -177,6 +195,21 @@ class MainWindow(QMainWindow):
         self.setStatusBar(status_bar)
         status_bar.showMessage(f"{__app_name__} {__version__} - ready")
 
+    def _run_startup_health_checks(self) -> None:
+        checks = run_health_checks(self.settings.music_root)
+        problems = [check for check in checks if not check.ok]
+        if problems:
+            self.statusBar().showMessage(
+                "; ".join(check.message for check in problems), 8000
+            )
+        elif not self.settings.first_run_complete:
+            self.statusBar().showMessage(
+                "First-run setup complete. Library is ready to scan.", 5000
+            )
+        if not self.settings.first_run_complete:
+            self.settings.first_run_complete = True
+            self.settings.save()
+
     def _connect_library_actions(self) -> None:
         status_bar = self.statusBar()
         self.library_view.play_tracks.connect(self.player.set_queue)
@@ -188,7 +221,9 @@ class MainWindow(QMainWindow):
         self.library_view.request_add_folder.connect(self.add_folder)
         self.library_view.request_rescan.connect(self.rescan)
         self.ripper_view.rip_completed.connect(self.library_view.refresh)
-        self.ripper_view.log.connect(lambda message: status_bar.showMessage(message, 4000))
+        self.ripper_view.log.connect(
+            lambda message: status_bar.showMessage(message, 4000)
+        )
 
     def _start_initial_scan(self) -> None:
         if self.settings.library_paths:
@@ -236,7 +271,9 @@ class MainWindow(QMainWindow):
         self._start_scan([folder], f"Added tracks from {folder}")
 
     def rescan(self) -> None:
-        self._start_scan(self.settings.library_paths or [self.settings.music_root], "Rescanned")
+        self._start_scan(
+            self.settings.library_paths or [self.settings.music_root], "Rescanned"
+        )
 
     def _enqueue_tracks(self, tracks: list) -> None:
         self.player.enqueue(tracks)
@@ -245,7 +282,8 @@ class MainWindow(QMainWindow):
         plural = "" if count == 1 else "s"
         queue_plural = "" if total == 1 else "s"
         self.statusBar().showMessage(
-            f"Enqueued {count} track{plural}. Queue now has {total} track{queue_plural}.", 3000
+            f"Enqueued {count} track{plural}. Queue now has {total} track{queue_plural}.",
+            3000,
         )
 
     def _start_scan(self, roots: list[str], label: str) -> None:
@@ -270,6 +308,7 @@ class MainWindow(QMainWindow):
 
     def open_settings(self) -> None:
         from .settings_dialog import SettingsDialog
+
         dlg = SettingsDialog(self.settings, self)
         if dlg.exec():
             self.settings = dlg.result_settings
@@ -284,7 +323,9 @@ class MainWindow(QMainWindow):
         if self._equalizer_dialog is None:
             self._equalizer_dialog = EqualizerDialog(self.settings, self)
             self._equalizer_dialog.equalizer_changed.connect(self.player.set_equalizer)
-            self._equalizer_dialog.settings_saved.connect(self._apply_equalizer_settings)
+            self._equalizer_dialog.settings_saved.connect(
+                self._apply_equalizer_settings
+            )
             self._equalizer_dialog.finished.connect(self._clear_equalizer_dialog)
         self._equalizer_dialog.show()
         self._equalizer_dialog.raise_()
@@ -293,7 +334,9 @@ class MainWindow(QMainWindow):
     def _apply_equalizer_settings(self, settings: Settings) -> None:
         self.settings.equalizer_enabled = settings.equalizer_enabled
         self.settings.equalizer_bands = list(settings.equalizer_bands)
-        self.player.set_equalizer(self.settings.equalizer_enabled, self.settings.equalizer_bands)
+        self.player.set_equalizer(
+            self.settings.equalizer_enabled, self.settings.equalizer_bands
+        )
         self.statusBar().showMessage("Equalizer settings saved.", 3000)
 
     def _clear_equalizer_dialog(self, *_args) -> None:
@@ -301,7 +344,8 @@ class MainWindow(QMainWindow):
 
     def show_about(self) -> None:
         QMessageBox.about(
-            self, "About " + __app_name__,
+            self,
+            "About " + __app_name__,
             f"<h3>{__app_name__} {__version__}</h3>"
             "<p><b>Custom Built For Chuck Lyon</b></p>"
             "<p>Rip your CDs to FLAC, manage your library, browse YouTube, "

@@ -1,4 +1,5 @@
 """User settings and path management."""
+
 from __future__ import annotations
 
 import json
@@ -39,15 +40,16 @@ def _app_version() -> str:
     # Imported lazily to avoid a circular import (lyon.__init__ imports nothing
     # heavy, but settings is imported by lyon.core which __init__ may touch).
     from .. import __version__
+
     return __version__
 
 
 @dataclass
 class Settings:
     music_root: str = field(default_factory=lambda: str(_default_music_root()))
-    rip_format: str = "flac"           # flac is the only supported output today
-    flac_compression: int = 8           # 0-8
-    cd_drive: str = ""                 # e.g. "D:" - blank means auto-pick first
+    rip_format: str = "flac"  # flac is the only supported output today
+    flac_compression: int = 8  # 0-8
+    cd_drive: str = ""  # e.g. "D:" - blank means auto-pick first
     musicbrainz_app: str = "LyonMusicManager"
     musicbrainz_version: str = field(default_factory=_app_version)
     musicbrainz_contact: str = "https://example.invalid/lyon"
@@ -57,7 +59,10 @@ class Settings:
     last_volume: int = 80
     library_paths: list[str] = field(default_factory=list)
     equalizer_enabled: bool = False
-    equalizer_bands: list[int] = field(default_factory=lambda: list(DEFAULT_EQUALIZER_BANDS))
+    equalizer_bands: list[int] = field(
+        default_factory=lambda: list(DEFAULT_EQUALIZER_BANDS)
+    )
+    first_run_complete: bool = False
 
     def __post_init__(self) -> None:
         self.equalizer_enabled = bool(self.equalizer_enabled)
