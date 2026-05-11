@@ -7,6 +7,8 @@ import sys
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
 
+from .equalizer import DEFAULT_EQUALIZER_BANDS, normalize_equalizer_bands
+
 
 def _default_music_root() -> Path:
     if sys.platform == "win32":
@@ -55,7 +57,11 @@ class Settings:
     last_volume: int = 80
     library_paths: list[str] = field(default_factory=list)
     equalizer_enabled: bool = False
-    equalizer_bands: list[int] = field(default_factory=lambda: [0, 0, 0, 0, 0, 0])
+    equalizer_bands: list[int] = field(default_factory=lambda: list(DEFAULT_EQUALIZER_BANDS))
+
+    def __post_init__(self) -> None:
+        self.equalizer_enabled = bool(self.equalizer_enabled)
+        self.equalizer_bands = normalize_equalizer_bands(self.equalizer_bands)
 
     @classmethod
     def load(cls) -> "Settings":

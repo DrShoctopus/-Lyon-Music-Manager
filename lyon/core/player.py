@@ -7,6 +7,7 @@ from typing import Optional
 from PySide6.QtCore import QObject, QUrl, Signal, Slot
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 
+from .equalizer import DEFAULT_EQUALIZER_BANDS, normalize_equalizer_bands
 from .library import Track
 
 
@@ -34,7 +35,7 @@ class Player(QObject):
         self._shuffle = False
         self._repeat = RepeatMode.OFF
         self._equalizer_enabled = False
-        self._equalizer_bands = [0, 0, 0, 0, 0, 0]
+        self._equalizer_bands = list(DEFAULT_EQUALIZER_BANDS)
 
         self._player.positionChanged.connect(self._emit_position)
         self._player.durationChanged.connect(self._emit_position_dur)
@@ -131,9 +132,7 @@ class Player(QObject):
         processing backend.
         """
         self._equalizer_enabled = bool(enabled)
-        normalized = list(bands[:6])
-        normalized.extend([0] * (6 - len(normalized)))
-        self._equalizer_bands = [max(-12, min(12, int(value))) for value in normalized]
+        self._equalizer_bands = normalize_equalizer_bands(bands)
 
     def equalizer(self) -> tuple[bool, list[int]]:
         return self._equalizer_enabled, list(self._equalizer_bands)
