@@ -75,13 +75,14 @@ QHeaderView::section {
 }
 
 /* Keep hover tooltips readable when Windows high contrast themes alter the
-   native tooltip palette. Palette roles preserve OS-selected contrast while
-   avoiding the app-wide foreground color from blending into the tooltip. */
+   native tooltip palette. Fixed black/white colors avoid the app-wide
+   foreground color blending into high-contrast tooltip backgrounds. */
 QToolTip {
-    background-color: palette(tool-tip-base);
-    color: palette(tool-tip-text);
-    border: 1px solid palette(tool-tip-text);
+    background-color: #000000;
+    color: #ffffff;
+    border: 1px solid #ffffff;
     padding: 4px 6px;
+    opacity: 255;
 }
 
 /* Buttons */

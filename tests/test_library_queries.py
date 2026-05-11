@@ -12,8 +12,8 @@ def add_track(
 ) -> None:
     library.conn.execute(
         """INSERT INTO tracks
-           (path, title, artist, album_artist, album, track_no, disc_no, year, genre, duration)
-           VALUES (?, ?, ?, ?, ?, 1, 1, 0, '', 60.0)""",
+           (path, title, artist, album_artist, album, track_no, disc_no, year, genre, duration, bitrate, samplerate)
+           VALUES (?, ?, ?, ?, ?, 1, 1, 0, '', 60.0, 320000, 48000)""",
         (path, Path(path).stem, artist, album_artist, album),
     )
     library.conn.commit()
@@ -77,3 +77,13 @@ def test_search_matches_album_artist_and_display_fallbacks(tmp_path):
     assert [track.path for track in library.search("Unknown Album")] == [
         "/music/unknowns.flac"
     ]
+
+
+def test_track_rows_include_audio_details(tmp_path):
+    library = Library(tmp_path / "library.db")
+    add_track(library, "/music/song.flac", artist="Artist", album="Album")
+
+    track = library.tracks_for_album("Artist", "Album")[0]
+
+    assert track.bitrate == 320000
+    assert track.samplerate == 48000
