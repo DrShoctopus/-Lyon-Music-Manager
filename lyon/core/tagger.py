@@ -28,6 +28,11 @@ def write_flac_tags(
         f["date"] = album.date
     f["tracknumber"] = str(track.number)
     f["tracktotal"] = str(len(album.tracks))
+    if track.disc_number > 0:
+        f["discnumber"] = str(track.disc_number)
+    disc_total = max((tr.disc_number for tr in album.tracks), default=0)
+    if disc_total > 1:
+        f["disctotal"] = str(disc_total)
     if album.musicbrainz_albumid:
         f["musicbrainz_albumid"] = album.musicbrainz_albumid
     if album.genre:

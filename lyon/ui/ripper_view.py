@@ -18,6 +18,9 @@ from ..core.settings import Settings
 from .widgets import cover_pixmap
 
 
+TRACK_INFO_ROLE = getattr(Qt, "UserRole", 0x0100)
+
+
 def _row_track_no(text: str | None) -> int:
     """Parse a track-number cell. Returns 0 for empty/non-numeric."""
     if not text:
@@ -70,6 +73,30 @@ class _AlbumSearchThread(QThread):
         if info and self.settings.download_artwork:
             art = fetch_artwork(info)
         self.finished_with.emit(info, art)
+
+
+def _edited_track_info(
+    original: TrackInfo | None,
+    number_text: str,
+    title_text: str,
+    fallback_number: int,
+    album_artist: str,
+) -> TrackInfo:
+    """Merge edited table values with metadata from the original lookup track."""
+    try:
+        number = int(number_text.strip()) if number_text.strip() else fallback_number
+    except ValueError:
+        number = fallback_number
+    title = title_text.strip() or f"Track {number:02d}"
+    if original is None:
+        return TrackInfo(number=number, title=title, artist=album_artist)
+    return TrackInfo(
+        number=number,
+        title=title,
+        length_ms=original.length_ms,
+        artist=original.artist or album_artist,
+        disc_number=original.disc_number,
+    )
 
 
 def _rip_request_from_toc(
@@ -317,6 +344,7 @@ class RipperView(QWidget):
                 QStandardItem(""),
             ]
             row[0].setEditable(False)
+            row[0].setData(tr, TRACK_INFO_ROLE)
             row[2].setEditable(False)
             self.tracks_model.appendRow(row)
         if info.artwork:
@@ -418,13 +446,20 @@ class RipperView(QWidget):
             artwork=(self._album.artwork if self._album else None),
         )
         for r in range(self.tracks_model.rowCount()):
-            raw = (self.tracks_model.item(r, 0).text() or "").strip()
-            try:
-                num = int(raw) if raw else r + 1
-            except ValueError:
-                num = r + 1
-            title = self.tracks_model.item(r, 1).text().strip() or f"Track {num:02d}"
-            album.tracks.append(TrackInfo(number=num, title=title, artist=album.artist))
+            number_item = self.tracks_model.item(r, 0)
+            title_item = self.tracks_model.item(r, 1)
+            original = number_item.data(TRACK_INFO_ROLE) if number_item is not None else None
+            if not isinstance(original, TrackInfo):
+                original = None
+            album.tracks.append(
+                _edited_track_info(
+                    original,
+                    number_item.text() if number_item is not None else "",
+                    title_item.text() if title_item is not None else "",
+                    r + 1,
+                    album.artist,
+                )
+            )
         return album
 
     def cancel_rip(self) -> None:

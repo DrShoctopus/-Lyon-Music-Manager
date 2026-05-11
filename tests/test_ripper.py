@@ -178,3 +178,35 @@ def test_artwork_file_name_matches_png_signature():
 
     assert artwork_file_name(b"\x89PNG\r\n\x1a\nrest") == "cover.png"
     assert artwork_file_name(b"\xff\xd8\xffrest") == "cover.jpg"
+
+
+def test_edited_track_info_preserves_lookup_metadata_after_title_edit():
+    from lyon.core.metadata import TrackInfo
+    from lyon.ui.ripper_view import _edited_track_info
+
+    original = TrackInfo(
+        number=1,
+        title="Original",
+        length_ms=123000,
+        artist="Guest Artist",
+        disc_number=2,
+    )
+
+    edited = _edited_track_info(original, "3", "Edited Title", 1, "Album Artist")
+
+    assert edited.number == 3
+    assert edited.title == "Edited Title"
+    assert edited.length_ms == 123000
+    assert edited.artist == "Guest Artist"
+    assert edited.disc_number == 2
+
+
+def test_edited_track_info_falls_back_for_manual_rows():
+    from lyon.ui.ripper_view import _edited_track_info
+
+    edited = _edited_track_info(None, "bad", "", 4, "Album Artist")
+
+    assert edited.number == 4
+    assert edited.title == "Track 04"
+    assert edited.artist == "Album Artist"
+    assert edited.disc_number == 1
