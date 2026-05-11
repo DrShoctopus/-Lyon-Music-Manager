@@ -9,7 +9,11 @@
 # -*- mode: python ; coding: utf-8 -*-
 from pathlib import Path
 
-ROOT = Path(SPECPATH).resolve().parent.parent
+SPEC_DIR = Path(SPECPATH).resolve()
+if SPEC_DIR.is_file():
+    SPEC_DIR = SPEC_DIR.parent
+
+ROOT = SPEC_DIR.parent
 BIN = ROOT / "bin"
 
 binaries = []
