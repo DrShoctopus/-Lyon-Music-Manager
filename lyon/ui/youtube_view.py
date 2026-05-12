@@ -103,19 +103,30 @@ class YouTubeView(QWidget):
         layout.addWidget(body)
         layout.addStretch(1)
 
+    def search_youtube(self, text: str) -> bool:
+        text = text.strip()
+        if not text or not HAS_WEBENGINE:
+            return False
+        self.search.setText(text)
+        self.web.load(self._url_for_text(text))
+        return True
+
     def _on_search(self) -> None:
         text = self.search.text().strip()
         if not text:
             return
+        self.web.load(self._url_for_text(text))
+
+    @staticmethod
+    def _url_for_text(text: str) -> QUrl:
         # If the user pasted a URL, navigate to it directly.
         if text.startswith(("http://", "https://")):
-            self.web.load(QUrl(text))
-            return
+            return QUrl(text)
         url = QUrl("https://www.youtube.com/results")
         query = QUrlQuery()
         query.addQueryItem("search_query", text)
         url.setQuery(query)
-        self.web.load(url)
+        return url
 
     def _on_url_changed(self, url: QUrl) -> None:
         s = url.toString()
