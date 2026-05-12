@@ -296,7 +296,8 @@ class RipperView(QWidget):
         self._lookup = None
         if info is None:
             self.status_label.setText(
-                "Disc not found in CTDB or MusicBrainz. Edit titles manually or click Search Online."
+                "Disc not found in CTDB, MusicBrainz, or Microsoft FAI. "
+                "Edit titles manually or click Search Online."
             )
             self.start_btn.setEnabled(True)
             return
@@ -339,7 +340,7 @@ class RipperView(QWidget):
             return
         if self._search is not None and self._search.isRunning():
             return
-        self.status_label.setText("Searching MusicBrainz...")
+        self.status_label.setText("Searching online metadata...")
         self.relookup_btn.setEnabled(False)
         self._search = _AlbumSearchThread(artist, album, self.settings, self)
         self._search.finished_with.connect(self._on_search_done)
