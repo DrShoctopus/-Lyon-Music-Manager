@@ -64,6 +64,9 @@ class Player(QObject):
             return self._queue[self._index]
         return None
 
+    def is_playing(self) -> bool:
+        return self._player.playbackState() == QMediaPlayer.PlayingState
+
     # --------------------------------------------------------------- transport
     def play_index(self, idx: int) -> None:
         if not (0 <= idx < len(self._queue)):

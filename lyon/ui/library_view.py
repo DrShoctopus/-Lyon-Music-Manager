@@ -213,6 +213,13 @@ class LibraryView(QWidget):
     def _selected_tracks(self) -> list[Track]:
         return [self._current_tracks[i] for i in self._selected_rows() if i < len(self._current_tracks)]
 
+    def highlighted_playback(self) -> tuple[list[Track], int] | None:
+        """Return the visible track list and highlighted row for transport playback."""
+        idx = self.tracks.currentIndex()
+        if not idx.isValid() or not (0 <= idx.row() < len(self._current_tracks)):
+            return None
+        return list(self._current_tracks), idx.row()
+
     def _play_selected(self) -> None:
         if not self._current_tracks:
             return
