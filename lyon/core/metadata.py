@@ -1,6 +1,9 @@
-"""MusicBrainz, CTDB, and Cover Art Archive lookups."""
+"""MusicBrainz, CTDB, Microsoft FAI, and Cover Art Archive lookups."""
 from __future__ import annotations
 
+import html
+import re
+import uuid
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from typing import Optional
@@ -15,6 +18,15 @@ from . import settings as _settings
 CTDB_LOOKUP_URL = "http://db.cuetools.net/lookup2.php"
 CTDB_BASE_URL = "http://db.cuetools.net/"
 CTDB_TIMEOUT_SECONDS = 20
+MICROSOFT_FAI_BASE_URL = "https://fai.music.metaservices.microsoft.com/"
+MICROSOFT_FAI_LOOKUP_URL = urljoin(MICROSOFT_FAI_BASE_URL, "FAI/AlbumMatch.aspx")
+MICROSOFT_FAI_TIMEOUT_SECONDS = 12
+MICROSOFT_FAI_COMMON_PARAMS = {
+    "locale": "409",
+    "geoid": "f4",
+    "version": "12.0.7601.17514",
+    "userlocale": "409",
+}
 
 
 @dataclass
@@ -58,15 +70,20 @@ def _init():
 
 
 def lookup_disc(discid_str: str, toc: str | None = None) -> Optional[AlbumInfo]:
-    """Look up an album from CTDB first, falling back to MusicBrainz."""
+    """Look up an album from CTDB, then MusicBrainz, then Microsoft FAI."""
     ctdb_info = lookup_ctdb_disc(toc)
     if ctdb_info is not None:
         return ctdb_info
-    return lookup_musicbrainz_disc(discid_str, toc)
+
+    musicbrainz_info = lookup_musicbrainz_disc(discid_str, toc)
+    if musicbrainz_info is not None:
+        return musicbrainz_info
+
+    return lookup_microsoft_fai_disc(toc)
 
 
 def lookup_disc_with_fallback(discid_str: str, toc: str | None = None) -> Optional[AlbumInfo]:
-    """Try CTDB metadata first, then MusicBrainz if CTDB has no match."""
+    """Try each automatic metadata provider in the normal lookup order."""
     return lookup_disc(discid_str, toc)
 
 
@@ -99,11 +116,6 @@ def lookup_musicbrainz_disc(discid_str: str, toc: str | None = None) -> Optional
     if not release:
         return None
     return _release_to_album(release, discid_str)
-
-
-def lookup_disc_with_fallback(discid_str: str, toc: str | None = None) -> Optional[AlbumInfo]:
-    """Try MusicBrainz first, then CTDB metadata if MusicBrainz has no match."""
-    return lookup_disc(discid_str, toc)
 
 
 def lookup_ctdb_disc(toc: str | None, *, fuzzy: bool = False) -> Optional[AlbumInfo]:
@@ -151,40 +163,92 @@ def lookup_ctdb_disc(toc: str | None, *, fuzzy: bool = False) -> Optional[AlbumI
     return candidates[0]
 
 
+def lookup_microsoft_fai_disc(toc: str | None) -> Optional[AlbumInfo]:
+    """Look up disc metadata through the legacy Microsoft FAI endpoint."""
+    fai_toc = _musicbrainz_toc_to_microsoft_fai_toc(toc)
+    if not fai_toc:
+        return None
+    return _request_microsoft_fai({"cdtoc": fai_toc, "toc": fai_toc})
+
+
+def search_microsoft_fai_album(artist: str, album: str) -> Optional[AlbumInfo]:
+    """Search the legacy Microsoft FAI endpoint by artist and album text."""
+    artist = artist.strip()
+    album = album.strip()
+    if not (artist and album):
+        return None
+    return _request_microsoft_fai(
+        {
+            "artist": artist,
+            "album": album,
+            "AlbumArtist": artist,
+            "AlbumTitle": album,
+        }
+    )
+
+
 def search_album(artist: str, album: str) -> Optional[AlbumInfo]:
     _init()
     try:
         result = musicbrainzngs.search_releases(artist=artist, release=album, limit=1)
     except (musicbrainzngs.ResponseError, musicbrainzngs.NetworkError):
-        return None
+        return search_microsoft_fai_album(artist, album)
+
     rels = result.get("release-list") or []
     if not rels:
-        return None
+        return search_microsoft_fai_album(artist, album)
+
     rid = rels[0]["id"]
     try:
         full = musicbrainzngs.get_release_by_id(
             rid, includes=["recordings", "artists"]
         )["release"]
     except (musicbrainzngs.ResponseError, musicbrainzngs.NetworkError):
-        return None
+        return search_microsoft_fai_album(artist, album)
     return _release_to_album(full)
 
 
 def fetch_artwork(album: AlbumInfo) -> bytes | None:
-    url = ""
+    urls = []
     if album.musicbrainz_albumid:
-        url = f"https://coverartarchive.org/release/{album.musicbrainz_albumid}/front-500"
-    elif album.artwork_url:
-        url = album.artwork_url
-    if not url:
-        return None
+        urls.append(f"https://coverartarchive.org/release/{album.musicbrainz_albumid}/front-500")
+    if album.artwork_url:
+        urls.append(album.artwork_url)
+
+    seen = set()
+    for url in urls:
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        try:
+            r = requests.get(url, timeout=15)
+            if r.status_code == 200 and r.content:
+                return r.content
+        except requests.RequestException:
+            continue
+    return None
+
+
+def _request_microsoft_fai(params: dict[str, str]) -> Optional[AlbumInfo]:
+    s = _settings.Settings.load()
+    user_agent = f"{s.musicbrainz_app}/{s.musicbrainz_version} ({s.musicbrainz_contact})"
+    request_params = {
+        **MICROSOFT_FAI_COMMON_PARAMS,
+        "requestid": str(uuid.uuid4()).upper(),
+        **params,
+    }
     try:
-        r = requests.get(url, timeout=15)
-        if r.status_code == 200 and r.content:
-            return r.content
+        response = requests.get(
+            MICROSOFT_FAI_LOOKUP_URL,
+            params=request_params,
+            headers={"User-Agent": user_agent},
+            timeout=MICROSOFT_FAI_TIMEOUT_SECONDS,
+        )
+        if response.status_code != 200 or not response.content:
+            return None
     except requests.RequestException:
         return None
-    return None
+    return _microsoft_fai_response_to_album(response.content)
 
 
 def _release_to_album(release: dict, discid: str | None = None) -> AlbumInfo:
@@ -261,6 +325,183 @@ def _ctdb_meta_to_album(meta: ET.Element) -> Optional[AlbumInfo]:
     return info
 
 
+def _microsoft_fai_response_to_album(content: bytes | str) -> Optional[AlbumInfo]:
+    text = content.decode("utf-8-sig", errors="ignore") if isinstance(content, bytes) else str(content)
+    text = text.strip()
+    if not text:
+        return None
+
+    try:
+        root = ET.fromstring(text)
+    except ET.ParseError:
+        root = None
+
+    if root is not None:
+        album_element = _microsoft_fai_find_album_element(root)
+        if album_element is not None:
+            info = _microsoft_fai_xml_album_to_info(album_element)
+            if info is not None:
+                return info
+
+    return _microsoft_fai_html_to_album(text)
+
+
+def _microsoft_fai_find_album_element(root: ET.Element) -> ET.Element | None:
+    album_tags = {"album", "albuminfo", "albummatch", "release"}
+    for element in root.iter():
+        if _normalise_field_name(element.tag) in album_tags and (
+            _microsoft_fai_text(element, _MICROSOFT_FAI_ALBUM_FIELDS)
+            or _microsoft_fai_text(element, _MICROSOFT_FAI_ARTIST_FIELDS)
+        ):
+            return element
+    if _microsoft_fai_text(root, _MICROSOFT_FAI_ALBUM_FIELDS) or _microsoft_fai_text(
+        root, _MICROSOFT_FAI_ARTIST_FIELDS
+    ):
+        return root
+    return None
+
+
+def _microsoft_fai_xml_album_to_info(element: ET.Element) -> Optional[AlbumInfo]:
+    artist = _microsoft_fai_text(element, _MICROSOFT_FAI_ARTIST_FIELDS)
+    album = _microsoft_fai_text(element, _MICROSOFT_FAI_ALBUM_FIELDS)
+    if not (artist or album):
+        return None
+
+    info = AlbumInfo(
+        artist=artist,
+        album=album,
+        date=_microsoft_fai_text(element, _MICROSOFT_FAI_DATE_FIELDS),
+        genre=_microsoft_fai_text(element, _MICROSOFT_FAI_GENRE_FIELDS),
+        metadata_source="microsoft-fai",
+    )
+
+    cover = _microsoft_fai_find_artwork_url(element)
+    if cover:
+        info.artwork_url = cover
+
+    for number, track in enumerate(_microsoft_fai_track_elements(element), start=1):
+        track_number = _safe_int(
+            _microsoft_fai_text(track, _MICROSOFT_FAI_TRACK_NUMBER_FIELDS),
+            number,
+        )
+        title = _microsoft_fai_text(track, _MICROSOFT_FAI_TRACK_TITLE_FIELDS)
+        if not title:
+            title = f"Track {track_number:02d}"
+        info.tracks.append(
+            TrackInfo(
+                number=track_number,
+                title=title,
+                length_ms=_safe_int(_microsoft_fai_text(track, _MICROSOFT_FAI_LENGTH_FIELDS), 0),
+                artist=_microsoft_fai_text(track, _MICROSOFT_FAI_ARTIST_FIELDS) or artist,
+            )
+        )
+    return info
+
+
+def _microsoft_fai_track_elements(element: ET.Element) -> list[ET.Element]:
+    return [
+        child
+        for child in element.iter()
+        if child is not element and _normalise_field_name(child.tag) in {"track", "song"}
+    ]
+
+
+def _microsoft_fai_text(element: ET.Element, names: set[str]) -> str:
+    for key, value in element.attrib.items():
+        if _normalise_field_name(key) in names:
+            value = str(value).strip()
+            if value:
+                return html.unescape(value)
+
+    for child in list(element):
+        if _normalise_field_name(child.tag) in names:
+            value = "".join(child.itertext()).strip()
+            if value:
+                return html.unescape(value)
+    return ""
+
+
+def _microsoft_fai_find_artwork_url(element: ET.Element) -> str:
+    cover = _microsoft_fai_text(element, _MICROSOFT_FAI_ARTWORK_FIELDS)
+    if cover:
+        return urljoin(MICROSOFT_FAI_BASE_URL, cover)
+
+    for child in element.iter():
+        for key, value in child.attrib.items():
+            key_name = _normalise_field_name(key)
+            candidate = str(value).strip()
+            lowered = candidate.lower()
+            if key_name in {"src", "href", "url", "image"} and _looks_like_artwork_url(lowered):
+                return urljoin(MICROSOFT_FAI_BASE_URL, html.unescape(candidate))
+    return ""
+
+
+def _microsoft_fai_html_to_album(text: str) -> Optional[AlbumInfo]:
+    artist = _microsoft_fai_html_field(text, ("AlbumArtist", "albumArtist", "artist", "performer"))
+    album = _microsoft_fai_html_field(text, ("AlbumTitle", "albumTitle", "album", "title"))
+    if not (artist or album):
+        return None
+
+    info = AlbumInfo(
+        artist=artist,
+        album=album,
+        date=_microsoft_fai_html_field(text, ("Year", "year", "ReleaseDate", "date")),
+        genre=_microsoft_fai_html_field(text, ("Genre", "genre")),
+        metadata_source="microsoft-fai",
+    )
+    cover = _microsoft_fai_html_artwork_url(text)
+    if cover:
+        info.artwork_url = cover
+    return info
+
+
+def _microsoft_fai_html_field(text: str, aliases: tuple[str, ...]) -> str:
+    for alias in aliases:
+        escaped = re.escape(alias)
+        patterns = (
+            rf"<(?:input|meta)\b[^>]*(?:name|id|property)=[\"']{escaped}[\"'][^>]*(?:value|content)=[\"']([^\"']+)[\"']",
+            rf"<(?:input|meta)\b[^>]*(?:value|content)=[\"']([^\"']+)[\"'][^>]*(?:name|id|property)=[\"']{escaped}[\"']",
+            rf"[\"']{escaped}[\"']\s*[:=]\s*[\"']([^\"']+)[\"']",
+            rf"\b{escaped}\b\s*[:=]\s*[\"']([^\"']+)[\"']",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, text, flags=re.IGNORECASE)
+            if match:
+                return html.unescape(match.group(1).strip())
+    return ""
+
+
+def _microsoft_fai_html_artwork_url(text: str) -> str:
+    for match in re.finditer(r"<img\b[^>]*\bsrc=[\"']([^\"']+)[\"']", text, flags=re.IGNORECASE):
+        src = html.unescape(match.group(1).strip())
+        if _looks_like_artwork_url(src.lower()):
+            return urljoin(MICROSOFT_FAI_BASE_URL, src)
+
+    for match in re.finditer(
+        r"[\"']([^\"']*(?:cover|albumart)[^\"']*\.(?:jpg|jpeg|png))[\"']",
+        text,
+        flags=re.IGNORECASE,
+    ):
+        return urljoin(MICROSOFT_FAI_BASE_URL, html.unescape(match.group(1).strip()))
+    return ""
+
+
+def _looks_like_artwork_url(value: str) -> bool:
+    return (
+        "cover" in value
+        or "albumart" in value
+        or value.endswith((".jpg", ".jpeg", ".png"))
+    )
+
+
+def _normalise_field_name(name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", _local_name(str(name)).lower())
+
+
+def _local_name(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1].split(":", 1)[-1]
+
+
 def _select_ctdb_cover(covers: list[ET.Element]) -> str:
     if not covers:
         return ""
@@ -294,6 +535,25 @@ def _musicbrainz_toc_to_ctdb_toc(toc: str | None) -> str:
     return ":".join(str(offset - sector_zero) for offset in ctdb_offsets)
 
 
+def _musicbrainz_toc_to_microsoft_fai_toc(toc: str | None) -> str:
+    """Normalise a MusicBrainz TOC string for the legacy FAI query string."""
+    if not toc:
+        return ""
+    try:
+        parts = [int(part) for part in toc.replace("+", " ").split()]
+    except ValueError:
+        return ""
+    if len(parts) < 4:
+        return ""
+
+    first_track, last_track, leadout = parts[:3]
+    offsets = parts[3:]
+    track_count = last_track - first_track + 1
+    if first_track != 1 or track_count < 1 or len(offsets) < track_count:
+        return ""
+    return "+".join(str(part) for part in (first_track, last_track, leadout, *offsets[:track_count]))
+
+
 def _ctdb_album_score(info: AlbumInfo) -> tuple[int, int, int]:
     source = info.metadata_source.lower()
     source_score = 3 if "musicbrainz" in source else 2 if "discogs" in source else 1
@@ -317,3 +577,21 @@ def _safe_int(value, default: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+_MICROSOFT_FAI_ALBUM_FIELDS = {"album", "albumtitle", "title", "name"}
+_MICROSOFT_FAI_ARTIST_FIELDS = {"artist", "albumartist", "albumartistname", "performer"}
+_MICROSOFT_FAI_DATE_FIELDS = {"date", "year", "releasedate", "releaseyear"}
+_MICROSOFT_FAI_GENRE_FIELDS = {"genre"}
+_MICROSOFT_FAI_ARTWORK_FIELDS = {
+    "artworkurl",
+    "coverarturl",
+    "albumarturl",
+    "largecoverarturl",
+    "image",
+    "imageurl",
+    "thumbnail",
+}
+_MICROSOFT_FAI_TRACK_NUMBER_FIELDS = {"number", "tracknumber", "tracknum", "sequence", "index"}
+_MICROSOFT_FAI_TRACK_TITLE_FIELDS = {"title", "tracktitle", "name"}
+_MICROSOFT_FAI_LENGTH_FIELDS = {"length", "duration", "lengthms", "durationms"}
