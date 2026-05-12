@@ -7,7 +7,8 @@ from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QPixmap, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
     QAbstractItemView, QComboBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
-    QMessageBox, QProgressBar, QPushButton, QTableView, QVBoxLayout, QWidget,
+    QMessageBox, QProgressBar, QPushButton, QStyle, QStyleOptionProgressBar,
+    QStyledItemDelegate, QTableView, QVBoxLayout, QWidget,
 )
 
 from ..core import cd_detect
@@ -26,6 +27,35 @@ def _row_track_no(text: str | None) -> int:
         return int(text.strip())
     except ValueError:
         return 0
+
+
+class _ProgressDelegate(QStyledItemDelegate):
+    """Paint the Status column as an inline percent-complete bar."""
+
+    def paint(self, painter, option, index) -> None:  # noqa: D102
+        pct = index.data(Qt.UserRole)
+        if pct is None:
+            super().paint(painter, option, index)
+            return
+
+        try:
+            pct = max(0, min(100, int(pct)))
+        except (TypeError, ValueError):
+            super().paint(painter, option, index)
+            return
+
+        progress = QStyleOptionProgressBar()
+        progress.rect = option.rect.adjusted(4, 4, -4, -4)
+        progress.minimum = 0
+        progress.maximum = 100
+        progress.progress = pct
+        progress.text = f"{pct}%"
+        progress.textAlignment = Qt.AlignCenter
+        progress.textVisible = True
+
+        widget = option.widget
+        style = widget.style() if widget is not None else self.parent().style()
+        style.drawControl(QStyle.CE_ProgressBar, progress, painter, widget)
 
 
 class _DiscReadThread(QThread):
@@ -174,9 +204,13 @@ class RipperView(QWidget):
         self.tracks.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.tracks.setAlternatingRowColors(True)
         self.tracks.verticalHeader().setVisible(False)
-        self.tracks.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.tracks.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.tracks.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.tracks.setItemDelegateForColumn(2, _ProgressDelegate(self.tracks))
+        header_view = self.tracks.horizontalHeader()
+        header_view.setSectionResizeMode(1, QHeaderView.Stretch)
+        header_view.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header_view.setSectionResizeMode(2, QHeaderView.Fixed)
+        self._status_column_width = int(header_view.defaultSectionSize() * 1.5)
+        header_view.resizeSection(2, self._status_column_width)
 
         # Status bar
         status_row = QHBoxLayout()
@@ -280,15 +314,29 @@ class RipperView(QWidget):
     def _populate_default_tracks(self, n: int) -> None:
         self.tracks_model.removeRows(0, self.tracks_model.rowCount())
         for i in range(1, n + 1):
-            row = [
-                QStandardItem(str(i)),
-                QStandardItem(f"Track {i:02d}"),
-                QStandardItem(""),
-            ]
-            row[0].setEditable(False)
-            row[2].setEditable(False)
-            self.tracks_model.appendRow(row)
+            self._add_track_row(i, f"Track {i:02d}")
         self._update_dest()
+
+    def _add_track_row(self, number: int, title: str) -> None:
+        row = [
+            QStandardItem(str(number)),
+            QStandardItem(title),
+            QStandardItem("0%"),
+        ]
+        row[0].setEditable(False)
+        row[2].setEditable(False)
+        row[2].setData(0, Qt.UserRole)
+        self.tracks_model.appendRow(row)
+        self.tracks.horizontalHeader().resizeSection(2, self._status_column_width)
+
+    def _set_track_progress(self, number: int, pct: int) -> None:
+        pct = max(0, min(100, int(pct)))
+        for r in range(self.tracks_model.rowCount()):
+            if _row_track_no(self.tracks_model.item(r, 0).text()) == number:
+                status = self.tracks_model.item(r, 2)
+                status.setText(f"{pct}%")
+                status.setData(pct, Qt.UserRole)
+                break
 
     def _on_lookup_done(self, info: AlbumInfo | None, art: bytes | None) -> None:
         if self.sender() is not self._lookup:
@@ -311,14 +359,7 @@ class RipperView(QWidget):
         self.year_edit.setText(str(info.year) if info.year else "")
         self.tracks_model.removeRows(0, self.tracks_model.rowCount())
         for tr in info.tracks:
-            row = [
-                QStandardItem(str(tr.number)),
-                QStandardItem(tr.title),
-                QStandardItem(""),
-            ]
-            row[0].setEditable(False)
-            row[2].setEditable(False)
-            self.tracks_model.appendRow(row)
+            self._add_track_row(tr.number, tr.title)
         if info.artwork:
             pm = QPixmap()
             pm.loadFromData(info.artwork)
@@ -405,6 +446,8 @@ class RipperView(QWidget):
         self.detect_btn.setEnabled(False)
         self.progress.setRange(0, len(album.tracks))
         self.progress.setValue(0)
+        for tr in album.tracks:
+            self._set_track_progress(tr.number, 0)
 
         req = _rip_request_from_toc(self._toc, album, folder)
         self.ripper.start(req)
@@ -442,20 +485,13 @@ class RipperView(QWidget):
     # ------------------------------------------------------------------ progress
     def _on_track_started(self, n: int, title: str) -> None:
         self.status_label.setText(f"Ripping {n:02d}: {title}")
-        for r in range(self.tracks_model.rowCount()):
-            if _row_track_no(self.tracks_model.item(r, 0).text()) == n:
-                self.tracks_model.item(r, 2).setText("Ripping...")
-                break
+        self._set_track_progress(n, 0)
 
     def _on_track_progress(self, n: int, pct: int) -> None:
-        # Per-track percentage isn't exposed by ffmpeg easily; ignore.
-        pass
+        self._set_track_progress(n, pct)
 
     def _on_track_finished(self, n: int, path: str) -> None:
-        for r in range(self.tracks_model.rowCount()):
-            if _row_track_no(self.tracks_model.item(r, 0).text()) == n:
-                self.tracks_model.item(r, 2).setText("Done")
-                break
+        self._set_track_progress(n, 100)
         self.progress.setValue(self.progress.value() + 1)
         self.library.add_file(path)
         self.library.conn.commit()

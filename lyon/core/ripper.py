@@ -616,8 +616,9 @@ class RipWorker(QObject):
                 _build_libcdio_track_command(ffmpeg, drive, out, compression, span, input_seek=False),
             ]
             failures: list[FfmpegAttemptFailure] = []
+            total_seconds = (span[1] - span[0]) / CD_SECTORS_PER_SECOND
             for cmd in attempts:
-                attempt_failure = self._run_ffmpeg(cmd, track_no, out)
+                attempt_failure = self._run_ffmpeg(cmd, track_no, out, total_seconds)
                 if attempt_failure is None:
                     return None
                 failures.append(attempt_failure)
@@ -735,6 +736,7 @@ class RipWorker(QObject):
         cmd: list[str],
         track_no: int,
         out: Path,
+        total_seconds: float,
     ) -> Optional[FfmpegAttemptFailure]:
         try:
             proc = subprocess.Popen(
@@ -761,7 +763,7 @@ class RipWorker(QObject):
                 if line:
                     recent_output.append(line)
                     recent_output = recent_output[-FFMPEG_ERROR_LINES:]
-                pct = _parse_progress(line)
+                pct = _parse_progress(line, total_seconds)
                 if pct is not None:
                     self.track_progress.emit(track_no, pct)
         proc.wait()
@@ -783,16 +785,17 @@ class RipWorker(QObject):
         return FfmpegAttemptFailure(cmd, proc.returncode, reason, recent_output)
 
 
-def _parse_progress(line: str) -> Optional[int]:
+def _parse_progress(line: str, total_seconds: float) -> Optional[int]:
     # ffmpeg writes lines like "size=  ... time=00:01:23.45 bitrate= ..."
+    # while encoding. Convert that timestamp to a bounded per-track percentage.
+    if total_seconds <= 0:
+        return None
     m = re.search(r"time=(\d+):(\d+):(\d+(?:\.\d+)?)", line)
     if not m:
         return None
     h, mn, s = m.groups()
     seconds = int(h) * 3600 + int(mn) * 60 + float(s)
-    # We don't know the per-track length cheaply here; UI uses an indeterminate
-    # spinner per track and overall progress by track count. Return None.
-    return None
+    return max(0, min(99, int(seconds * 100 / total_seconds)))
 
 
 # ---------------------------------------------------------------- runner
