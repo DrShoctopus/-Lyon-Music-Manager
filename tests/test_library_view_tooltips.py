@@ -28,7 +28,7 @@ def make_track(**overrides):
 
 
 def test_track_tooltip_includes_audio_details_and_file_location():
-    tooltip = LibraryView._track_tooltip(None, make_track(), "3:05")
+    tooltip = LibraryView._track_tooltip(make_track(), "3:05")
 
     assert "Title: Song" in tooltip
     assert "Artist: Album Artist" in tooltip
@@ -42,3 +42,32 @@ def test_track_tooltip_includes_audio_details_and_file_location():
 def test_sample_rate_formatter_handles_unknown_and_whole_khz_values():
     assert LibraryView._format_sample_rate(0) == "Unknown"
     assert LibraryView._format_sample_rate(48000) == "48 kHz"
+
+
+def test_track_properties_reuse_tooltip_details():
+    details = LibraryView._track_details(make_track(), "3:05")
+
+    assert details == [
+        ("Title", "Song"),
+        ("Artist", "Album Artist"),
+        ("Album", "Album"),
+        ("Time", "3:05"),
+        ("Bitrate", "922 kbps"),
+        ("Sample rate", "44.1 kHz"),
+        ("File type", "FLAC"),
+        ("File location", r"C:\\Music\\Artist\\Album\\song.flac"),
+    ]
+
+
+def test_youtube_query_includes_artist_album_and_track():
+    query = LibraryView._youtube_query_for_track(make_track())
+
+    assert query == "Album Artist Album Song"
+
+
+def test_youtube_query_skips_unknown_metadata_placeholders():
+    query = LibraryView._youtube_query_for_track(
+        make_track(album_artist="", artist="", album="")
+    )
+
+    assert query == "Song"

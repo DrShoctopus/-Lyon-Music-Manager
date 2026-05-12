@@ -146,6 +146,7 @@ class MainWindow(QMainWindow):
         self.player.track_changed.connect(self.library_view.highlight_track)
         self.library_view.request_add_folder.connect(self.add_folder)
         self.library_view.request_rescan.connect(self.rescan)
+        self.library_view.request_youtube_search.connect(self._search_youtube_for_track)
         self.ripper_view.rip_completed.connect(self.library_view.refresh)
         self.ripper_view.log.connect(lambda m: sb.showMessage(m, 4000))
 
@@ -204,6 +205,15 @@ class MainWindow(QMainWindow):
 
     def rescan(self) -> None:
         self._start_scan(self.settings.library_paths or [self.settings.music_root], "Rescanned")
+
+    def _search_youtube_for_track(self, query: str) -> None:
+        if not query:
+            return
+        self._tab_buttons["YouTube"].setChecked(True)
+        if self.youtube_view.search_youtube(query):
+            self.statusBar().showMessage(f"Searching YouTube for {query}", 3000)
+        else:
+            self.statusBar().showMessage("YouTube search is unavailable.", 3000)
 
     def _enqueue_tracks(self, tracks: list) -> None:
         self.player.enqueue(tracks)

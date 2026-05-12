@@ -3,11 +3,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QStandardItem, QStandardItemModel
+from PySide6.QtCore import Qt, QUrl, Signal
+from PySide6.QtGui import QDesktopServices, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
-    QAbstractItemView, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
-    QListView, QPushButton, QSplitter, QTableView, QVBoxLayout, QWidget,
+    QAbstractItemView, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout,
+    QHeaderView, QLabel, QLineEdit, QListView, QMenu, QPushButton, QSplitter,
+    QTableView, QVBoxLayout, QWidget,
 )
 
 from ..core.library import Library, Track
@@ -20,6 +21,7 @@ class LibraryView(QWidget):
     status_message = Signal(str)
     request_rescan = Signal()
     request_add_folder = Signal()
+    request_youtube_search = Signal(str)
 
     def __init__(self, library: Library, parent: QWidget | None = None):
         super().__init__(parent)
@@ -61,6 +63,8 @@ class LibraryView(QWidget):
         self.tracks.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.tracks.setAlternatingRowColors(True)
         self.tracks.setMouseTracking(True)
+        self.tracks.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.tracks.customContextMenuRequested.connect(self._show_track_context_menu)
         self.tracks.verticalHeader().setVisible(False)
         self.tracks_model = QStandardItemModel(0, 5)
         self.tracks_model.setHorizontalHeaderLabels(["#", "Title", "Artist", "Album", "Time"])
@@ -158,21 +162,29 @@ class LibraryView(QWidget):
                 it.setToolTip(tooltip)
             self.tracks_model.appendRow(row)
 
-    def _track_tooltip(self, track: Track, duration: str) -> str:
+    @staticmethod
+    def _track_details(track: Track, duration: str) -> list[tuple[str, str]]:
         file_type = Path(track.path).suffix.lstrip(".").upper() or "Unknown"
         artist = track.display_artist
         album = track.album or "Unknown Album"
-        bitrate = self._format_bitrate(track.bitrate)
-        sample_rate = self._format_sample_rate(track.samplerate)
-        return (
-            f"Title: {track.title}\n"
-            f"Artist: {artist}\n"
-            f"Album: {album}\n"
-            f"Time: {duration}\n"
-            f"Bitrate: {bitrate}\n"
-            f"Sample rate: {sample_rate}\n"
-            f"File type: {file_type}\n"
-            f"File location: {track.path}"
+        bitrate = LibraryView._format_bitrate(track.bitrate)
+        sample_rate = LibraryView._format_sample_rate(track.samplerate)
+        return [
+            ("Title", track.title),
+            ("Artist", artist),
+            ("Album", album),
+            ("Time", duration),
+            ("Bitrate", bitrate),
+            ("Sample rate", sample_rate),
+            ("File type", file_type),
+            ("File location", track.path),
+        ]
+
+    @staticmethod
+    def _track_tooltip(track: Track, duration: str) -> str:
+        return "\n".join(
+            f"{label}: {value}"
+            for label, value in LibraryView._track_details(track, duration)
         )
 
     @staticmethod
@@ -191,6 +203,66 @@ class LibraryView(QWidget):
         if sample_rate % 1000 == 0:
             return f"{sample_rate // 1000} kHz"
         return f"{sample_rate / 1000:g} kHz"
+
+    # ------------------------------------------------------------------ context menu
+    def _show_track_context_menu(self, pos) -> None:
+        idx = self.tracks.indexAt(pos)
+        if not idx.isValid() or not (0 <= idx.row() < len(self._current_tracks)):
+            return
+        self.tracks.selectRow(idx.row())
+        self.tracks.setCurrentIndex(idx)
+        track = self._current_tracks[idx.row()]
+
+        menu = QMenu(self)
+        open_folder = menu.addAction("Open Containing Folder")
+        properties = menu.addAction("Properties")
+        youtube_search = menu.addAction("Search YouTube for Artist, Album, and Track")
+        action = menu.exec(self.tracks.viewport().mapToGlobal(pos))
+
+        if action == open_folder:
+            self._open_containing_folder(track)
+        elif action == properties:
+            self._show_track_properties(track)
+        elif action == youtube_search:
+            self.request_youtube_search.emit(self._youtube_query_for_track(track))
+
+    def _open_containing_folder(self, track: Track) -> None:
+        folder = Path(track.path).expanduser().parent
+        if not folder.is_absolute():
+            folder = folder.resolve(strict=False)
+        if not folder.exists():
+            self.status_message.emit(f"Folder not found: {folder}")
+            return
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder))):
+            self.status_message.emit(f"Could not open folder: {folder}")
+
+    def _show_track_properties(self, track: Track) -> None:
+        duration = format_duration(track.duration)
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Properties - {track.title}")
+        layout = QVBoxLayout(dialog)
+        form = QFormLayout()
+        form.setLabelAlignment(Qt.AlignRight)
+        for label, value in self._track_details(track, duration):
+            value_label = QLabel(value)
+            value_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            value_label.setWordWrap(True)
+            form.addRow(f"{label}:", value_label)
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        buttons.rejected.connect(dialog.reject)
+        layout.addLayout(form)
+        layout.addWidget(buttons)
+        dialog.resize(520, 260)
+        dialog.exec()
+
+    @staticmethod
+    def _youtube_query_for_track(track: Track) -> str:
+        parts = (track.display_artist, track.album, track.title)
+        return " ".join(
+            part.strip()
+            for part in parts
+            if part and part.strip() not in {"Unknown Artist", "Unknown Album"}
+        )
 
     # ------------------------------------------------------------------ search
     def _on_search(self, q: str) -> None:
