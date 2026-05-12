@@ -50,6 +50,7 @@ def _install_dependency_stubs() -> None:
         ElideRight = 1
         KeepAspectRatio = 1
         SmoothTransformation = 1
+        UserRole = 1
 
     class _QSize:
         def __init__(self, *_, **__):
@@ -84,11 +85,13 @@ def _install_dependency_stubs() -> None:
     qtgui.QStandardItemModel = _Widget
     for name in (
         "QAbstractItemView", "QComboBox", "QHBoxLayout", "QHeaderView",
-        "QLabel", "QLineEdit", "QProgressBar", "QPushButton",
-        "QTableView", "QVBoxLayout", "QWidget",
+        "QLabel", "QLineEdit", "QProgressBar", "QPushButton", "QStyle",
+        "QStyleOptionProgressBar", "QStyledItemDelegate", "QTableView",
+        "QVBoxLayout", "QWidget",
     ):
         setattr(qtwidgets, name, _Widget)
     qtwidgets.QMessageBox = _QMessageBox
+    qtwidgets.QStyle.CE_ProgressBar = 1
     sys.modules["PySide6"] = pyside
     sys.modules["PySide6.QtCore"] = qtcore
     sys.modules["PySide6.QtGui"] = qtgui
@@ -117,6 +120,7 @@ from lyon.core.ripper import (  # noqa: E402
     _build_libcdio_track_command,
     _build_raw_cdda_ffmpeg_command,
     _ffmpeg_format_listing_has_demuxer,
+    _parse_progress,
     _summarize_ffmpeg_failure,
     _track_sector_span,
     _windows_cdda_drive_path,
@@ -165,6 +169,23 @@ def test_raw_cdda_command_uses_ffmpeg_as_flac_encoder(tmp_path):
     assert cmd[cmd.index("-compression_level") + 1] == "5"
     assert "libcdio" not in cmd
     assert cmd[-1] == str(out)
+
+
+def test_parse_ffmpeg_progress_uses_track_duration():
+    line = "size=  1024kB time=00:01:15.00 bitrate=1118.5kbits/s"
+
+    assert _parse_progress(line, 150) == 50
+
+
+def test_parse_ffmpeg_progress_bounds_before_completion():
+    line = "size=  2048kB time=00:03:00.00 bitrate=1118.5kbits/s"
+
+    assert _parse_progress(line, 150) == 99
+
+
+def test_parse_ffmpeg_progress_ignores_lines_without_time():
+    assert _parse_progress("ffmpeg diagnostic", 150) is None
+    assert _parse_progress("time=00:00:01.00", 0) is None
 
 
 def test_ffmpeg_format_listing_detects_libcdio_demuxer():
