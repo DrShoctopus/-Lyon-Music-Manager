@@ -134,6 +134,7 @@ class TransportBar(QWidget):
     """Bottom playback area with controls contained inside the glossy capsule."""
 
     open_now_playing = Signal()
+    play_requested = Signal()
 
     def __init__(self, player: Player, parent: QWidget | None = None):
         super().__init__(parent)
@@ -183,7 +184,7 @@ class TransportBar(QWidget):
         self.play_btn = PlayPauseButton()
         self.play_btn.setObjectName("transportPlay")
         self.play_btn.setFixedSize(PLAY_BUTTON_SIZE, PLAY_BUTTON_SIZE)
-        self.play_btn.clicked.connect(player.toggle)
+        self.play_btn.clicked.connect(self.play_requested.emit)
 
         self.prev_btn.clicked.connect(player.previous)
         self.next_btn.clicked.connect(player.next)

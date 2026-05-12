@@ -127,6 +127,7 @@ class MainWindow(QMainWindow):
         self.transport = TransportBar(self.player)
         self.transport.open_now_playing.connect(
             lambda: self._tab_buttons["Now Playing"].setChecked(True))
+        self.transport.play_requested.connect(self._on_transport_play_requested)
         layout.addWidget(self.transport)
 
         self.stack.currentChanged.connect(self._on_view_changed)
@@ -171,6 +172,15 @@ class MainWindow(QMainWindow):
         help_menu.addAction(QAction("About", self, triggered=self.show_about))
 
     # ------------------------------------------------------------------ tabs
+    def _on_transport_play_requested(self) -> None:
+        if self.stack.currentWidget() is self.library_view and not self.player.is_playing():
+            playback = self.library_view.highlighted_playback()
+            if playback is not None:
+                tracks, start_index = playback
+                self.player.set_queue(tracks, start_index)
+                return
+        self.player.toggle()
+
     def _on_view_changed(self, _idx: int) -> None:
         current = self.stack.currentWidget()
         is_youtube = current is self.youtube_view
