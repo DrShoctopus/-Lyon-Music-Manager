@@ -115,8 +115,11 @@ from lyon.core.ripper import (  # noqa: E402
     RipFailure,
     RipRequest,
     _build_libcdio_track_command,
+    _build_raw_cdda_ffmpeg_command,
+    _ffmpeg_format_listing_has_demuxer,
     _summarize_ffmpeg_failure,
     _track_sector_span,
+    _windows_cdda_drive_path,
     _write_failure_log,
 )
 from lyon.ui.ripper_view import _rip_request_from_toc  # noqa: E402
@@ -147,6 +150,40 @@ def test_libcdio_command_extracts_one_audio_stream_with_toc_timing(tmp_path):
     assert cmd[cmd.index("-map") + 1] == "0:a:0"
     assert "0:a:1" not in cmd
     assert cmd[-1] == str(out)
+
+
+def test_raw_cdda_command_uses_ffmpeg_as_flac_encoder(tmp_path):
+    out = tmp_path / "track.flac"
+
+    cmd = _build_raw_cdda_ffmpeg_command("ffmpeg", out, 5)
+
+    assert cmd[cmd.index("-f") + 1] == "s16le"
+    assert cmd[cmd.index("-ar") + 1] == "44100"
+    assert cmd[cmd.index("-ac") + 1] == "2"
+    assert cmd[cmd.index("-i") + 1] == "pipe:0"
+    assert cmd[cmd.index("-c:a") + 1] == "flac"
+    assert cmd[cmd.index("-compression_level") + 1] == "5"
+    assert "libcdio" not in cmd
+    assert cmd[-1] == str(out)
+
+
+def test_ffmpeg_format_listing_detects_libcdio_demuxer():
+    listing = """
+Formats:
+ D.. = Demuxing supported
+ .E. = Muxing supported
+ D d libcdio         libcdio CDDA input
+  E  flac            raw FLAC
+"""
+
+    assert _ffmpeg_format_listing_has_demuxer(listing, "libcdio")
+    assert not _ffmpeg_format_listing_has_demuxer(listing, "flac")
+
+
+def test_windows_cdda_drive_path_normalises_drive_letters():
+    assert _windows_cdda_drive_path("D:") == "\\\\.\\D:"
+    assert _windows_cdda_drive_path("e") == "\\\\.\\E:"
+    assert _windows_cdda_drive_path("\\\\.\\F:") == "\\\\.\\F:"
 
 
 def test_rip_request_reuses_detected_disc_toc(tmp_path):
