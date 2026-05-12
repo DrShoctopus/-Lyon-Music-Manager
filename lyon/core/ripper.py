@@ -3,23 +3,14 @@
 FFmpeg's libcdio input exposes an audio CD as one audio stream with chapter
 metadata, not as one stream per CD track. We use the libdiscid TOC offsets read
 by ``cd_detect`` to seek and trim that one stream for each FLAC output file.
-
-Most Windows ffmpeg builds do not include the libcdio input device. When that
-happens we read CD-DA sectors directly from Windows and pipe the raw stereo PCM
-into ffmpeg, using ffmpeg only as the FLAC encoder.
 """
 from __future__ import annotations
 
-import ctypes
-import datetime as _dt
-import platform
 import re
-import shlex
 import shutil
 import subprocess
 import sys
-from ctypes import wintypes
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -31,30 +22,10 @@ from .settings import Settings, bundled_bin_dir
 
 SAFE_CHARS_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 CD_SECTORS_PER_SECOND = 75
-CDDA_SECTOR_SIZE = 2352
-CDDA_COOKED_SECTOR_SIZE = 2048
-CDDA_SAMPLE_RATE = 44100
-CDDA_CHANNELS = 2
-WINDOWS_CDDA_READ_CHUNK_SECTORS = 16
-IOCTL_CDROM_RAW_READ = 0x0002403E
-TRACK_MODE_CDDA = 2
 FFMPEG_ERROR_LINES = 8
-FAILURE_LOG_OUTPUT_LINES = 40
 
 # Suppress the console window ffmpeg would otherwise pop up per track on Windows.
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-
-
-class _RawReadInfo(ctypes.Structure):
-    _fields_ = [
-        ("DiskOffset", ctypes.c_longlong),
-        ("SectorCount", wintypes.ULONG),
-        ("TrackMode", wintypes.ULONG),
-    ]
-
-
-class _WindowsCddaReadError(OSError):
-    """Raised when Windows cannot return raw CD-DA sectors."""
 
 
 def safe_path_component(name: str) -> str:
@@ -153,171 +124,6 @@ def _build_libcdio_track_command(
     return cmd
 
 
-def _build_raw_cdda_ffmpeg_command(
-    ffmpeg: str,
-    out: Path,
-    compression: int,
-) -> list[str]:
-    return [
-        ffmpeg,
-        "-y",
-        "-hide_banner",
-        "-loglevel", "error",
-        "-nostats",
-        "-f", "s16le",
-        "-ar", str(CDDA_SAMPLE_RATE),
-        "-ac", str(CDDA_CHANNELS),
-        "-i", "pipe:0",
-        "-vn",
-        "-c:a", "flac",
-        "-compression_level", str(compression),
-        str(out),
-    ]
-
-
-def _ffmpeg_format_listing_has_demuxer(format_listing: str, name: str) -> bool:
-    for line in format_listing.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("---") or stripped.startswith("D.."):
-            continue
-        parts = stripped.split()
-        if len(parts) < 2 or "D" not in parts[0]:
-            continue
-        format_name_index = 2 if len(parts) > 2 and parts[1] == "d" else 1
-        format_names = parts[format_name_index].split(",")
-        if name in format_names:
-            return True
-    return False
-
-
-def _ffmpeg_supports_demuxer(ffmpeg: str, name: str) -> bool:
-    try:
-        proc = subprocess.run(
-            [ffmpeg, "-hide_banner", "-formats"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            timeout=15,
-            creationflags=_NO_WINDOW,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return proc.returncode == 0 and _ffmpeg_format_listing_has_demuxer(proc.stdout, name)
-
-
-def _windows_cdda_drive_path(drive: str) -> str:
-    drive = drive.strip().rstrip("\\/")
-    if drive.startswith("\\\\.\\"):
-        return drive
-    if len(drive) == 1:
-        drive = f"{drive}:"
-    if len(drive) == 2 and drive[1] == ":":
-        return f"\\\\.\\{drive.upper()}"
-    return drive
-
-
-def _decode_process_output(data: bytes) -> list[str]:
-    text = data.decode(errors="replace")
-    return [line.strip() for line in text.splitlines() if line.strip()]
-
-
-def _read_windows_cdda_sectors(
-    drive: str,
-    start_sector: int,
-    sector_count: int,
-    *,
-    chunk_sectors: int = WINDOWS_CDDA_READ_CHUNK_SECTORS,
-):
-    if sys.platform != "win32":
-        raise _WindowsCddaReadError("raw CD reads are only available on Windows")
-    if sector_count <= 0:
-        return
-
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel32.CreateFileW.argtypes = [
-        wintypes.LPCWSTR,
-        wintypes.DWORD,
-        wintypes.DWORD,
-        wintypes.LPVOID,
-        wintypes.DWORD,
-        wintypes.DWORD,
-        wintypes.HANDLE,
-    ]
-    kernel32.CreateFileW.restype = wintypes.HANDLE
-    kernel32.DeviceIoControl.argtypes = [
-        wintypes.HANDLE,
-        wintypes.DWORD,
-        wintypes.LPVOID,
-        wintypes.DWORD,
-        wintypes.LPVOID,
-        wintypes.DWORD,
-        ctypes.POINTER(wintypes.DWORD),
-        wintypes.LPVOID,
-    ]
-    kernel32.DeviceIoControl.restype = wintypes.BOOL
-    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
-    kernel32.CloseHandle.restype = wintypes.BOOL
-
-    generic_read = 0x80000000
-    file_share_read = 0x00000001
-    file_share_write = 0x00000002
-    open_existing = 3
-    invalid_handle = wintypes.HANDLE(-1).value
-
-    drive_path = _windows_cdda_drive_path(drive)
-    handle = kernel32.CreateFileW(
-        drive_path,
-        generic_read,
-        file_share_read | file_share_write,
-        None,
-        open_existing,
-        0,
-        None,
-    )
-    if handle == invalid_handle:
-        err = ctypes.get_last_error()
-        raise _WindowsCddaReadError(f"could not open {drive_path}: Windows error {err}")
-
-    remaining = int(sector_count)
-    next_sector = int(start_sector)
-    try:
-        while remaining > 0:
-            count = min(chunk_sectors, remaining)
-            buffer = ctypes.create_string_buffer(count * CDDA_SECTOR_SIZE)
-            info = _RawReadInfo(
-                next_sector * CDDA_COOKED_SECTOR_SIZE,
-                count,
-                TRACK_MODE_CDDA,
-            )
-            bytes_returned = wintypes.DWORD(0)
-            ok = kernel32.DeviceIoControl(
-                handle,
-                IOCTL_CDROM_RAW_READ,
-                ctypes.byref(info),
-                ctypes.sizeof(info),
-                buffer,
-                ctypes.sizeof(buffer),
-                ctypes.byref(bytes_returned),
-                None,
-            )
-            if not ok:
-                err = ctypes.get_last_error()
-                raise _WindowsCddaReadError(
-                    f"could not read CD audio sector {next_sector}: Windows error {err}"
-                )
-            expected = count * CDDA_SECTOR_SIZE
-            if bytes_returned.value != expected:
-                raise _WindowsCddaReadError(
-                    f"read {bytes_returned.value} bytes from sector {next_sector}; expected {expected}"
-                )
-            yield buffer.raw[:bytes_returned.value]
-            next_sector += count
-            remaining -= count
-    finally:
-        kernel32.CloseHandle(handle)
-
-
 # ---------------------------------------------------------------- worker
 @dataclass
 class RipRequest:
@@ -326,124 +132,6 @@ class RipRequest:
     target_dir: Path
     track_offsets: tuple[int, ...] = ()
     leadout_sector: int = 0
-
-
-@dataclass
-class FfmpegAttemptFailure:
-    command: list[str]
-    returncode: Optional[int]
-    reason: str
-    output: list[str] = field(default_factory=list)
-
-
-@dataclass
-class RipFailure:
-    track_no: Optional[int]
-    title: str
-    output_path: Optional[Path]
-    reason: str
-    attempts: list[FfmpegAttemptFailure] = field(default_factory=list)
-
-
-def _quote_command(cmd: Sequence[str]) -> str:
-    if sys.platform == "win32":
-        return subprocess.list2cmdline([str(part) for part in cmd])
-    return shlex.join(str(part) for part in cmd)
-
-
-def _summarize_ffmpeg_failure(output: Sequence[str], returncode: Optional[int]) -> str:
-    combined = "\n".join(output).lower()
-    has_libcdio_format_error = (
-        "unknown input format" in combined or "no input format" in combined
-    ) and "libcdio" in combined
-    if has_libcdio_format_error:
-        return (
-            "ffmpeg does not recognize the libcdio CD input format. "
-            "Lyon will use the Windows raw CD reader when available; otherwise "
-            "bundle an ffmpeg build compiled with libcdio/CDDA support."
-        )
-    if "no such file or directory" in combined:
-        return "ffmpeg could not open the CD drive or output path."
-    if "permission denied" in combined:
-        return "ffmpeg was denied access to the CD drive or output path."
-    if "invalid argument" in combined and "libcdio" in combined:
-        return "ffmpeg rejected the libcdio input arguments for this drive."
-    if output:
-        return f"ffmpeg exited with code {returncode}; see captured output below."
-    return f"ffmpeg exited with code {returncode} without producing diagnostic output."
-
-
-def _write_failure_log(
-    folder: Path,
-    request: RipRequest,
-    ffmpeg: Optional[str],
-    failures: Sequence[RipFailure],
-    *,
-    message: str,
-) -> Optional[Path]:
-    if not failures:
-        return None
-
-    timestamp = _dt.datetime.now(_dt.timezone.utc).strftime("%Y%m%d-%H%M%SZ")
-    path = folder / f"rip-failed-{timestamp}.log"
-    album = request.album
-    lines = [
-        "Lyon Music Manager rip failure log",
-        "Generated (UTC): "
-        f"{_dt.datetime.now(_dt.timezone.utc).isoformat(timespec='seconds')}",
-        f"Summary: {message}",
-        "",
-        "Environment",
-        f"  Python: {platform.python_version()}",
-        f"  Platform: {platform.platform()}",
-        f"  ffmpeg: {ffmpeg or 'not found'}",
-        "",
-        "Album",
-        f"  Artist: {album.artist or 'Unknown Artist'}",
-        f"  Album: {album.album or 'Unknown Album'}",
-        f"  Year: {album.year or 'Unknown'}",
-        f"  Tracks: {len(album.tracks)}",
-        "",
-        "Disc",
-        f"  Drive: {request.drive}",
-        f"  Target folder: {folder}",
-        "  Track offsets: "
-        f"{', '.join(str(o) for o in request.track_offsets) or 'unavailable'}",
-        f"  Leadout sector: {request.leadout_sector or 'unavailable'}",
-        "",
-        "Failures",
-    ]
-
-    for failure in failures:
-        label = f"Track {failure.track_no}" if failure.track_no is not None else "Rip setup"
-        lines += [
-            "",
-            f"{label}: {failure.title}",
-            f"  Reason: {failure.reason}",
-        ]
-        if failure.output_path is not None:
-            lines.append(f"  Intended output: {failure.output_path}")
-        for idx, attempt in enumerate(failure.attempts, start=1):
-            lines += [
-                f"  Attempt {idx}:",
-                f"    Command: {_quote_command(attempt.command)}",
-                f"    Return code: {attempt.returncode}",
-                f"    Reason: {attempt.reason}",
-            ]
-            if attempt.output:
-                lines.append("    Captured output:")
-                for line in attempt.output[-FAILURE_LOG_OUTPUT_LINES:]:
-                    lines.append(f"      {line}")
-            else:
-                lines.append("    Captured output: <none>")
-
-    lines.append("")
-    try:
-        folder.mkdir(parents=True, exist_ok=True)
-        path.write_text("\n".join(lines), encoding="utf-8")
-        return path
-    except OSError:
-        return None
 
 
 class RipWorker(QObject):
@@ -461,29 +149,23 @@ class RipWorker(QObject):
         self.request = request
         self._track_offsets = tuple(request.track_offsets)
         self._leadout_sector = request.leadout_sector
-        self._ffmpeg_has_libcdio: Optional[bool] = None
         self._cancel = False
 
     def cancel(self) -> None:
         self._cancel = True
 
     def run(self) -> None:
+        ff = find_ffmpeg()
+        if not ff:
+            self.finished.emit(False, "ffmpeg not found. Bundle it in /bin or install on PATH.")
+            return
+
         album = self.request.album
         folder = self.request.target_dir
-        failures: list[RipFailure] = []
-
         try:
             folder.mkdir(parents=True, exist_ok=True)
         except OSError as e:
             self.finished.emit(False, f"Could not create rip folder: {e}")
-            return
-
-        ff = find_ffmpeg()
-        if not ff:
-            message = "ffmpeg not found. Bundle it in /bin or install on PATH."
-            failures.append(RipFailure(None, "Rip setup", None, message))
-            self._emit_failure_log(folder, None, failures, message)
-            self.finished.emit(False, message)
             return
 
         if not self._track_offsets or self._leadout_sector <= 0:
@@ -493,8 +175,6 @@ class RipWorker(QObject):
             if toc is not None:
                 self._track_offsets = tuple(toc.track_offsets)
                 self._leadout_sector = toc.sectors
-                self.request.track_offsets = self._track_offsets
-                self.request.leadout_sector = self._leadout_sector
 
         # Save artwork once per album
         art_bytes = album.artwork
@@ -511,30 +191,11 @@ class RipWorker(QObject):
                 art_path = None
 
         if not self._track_offsets or self._leadout_sector <= 0:
-            message = (
+            self.finished.emit(
+                False,
                 "Could not read disc track timing. Try detecting the disc again, "
-                "then restart the rip."
+                "then restart the rip.",
             )
-            failures.append(RipFailure(None, "Disc TOC", None, message))
-            self._emit_failure_log(folder, ff, failures, message)
-            self.finished.emit(False, message)
-            return
-
-        self._ffmpeg_has_libcdio = _ffmpeg_supports_demuxer(ff, "libcdio")
-        if self._ffmpeg_has_libcdio:
-            self.log.emit("Using ffmpeg libcdio for CD audio input.")
-        elif sys.platform == "win32":
-            self.log.emit(
-                "ffmpeg does not include libcdio; using the Windows raw CD reader."
-            )
-        else:
-            message = (
-                "ffmpeg does not include libcdio CD input support, and the raw CD "
-                "reader fallback is only available on Windows."
-            )
-            failures.append(RipFailure(None, "Rip setup", None, message))
-            self._emit_failure_log(folder, ff, failures, message)
-            self.finished.emit(False, message)
             return
 
         total = len(album.tracks) or 1
@@ -547,52 +208,21 @@ class RipWorker(QObject):
             self.track_started.emit(tr.number, tr.title)
             out = target_file(folder, tr, total)
             self.log.emit(f"Ripping track {tr.number}: {tr.title}")
-            failure = self._rip_track(ff, tr.number, tr.title, out)
-            if failure is not None:
+            ok = self._rip_track(ff, tr.number, out)
+            if not ok:
                 success = False
-                failures.append(failure)
-                self.log.emit(f"Track {tr.number} failed: {failure.reason}")
+                self.log.emit(f"Track {tr.number} failed.")
                 continue
 
             from .tagger import write_flac_tags
             if not write_flac_tags(out, album, tr, art_bytes):
                 success = False
-                reason = "Track ripped but FLAC tags could not be written."
-                failures.append(RipFailure(tr.number, tr.title, out, reason))
-                self.log.emit(f"Track {tr.number} {reason.lower()}")
+                self.log.emit(f"Track {tr.number} ripped but tags could not be written.")
             self.track_finished.emit(tr.number, str(out))
 
-        message = "Rip complete." if success else "Rip finished with errors."
-        if not success:
-            self._emit_failure_log(folder, ff, failures, message)
-        self.finished.emit(success, message)
+        self.finished.emit(success, "Rip complete." if success else "Rip finished with errors.")
 
-    def _emit_failure_log(
-        self,
-        folder: Path,
-        ffmpeg: Optional[str],
-        failures: Sequence[RipFailure],
-        message: str,
-    ) -> None:
-        log_path = _write_failure_log(
-            folder,
-            self.request,
-            ffmpeg,
-            failures,
-            message=message,
-        )
-        if log_path is not None:
-            self.log.emit(f"Rip failure details saved to: {log_path}")
-        else:
-            self.log.emit("Could not write rip failure details log.")
-
-    def _rip_track(
-        self,
-        ffmpeg: str,
-        track_no: int,
-        title: str,
-        out: Path,
-    ) -> Optional[RipFailure]:
+    def _rip_track(self, ffmpeg: str, track_no: int, out: Path) -> bool:
         drive = self.request.drive
         try:
             compression = int(self.settings.flac_compression)
@@ -601,141 +231,21 @@ class RipWorker(QObject):
         compression = max(0, min(8, compression))
         span = _track_sector_span(track_no, self._track_offsets, self._leadout_sector)
         if span is None:
-            reason = "Disc TOC offsets are unavailable or invalid for this track."
-            self.log.emit(f"Track {track_no} failed: {reason}")
-            return RipFailure(track_no, title, out, reason)
-
-        has_libcdio = self._ffmpeg_has_libcdio
-        if has_libcdio is None:
-            has_libcdio = _ffmpeg_supports_demuxer(ffmpeg, "libcdio")
-            self._ffmpeg_has_libcdio = has_libcdio
-
-        if has_libcdio:
-            attempts = [
-                _build_libcdio_track_command(ffmpeg, drive, out, compression, span, input_seek=True),
-                _build_libcdio_track_command(ffmpeg, drive, out, compression, span, input_seek=False),
-            ]
-            failures: list[FfmpegAttemptFailure] = []
-            for cmd in attempts:
-                attempt_failure = self._run_ffmpeg(cmd, track_no, out)
-                if attempt_failure is None:
-                    return None
-                failures.append(attempt_failure)
-            reason = failures[-1].reason if failures else "Track rip failed for an unknown reason."
-            return RipFailure(track_no, title, out, reason, failures)
-
-        if sys.platform != "win32":
-            reason = (
-                "ffmpeg does not include libcdio CD input support, and the raw CD "
-                "reader fallback is only available on Windows."
+            self.log.emit(
+                f"Track {track_no} failed: disc TOC offsets are unavailable or invalid."
             )
-            return RipFailure(track_no, title, out, reason)
+            return False
 
-        attempt_failure = self._run_windows_cdda_ffmpeg(
-            ffmpeg,
-            track_no,
-            out,
-            compression,
-            span,
-        )
-        if attempt_failure is None:
-            return None
-        return RipFailure(track_no, title, out, attempt_failure.reason, [attempt_failure])
+        attempts = [
+            _build_libcdio_track_command(ffmpeg, drive, out, compression, span, input_seek=True),
+            _build_libcdio_track_command(ffmpeg, drive, out, compression, span, input_seek=False),
+        ]
+        for cmd in attempts:
+            if self._run_ffmpeg(cmd, track_no, out):
+                return True
+        return False
 
-    def _run_windows_cdda_ffmpeg(
-        self,
-        ffmpeg: str,
-        track_no: int,
-        out: Path,
-        compression: int,
-        sector_span: tuple[int, int],
-    ) -> Optional[FfmpegAttemptFailure]:
-        start, end = sector_span
-        total_sectors = end - start
-        cmd = _build_raw_cdda_ffmpeg_command(ffmpeg, out, compression)
-        try:
-            proc = subprocess.Popen(
-                cmd,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                creationflags=_NO_WINDOW,
-            )
-        except OSError as e:
-            reason = f"ffmpeg launch error: {e}"
-            self.log.emit(reason)
-            return FfmpegAttemptFailure(cmd, None, reason)
-
-        read_sectors = 0
-        output: list[str] = []
-        try:
-            if proc.stdin is None:
-                raise OSError("ffmpeg stdin pipe was not created")
-            for chunk in _read_windows_cdda_sectors(self.request.drive, start, total_sectors):
-                if self._cancel:
-                    proc.kill()
-                    proc.wait()
-                    return FfmpegAttemptFailure(cmd, proc.returncode, "Cancelled by user.", output)
-                proc.stdin.write(chunk)
-                read_sectors += len(chunk) // CDDA_SECTOR_SIZE
-                if total_sectors > 0:
-                    pct = max(0, min(99, int(read_sectors * 100 / total_sectors)))
-                    self.track_progress.emit(track_no, pct)
-            proc.stdin.close()
-            if proc.stdout is not None:
-                output = _decode_process_output(proc.stdout.read())[-FFMPEG_ERROR_LINES:]
-            proc.wait()
-        except _WindowsCddaReadError as e:
-            reason = f"Windows raw CD reader failed: {e}"
-            self.log.emit(reason)
-            if proc.poll() is None:
-                proc.kill()
-            if proc.stdout is not None:
-                output = _decode_process_output(proc.stdout.read())[-FFMPEG_ERROR_LINES:]
-            proc.wait()
-            try:
-                out.unlink(missing_ok=True)
-            except OSError:
-                pass
-            return FfmpegAttemptFailure(cmd, proc.returncode, reason, output)
-        except (BrokenPipeError, OSError) as e:
-            if proc.poll() is None:
-                proc.kill()
-            if proc.stdout is not None:
-                output = _decode_process_output(proc.stdout.read())[-FFMPEG_ERROR_LINES:]
-            proc.wait()
-            reason = _summarize_ffmpeg_failure(output, proc.returncode)
-            if not output:
-                reason = f"ffmpeg raw CD audio pipe failed: {e}"
-            self.log.emit(reason)
-            try:
-                out.unlink(missing_ok=True)
-            except OSError:
-                pass
-            return FfmpegAttemptFailure(cmd, proc.returncode, reason, output)
-
-        if proc.returncode == 0 and out.exists() and out.stat().st_size > 0:
-            self.track_progress.emit(track_no, 100)
-            return None
-
-        try:
-            out.unlink(missing_ok=True)
-        except OSError:
-            pass
-
-        reason = _summarize_ffmpeg_failure(output, proc.returncode)
-        if output:
-            self.log.emit("ffmpeg: " + " | ".join(output))
-        else:
-            self.log.emit(f"ffmpeg exited with code {proc.returncode}.")
-        return FfmpegAttemptFailure(cmd, proc.returncode, reason, output)
-
-    def _run_ffmpeg(
-        self,
-        cmd: list[str],
-        track_no: int,
-        out: Path,
-    ) -> Optional[FfmpegAttemptFailure]:
+    def _run_ffmpeg(self, cmd: list[str], track_no: int, out: Path) -> bool:
         try:
             proc = subprocess.Popen(
                 cmd,
@@ -744,9 +254,8 @@ class RipWorker(QObject):
                 creationflags=_NO_WINDOW,
             )
         except OSError as e:
-            reason = f"ffmpeg launch error: {e}"
-            self.log.emit(reason)
-            return FfmpegAttemptFailure(cmd, None, reason)
+            self.log.emit(f"ffmpeg launch error: {e}")
+            return False
 
         recent_output: list[str] = []
         if proc.stdout is not None:
@@ -754,9 +263,7 @@ class RipWorker(QObject):
                 if self._cancel:
                     proc.kill()
                     proc.wait()
-                    return FfmpegAttemptFailure(
-                        cmd, proc.returncode, "Cancelled by user.", recent_output
-                    )
+                    return False
                 line = line.strip()
                 if line:
                     recent_output.append(line)
@@ -768,19 +275,18 @@ class RipWorker(QObject):
 
         if proc.returncode == 0 and out.exists() and out.stat().st_size > 0:
             self.track_progress.emit(track_no, 100)
-            return None
+            return True
 
         try:
             out.unlink(missing_ok=True)
         except OSError:
             pass
 
-        reason = _summarize_ffmpeg_failure(recent_output, proc.returncode)
         if recent_output:
             self.log.emit("ffmpeg: " + " | ".join(recent_output))
         else:
             self.log.emit(f"ffmpeg exited with code {proc.returncode}.")
-        return FfmpegAttemptFailure(cmd, proc.returncode, reason, recent_output)
+        return False
 
 
 def _parse_progress(line: str) -> Optional[int]:

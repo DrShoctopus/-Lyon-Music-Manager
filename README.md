@@ -43,7 +43,7 @@ The application version is defined in `lyon/__init__.py`.
   highlighting, selected-track scrolling, and track tooltips with artist, album,
   time, and file type.
 - **Audio CD detection** on Windows using Win32 optical-drive APIs and libdiscid.
-- **CTDB metadata lookup with MusicBrainz fallback** by disc TOC, plus manual artist/album search
+- **MusicBrainz metadata lookup** by disc ID, plus manual artist/album search
   from the ripper view.
 - **Cover Art Archive support** for downloading album art when enabled.
 - **CD-to-FLAC ripping** through ffmpeg/libcdio, with per-track output, FLAC
@@ -236,7 +236,7 @@ lyon/__init__.py                App name and version
 lyon/app.py                     QApplication setup, splash, and main window launch
 lyon/core/cd_detect.py          Windows optical-drive and libdiscid helpers
 lyon/core/library.py            SQLite library index and search queries
-lyon/core/metadata.py           CTDB, MusicBrainz, and Cover Art Archive lookups
+lyon/core/metadata.py           MusicBrainz and Cover Art Archive lookups
 lyon/core/player.py             QMediaPlayer queue, shuffle, repeat, volume
 lyon/core/ripper.py             ffmpeg-backed CD-to-FLAC worker
 lyon/core/settings.py           Settings defaults, persistence, bin lookup
@@ -262,7 +262,7 @@ pip install pytest
 pytest
 ```
 
-Current automated coverage includes MusicBrainz multi-disc metadata selection and CTDB-first lookup fallback behavior.
+Current automated coverage includes MusicBrainz multi-disc metadata selection.
 More coverage should be added around library scanning, playback queue behavior,
 rip overwrite/cancel flows, and branding startup as those areas continue to
 settle.
