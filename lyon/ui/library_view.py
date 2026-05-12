@@ -162,13 +162,17 @@ class LibraryView(QWidget):
         file_type = Path(track.path).suffix.lstrip(".").upper() or "Unknown"
         artist = track.display_artist
         album = track.album or "Unknown Album"
-        bitrate = self._format_bitrate(self._track_bitrate(track))
+        bitrate = self._format_bitrate(track.bitrate)
+        sample_rate = self._format_sample_rate(track.samplerate)
         return (
+            f"Title: {track.title}\n"
             f"Artist: {artist}\n"
             f"Album: {album}\n"
             f"Time: {duration}\n"
             f"Bitrate: {bitrate}\n"
-            f"File type: {file_type}"
+            f"Sample rate: {sample_rate}\n"
+            f"File type: {file_type}\n"
+            f"File location: {track.path}"
         )
 
     @staticmethod
@@ -180,13 +184,13 @@ class LibraryView(QWidget):
             return f"{bitrate} bps"
         return f"{kbps} kbps"
 
-    def _track_bitrate(self, track: Track) -> int:
-        with self.library._lock:
-            row = self.library.conn.execute(
-                "SELECT bitrate FROM tracks WHERE id = ?",
-                (track.id,),
-            ).fetchone()
-        return int(row["bitrate"] or 0) if row else 0
+    @staticmethod
+    def _format_sample_rate(sample_rate: int) -> str:
+        if sample_rate <= 0:
+            return "Unknown"
+        if sample_rate % 1000 == 0:
+            return f"{sample_rate // 1000} kHz"
+        return f"{sample_rate / 1000:g} kHz"
 
     # ------------------------------------------------------------------ search
     def _on_search(self, q: str) -> None:

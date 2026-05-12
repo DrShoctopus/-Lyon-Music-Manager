@@ -58,16 +58,29 @@ def _init():
 
 
 def lookup_disc(discid_str: str, toc: str | None = None) -> Optional[AlbumInfo]:
-    """Look up an album by MusicBrainz disc ID, falling back to CTDB."""
+    """Look up an album from CTDB first, falling back to MusicBrainz."""
+    ctdb_info = lookup_ctdb_disc(toc)
+    if ctdb_info is not None:
+        return ctdb_info
+    return lookup_musicbrainz_disc(discid_str, toc)
+
+
+def lookup_disc_with_fallback(discid_str: str, toc: str | None = None) -> Optional[AlbumInfo]:
+    """Try CTDB metadata first, then MusicBrainz if CTDB has no match."""
+    return lookup_disc(discid_str, toc)
+
+
+def lookup_musicbrainz_disc(discid_str: str, toc: str | None = None) -> Optional[AlbumInfo]:
+    """Look up an album by MusicBrainz disc ID."""
     _init()
     try:
         result = musicbrainzngs.get_releases_by_discid(
             discid_str, includes=["recordings", "artists"], toc=toc, cdstubs=True
         )
     except musicbrainzngs.ResponseError:
-        return lookup_ctdb_disc(toc)
+        return None
     except musicbrainzngs.NetworkError:
-        return lookup_ctdb_disc(toc)
+        return None
 
     release = None
     if "disc" in result and result["disc"].get("release-list"):
@@ -84,7 +97,7 @@ def lookup_disc(discid_str: str, toc: str | None = None) -> Optional[AlbumInfo]:
         return info
 
     if not release:
-        return lookup_ctdb_disc(toc)
+        return None
     return _release_to_album(release, discid_str)
 
 
@@ -93,8 +106,13 @@ def lookup_disc_with_fallback(discid_str: str, toc: str | None = None) -> Option
     return lookup_disc(discid_str, toc)
 
 
-def lookup_ctdb_disc(toc: str | None) -> Optional[AlbumInfo]:
-    """Look up album metadata through the CUETools Database metadata endpoint."""
+def lookup_ctdb_disc(toc: str | None, *, fuzzy: bool = False) -> Optional[AlbumInfo]:
+    """Look up album metadata through the CUETools Database metadata endpoint.
+
+    CTDB fuzzy matches may describe a similar, but not identical, disc TOC.
+    Keep the default lookup exact so CTDB metadata cannot mask an exact
+    MusicBrainz disc ID resolution elsewhere in the automatic metadata flow.
+    """
     ctdb_toc = _musicbrainz_toc_to_ctdb_toc(toc)
     if not ctdb_toc:
         return None
@@ -108,7 +126,7 @@ def lookup_ctdb_disc(toc: str | None) -> Optional[AlbumInfo]:
                 "version": "3",
                 "ctdb": "0",
                 "metadata": "extensive",
-                "fuzzy": "1",
+                "fuzzy": "1" if fuzzy else "0",
                 "toc": ctdb_toc,
             },
             headers={"User-Agent": user_agent},

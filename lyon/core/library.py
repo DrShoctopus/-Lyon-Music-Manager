@@ -54,6 +54,8 @@ class Track:
     year: int
     genre: str
     duration: float
+    bitrate: int = 0
+    samplerate: int = 0
     artwork_path: str | None = None
 
     @property
@@ -234,6 +236,8 @@ def _row_to_track(r: sqlite3.Row) -> Track:
         year=r["year"] or 0,
         genre=r["genre"] or "",
         duration=r["duration"] or 0.0,
+        bitrate=r["bitrate"] or 0,
+        samplerate=r["samplerate"] or 0,
         artwork_path=r["artwork_path"],
     )
 
