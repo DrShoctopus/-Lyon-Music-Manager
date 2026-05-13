@@ -705,7 +705,7 @@ def _lastfm_artwork_url(images: list) -> str:
 
 
 def _musicbrainz_toc_to_ctdb_toc(toc: str | None) -> str:
-    """Convert a MusicBrainz TOC string into CTDB's colon-delimited offsets."""
+    """Convert a MusicBrainz TOC string into CTDB's colon-delimited layout."""
     if not toc:
         return ""
     try:
@@ -721,9 +721,10 @@ def _musicbrainz_toc_to_ctdb_toc(toc: str | None) -> str:
     if first_track != 1 or track_count < 1 or len(offsets) < track_count:
         return ""
 
-    sector_zero = offsets[0]
     ctdb_offsets = offsets[:track_count] + [leadout]
-    return ":".join(str(offset - sector_zero) for offset in ctdb_offsets)
+    if any(offset < 150 for offset in ctdb_offsets):
+        return ""
+    return ":".join(str(offset - 150) for offset in ctdb_offsets)
 
 
 def _ctdb_album_score(info: AlbumInfo) -> tuple[int, int, int]:
