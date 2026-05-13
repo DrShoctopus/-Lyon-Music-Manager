@@ -27,8 +27,8 @@ The application version is defined in `lyon/__init__.py`.
 
 ## Current Capabilities
 
-- **Sea lion startup branding** with a PySide6-drawn glossy app icon and short
-  splash screen at launch.
+- **Sea lion startup branding** using checked-in app icon and splash screen
+  images from `docs/brand/`.
 - **Windows Media Player-style shell** with a dark glossy theme, tabbed
   navigation, status messages, Settings access, and a persistent transport bar.
 - **Library management** backed by SQLite in the user's app-data directory. The
@@ -258,9 +258,9 @@ lyon/core/playback_backend.py   libVLC playback backend and Qt Multimedia fallba
 lyon/core/ripper.py             ffmpeg-backed CD-to-FLAC worker
 lyon/core/settings.py           Settings defaults, persistence, bin lookup
 lyon/core/tagger.py             FLAC/Vorbis comment and cover-art writer
-lyon/ui/branding.py             Sea lion app icon and startup splash drawing
+lyon/ui/branding.py             Sea lion app icon and startup splash image loading
 lyon/ui/                        Main window, tabs, dialogs, styles, widgets
-docs/brand/                     README branding artwork
+docs/brand/                     README, app icon, and splash branding artwork
 build/lyon.spec                 PyInstaller build definition
 docs/BUILD.md                   Windows build guide
 scripts/build-windows.ps1       End-to-end Windows build script
