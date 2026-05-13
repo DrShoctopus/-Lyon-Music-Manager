@@ -61,6 +61,10 @@ which trades faster startup for a slower first launch.
 
 ## Troubleshooting
 
+Open **Help > Runtime Diagnostics** in Lyon to check whether ffmpeg,
+libdiscid/discid, VLC/libVLC, and Qt WebEngine are available in the current
+source or packaged environment before troubleshooting individual features.
+
 - **"ffmpeg not found"** — check that `bin\ffmpeg.exe` exists, or install
   ffmpeg system-wide and add to PATH.
 - **CD not detected** — confirm `bin\libdiscid.dll` exists. The app uses

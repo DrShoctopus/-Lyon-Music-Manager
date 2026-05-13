@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
 from ..core import cd_detect
 from ..core.library import Library
 from ..core.metadata import AlbumInfo, TrackInfo, fetch_artwork, lookup_disc, search_album
-from ..core.ripper import RipRequest, Ripper, target_file, target_folder
+from ..core.ripper import RipRequest, Ripper, target_file, unique_target_folder
 from ..core.settings import Settings
 from .widgets import cover_pixmap
 
@@ -411,7 +411,7 @@ class RipperView(QWidget):
             album=self.album_edit.text().strip() or "Unknown Album",
             date=self.year_edit.text().strip(),
         )
-        folder = target_folder(self.settings, album)
+        folder = unique_target_folder(self.settings, album)
         self.dest_label.setText(f"Will save to: {folder}")
 
     # ------------------------------------------------------------------ ripping
@@ -427,7 +427,7 @@ class RipperView(QWidget):
             QMessageBox.information(self, "No Tracks", "No tracks are available to rip.")
             return
 
-        folder = target_folder(self.settings, album)
+        folder = unique_target_folder(self.settings, album)
         existing = [target_file(folder, tr, len(album.tracks)) for tr in album.tracks]
         existing = [p for p in existing if p.exists()]
         if existing:
@@ -446,7 +446,7 @@ class RipperView(QWidget):
                 self.status_label.setText("Rip cancelled before overwriting existing files.")
                 return
 
-        folder = target_folder(self.settings, album, create=True)
+        folder = unique_target_folder(self.settings, album, create=True)
         self.start_btn.setEnabled(False)
         self.cancel_btn.setEnabled(True)
         self.detect_btn.setEnabled(False)

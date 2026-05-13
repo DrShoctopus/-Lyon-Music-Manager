@@ -102,3 +102,68 @@ def test_equalizer_is_reapplied_on_track_load():
     assert backend.sources == ["C:/Music/test.flac"]
     assert backend.play_count == 1
     assert backend.equalizer_calls[-1] == (True, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+
+
+def test_queue_items_can_move_and_remove_without_losing_current_track():
+    backend = FakeBackend()
+    player = Player(backend=backend)
+    tracks = [_track("C:/Music/one.flac"), _track("C:/Music/two.flac"), _track("C:/Music/three.flac")]
+
+    player.set_queue(tracks, 1)
+    player.move_queue_item(1, 0)
+
+    assert [track.path for track in player.queue()] == [
+        "C:/Music/two.flac",
+        "C:/Music/one.flac",
+        "C:/Music/three.flac",
+    ]
+    assert player.current_index() == 0
+    assert player.current().path == "C:/Music/two.flac"
+
+    player.remove_queue_index(1)
+
+    assert [track.path for track in player.queue()] == ["C:/Music/two.flac", "C:/Music/three.flac"]
+    assert player.current_index() == 0
+
+
+def test_clear_queue_stops_playback_and_clears_current_track():
+    backend = FakeBackend()
+    player = Player(backend=backend)
+    player.set_queue([_track("C:/Music/one.flac")])
+
+    player.clear_queue()
+
+    assert player.queue() == []
+    assert player.current() is None
+    assert player.current_index() == -1
+    assert not backend.is_playing()
+
+
+def test_removing_current_queue_item_while_stopped_does_not_autoplay_next_track():
+    backend = FakeBackend()
+    player = Player(backend=backend)
+    player.set_queue([_track("C:/Music/one.flac"), _track("C:/Music/two.flac")])
+    player.stop()
+    backend.play_count = 0
+
+    player.remove_queue_index(0)
+
+    assert [track.path for track in player.queue()] == ["C:/Music/two.flac"]
+    assert player.current_index() == -1
+    assert player.current() is None
+    assert backend.play_count == 0
+    assert not backend.is_playing()
+
+
+def test_removing_current_queue_item_while_playing_advances_to_next_track():
+    backend = FakeBackend()
+    player = Player(backend=backend)
+    player.set_queue([_track("C:/Music/one.flac"), _track("C:/Music/two.flac")])
+
+    player.remove_queue_index(0)
+
+    assert [track.path for track in player.queue()] == ["C:/Music/two.flac"]
+    assert player.current_index() == 0
+    assert player.current().path == "C:/Music/two.flac"
+    assert backend.sources[-1] == "C:/Music/two.flac"
+    assert backend.is_playing()

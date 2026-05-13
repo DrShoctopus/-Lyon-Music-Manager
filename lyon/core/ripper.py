@@ -78,14 +78,61 @@ def target_folder(settings: Settings, album: AlbumInfo, create: bool = False) ->
     actually intend to rip. The UI calls this on every keystroke to
     preview the path, which is why we never mkdir on the preview path.
     """
+    folder = _album_folder_base(settings, album)
+    if create:
+        folder.mkdir(parents=True, exist_ok=True)
+    return folder
+
+
+def unique_target_folder(settings: Settings, album: AlbumInfo, create: bool = False) -> Path:
+    """Return a safe rip folder, suffixing repeated unknown albums.
+
+    Known albums keep their stable destination so the existing overwrite
+    confirmation can protect deliberate re-rips. Unknown albums do not have a
+    reliable identity, so a second unknown disc should land in a new folder
+    instead of overwriting the first unknown rip.
+    """
+    base = target_folder(settings, album)
+    folder = base
+    if _album_needs_unique_unknown_folder(album):
+        folder = _first_available_unknown_album_folder(base)
+    if create:
+        folder.mkdir(parents=True, exist_ok=True)
+    return folder
+
+
+def _album_folder_base(settings: Settings, album: AlbumInfo) -> Path:
     artist = safe_path_component(album.artist or "Unknown Artist")
     name = safe_path_component(album.album or "Unknown Album")
     if album.year:
         name = f"{album.year} - {name}"
-    folder = Path(settings.music_root) / artist / name
-    if create:
-        folder.mkdir(parents=True, exist_ok=True)
-    return folder
+    return Path(settings.music_root) / artist / name
+
+
+def _album_needs_unique_unknown_folder(album: AlbumInfo) -> bool:
+    return safe_path_component(album.album or "Unknown Album") == "Unknown Album"
+
+
+def _first_available_unknown_album_folder(base: Path) -> Path:
+    if not _unknown_album_folder_has_rip_content(base):
+        return base
+
+    for number in range(2, 1000):
+        candidate = base.with_name(f"{base.name} ({number})")
+        if not _unknown_album_folder_has_rip_content(candidate):
+            return candidate
+    raise RuntimeError(f"Could not find an available unknown album folder under {base.parent}")
+
+
+def _unknown_album_folder_has_rip_content(folder: Path) -> bool:
+    if not folder.exists():
+        return False
+    if not folder.is_dir():
+        return True
+    try:
+        return any(child.is_file() for child in folder.iterdir())
+    except OSError:
+        return True
 
 
 def target_file(folder: Path, track: TrackInfo, total: int) -> Path:

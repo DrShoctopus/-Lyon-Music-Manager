@@ -52,6 +52,22 @@ def _is_custom_curve_name(name: str) -> bool:
     return bool(name) and name not in RESERVED_EQ_CURVE_NAMES
 
 
+def normalize_library_paths(paths: object) -> list[str]:
+    """Return non-empty library paths without exact duplicates, preserving order."""
+    if not isinstance(paths, list | tuple):
+        return []
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in paths:
+        path = str(value).strip()
+        if not path or path in seen:
+            continue
+        normalized.append(path)
+        seen.add(path)
+    return normalized
+
+
 @dataclass
 class Settings:
     music_root: str = field(default_factory=lambda: str(_default_music_root()))
@@ -73,8 +89,10 @@ class Settings:
     equalizer_bands: list[int] = field(default_factory=flat_equalizer_bands)
     equalizer_curve_name: str = DEFAULT_EQ_CURVE_NAME
     equalizer_custom_curves: dict[str, list[int]] = field(default_factory=dict)
+    first_run_completed: bool = False
 
     def __post_init__(self) -> None:
+        self.library_paths = normalize_library_paths(self.library_paths)
         self.equalizer_bands = normalize_equalizer_bands(self.equalizer_bands)
         custom_curves = self.equalizer_custom_curves if isinstance(self.equalizer_custom_curves, dict) else {}
         self.equalizer_custom_curves = {

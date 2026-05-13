@@ -32,15 +32,19 @@ The application version is defined in `lyon/__init__.py`.
   images from `docs/brand/`.
 - **Windows Media Player-style shell** with a dark glossy theme, tabbed
   navigation, status messages, Settings access, and a persistent transport bar.
+- **First-run setup and runtime diagnostics** to choose core folders and check
+  ffmpeg, libdiscid/discid, VLC/libVLC, and Qt WebEngine availability.
 - **Library management** backed by SQLite in the user's app-data directory. The
   scanner imports `.flac`, `.mp3`, `.m4a`, `.aac`, `.ogg`, `.opus`, `.wav`, and
   `.wma` files and reads tags with Mutagen.
+- **Library folder management** from Settings for reviewing and changing the
+  folders Lyon scans.
 - **Library browsing and search** by artist, album, and track, including
   fallbacks for blank metadata such as `Unknown Artist` and `Unknown Album`.
 - **Playback queue** with a libVLC-backed local-audio engine and Qt Multimedia
   fallback, including play/pause, previous, next, seek/scrub, volume, mute,
-  shuffle, repeat-all, repeat-one, enqueue, and a Now Playing view with cover
-  art.
+  shuffle, repeat-all, repeat-one, enqueue, an editable Queue dialog, playback
+  shortcuts, and a Now Playing view with cover art.
 - **Library playback polish** including enqueue feedback, current-track
   highlighting, selected-track scrolling, and track tooltips with artist, album,
   time, and file type.
@@ -57,7 +61,9 @@ The application version is defined in `lyon/__init__.py`.
   compression settings, Vorbis comments, embedded cover art, overwrite
   confirmation, cancellation, and optional disc eject after a successful rip.
 - **Automatic rip organization** under the configured music root using
-  `<Artist>/<Year> - <Album>/<Track> - <Title>.flac`.
+  `<Artist>/<Year> - <Album>/<Track> - <Title>.flac`, with repeated unknown
+  album rips placed into numbered folders to avoid overwriting earlier unknown
+  discs.
 - **In-app YouTube tab** using Qt WebEngine when `PySide6-Addons` is installed,
   with search/URL navigation and automatic video pause when leaving the tab.
 - **Windows packaging** through PyInstaller, plus a PowerShell build script and a

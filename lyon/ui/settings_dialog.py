@@ -5,10 +5,10 @@ from dataclasses import replace
 
 from PySide6.QtWidgets import (
     QCheckBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QHBoxLayout,
-    QLineEdit, QPushButton, QSpinBox, QVBoxLayout, QWidget,
+    QLineEdit, QListWidget, QPushButton, QSpinBox, QVBoxLayout, QWidget,
 )
 
-from ..core.settings import Settings
+from ..core.settings import Settings, normalize_library_paths
 
 
 class SettingsDialog(QDialog):
@@ -17,6 +17,7 @@ class SettingsDialog(QDialog):
         self.setWindowTitle("Settings")
         self.resize(520, 360)
         self.result_settings = replace(settings)
+        self.result_settings.library_paths = normalize_library_paths(settings.library_paths)
 
         form = QFormLayout()
 
@@ -29,6 +30,25 @@ class SettingsDialog(QDialog):
         root_row.addWidget(browse)
         root_w = QWidget(); root_w.setLayout(root_row)
         form.addRow("Music folder:", root_w)
+
+        # Library folders
+        folders_box = QVBoxLayout()
+        self.library_paths = QListWidget()
+        self.library_paths.setMinimumHeight(84)
+        for folder in normalize_library_paths(settings.library_paths):
+            self.library_paths.addItem(folder)
+        folder_buttons = QHBoxLayout()
+        add_library_folder = QPushButton("Add...")
+        remove_library_folder = QPushButton("Remove")
+        add_library_folder.clicked.connect(self._add_library_folder)
+        remove_library_folder.clicked.connect(self._remove_library_folder)
+        folder_buttons.addWidget(add_library_folder)
+        folder_buttons.addWidget(remove_library_folder)
+        folder_buttons.addStretch(1)
+        folders_box.addWidget(self.library_paths)
+        folders_box.addLayout(folder_buttons)
+        folders_w = QWidget(); folders_w.setLayout(folders_box)
+        form.addRow("Library folders:", folders_w)
 
         # FLAC compression
         self.compression = QSpinBox()
@@ -82,10 +102,26 @@ class SettingsDialog(QDialog):
         if d:
             self.root_edit.setText(d)
 
+    def _add_library_folder(self) -> None:
+        d = QFileDialog.getExistingDirectory(self, "Add library folder", self.root_edit.text())
+        if d and not self._library_folder_exists(d):
+            self.library_paths.addItem(d)
+
+    def _remove_library_folder(self) -> None:
+        for item in self.library_paths.selectedItems():
+            self.library_paths.takeItem(self.library_paths.row(item))
+
+    def _library_folder_exists(self, folder: str) -> bool:
+        return any(self.library_paths.item(row).text() == folder for row in range(self.library_paths.count()))
+
     def _accept(self) -> None:
         self.result_settings.music_root = self.root_edit.text().strip() or self.result_settings.music_root
         self.result_settings.flac_compression = self.compression.value()
         self.result_settings.cd_drive = self.drive.text().strip()
+        self.result_settings.library_paths = normalize_library_paths([
+            self.library_paths.item(row).text()
+            for row in range(self.library_paths.count())
+        ])
         self.result_settings.eject_after_rip = self.eject.isChecked()
         self.result_settings.auto_lookup_metadata = self.lookup.isChecked()
         self.result_settings.cuetools_db_metadata_enabled = self.cuetools_db.isChecked()

@@ -59,6 +59,59 @@ class Player(QObject):
     def queue(self) -> list[Track]:
         return list(self._queue)
 
+    def current_index(self) -> int:
+        return self._index
+
+    def clear_queue(self) -> None:
+        if not self._queue:
+            return
+        self.stop()
+        self._queue = []
+        self._index = -1
+        self.queue_changed.emit()
+        self.track_changed.emit(None)
+
+    def remove_queue_index(self, idx: int) -> None:
+        if not (0 <= idx < len(self._queue)):
+            return
+        removing_current = idx == self._index
+        was_playing = self.is_playing()
+        del self._queue[idx]
+        if not self._queue:
+            self.stop()
+            self._index = -1
+            self.queue_changed.emit()
+            self.track_changed.emit(None)
+            return
+        if idx < self._index:
+            self._index -= 1
+        elif removing_current and was_playing:
+            self._index = min(idx, len(self._queue) - 1)
+            self.play_index(self._index)
+            self.queue_changed.emit()
+            return
+        elif removing_current:
+            self.stop()
+            self._index = -1
+            self.track_changed.emit(None)
+        self.queue_changed.emit()
+
+    def move_queue_item(self, old_index: int, new_index: int) -> None:
+        if not (0 <= old_index < len(self._queue)) or not self._queue:
+            return
+        new_index = max(0, min(new_index, len(self._queue) - 1))
+        if old_index == new_index:
+            return
+        item = self._queue.pop(old_index)
+        self._queue.insert(new_index, item)
+        if self._index == old_index:
+            self._index = new_index
+        elif old_index < self._index <= new_index:
+            self._index -= 1
+        elif new_index <= self._index < old_index:
+            self._index += 1
+        self.queue_changed.emit()
+
     def current(self) -> Optional[Track]:
         if 0 <= self._index < len(self._queue):
             return self._queue[self._index]

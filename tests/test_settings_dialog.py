@@ -30,3 +30,13 @@ def test_settings_dialog_toggles_metadata_diagnostics(app):
     dialog._accept()
 
     assert dialog.result_settings.metadata_diagnostics_enabled is True
+
+
+def test_settings_dialog_persists_library_paths_without_duplicates(app):
+    dialog = SettingsDialog(Settings(library_paths=["/music/one"]), None)
+
+    dialog.library_paths.addItem("/music/two")
+    dialog.library_paths.addItem("/music/two")
+    dialog._accept()
+
+    assert dialog.result_settings.library_paths == ["/music/one", "/music/two"]
