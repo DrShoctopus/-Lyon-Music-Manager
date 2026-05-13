@@ -131,7 +131,7 @@ def _read_windows_ctdb_entries(drive: str) -> List[_CtdbTocEntry]:
 
 def _windows_toc_entries_from_handle(k32, handle) -> List[_CtdbTocEntry]:
     IOCTL_CDROM_READ_TOC_EX = 0x00024054
-    CDROM_READ_TOC_EX_FORMAT_FULL_TOC = 0x02
+    CDROM_READ_TOC_EX_FORMAT_TOC = 0x00
 
     class CDROM_READ_TOC_EX(ctypes.Structure):
         _fields_ = [
@@ -144,7 +144,7 @@ def _windows_toc_entries_from_handle(k32, handle) -> List[_CtdbTocEntry]:
         ]
 
     inbuf = CDROM_READ_TOC_EX()
-    inbuf.Format = CDROM_READ_TOC_EX_FORMAT_FULL_TOC
+    inbuf.Format = CDROM_READ_TOC_EX_FORMAT_TOC
     inbuf.Msf = 0
     inbuf.SessionTrack = 1
     outbuf = ctypes.create_string_buffer(4096)
@@ -169,16 +169,15 @@ def _ctdb_entries_from_windows_toc(raw: bytes) -> List[_CtdbTocEntry]:
         return []
     descriptors = raw[4:]
     entries: list[_CtdbTocEntry] = []
-    for idx in range(0, len(descriptors) - 10, 11):
-        desc = descriptors[idx : idx + 11]
-        point = desc[3]
-        control_adr = desc[5]
-        track_number = desc[6]
-        offset = int.from_bytes(desc[7:11], "big", signed=False)
-        is_leadout = point == 0xA2
-        if point >= 0xA0 and not is_leadout:
+    for idx in range(0, len(descriptors) - 7, 8):
+        desc = descriptors[idx : idx + 8]
+        control_adr = desc[1]
+        track_number = desc[2]
+        offset = int.from_bytes(desc[4:8], "big", signed=True)
+        is_leadout = track_number == 0xAA
+        if not is_leadout and track_number == 0:
             continue
-        if not is_leadout and (track_number == 0 or offset <= 0):
+        if offset < 0:
             continue
         control = (control_adr & 0x0F) | (control_adr >> 4)
         is_audio = not bool(control & 0x04)
