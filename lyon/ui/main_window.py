@@ -93,7 +93,7 @@ class MainWindow(QMainWindow):
         settings_btn.setObjectName("navTab")
         settings_btn.clicked.connect(self.open_settings)
         tlayout.addWidget(settings_btn)
-        equalizer_btn = QPushButton("6 Band EQ")
+        equalizer_btn = QPushButton("10 Band EQ")
         equalizer_btn.setObjectName("navTab")
         equalizer_btn.clicked.connect(self.open_equalizer)
         tlayout.addWidget(equalizer_btn)
@@ -268,6 +268,8 @@ class MainWindow(QMainWindow):
     def _apply_equalizer_settings(self, settings: Settings) -> None:
         self.settings.equalizer_enabled = settings.equalizer_enabled
         self.settings.equalizer_bands = list(settings.equalizer_bands)
+        self.settings.equalizer_curve_name = settings.equalizer_curve_name
+        self.settings.equalizer_custom_curves = dict(settings.equalizer_custom_curves)
         self.player.set_equalizer(self.settings.equalizer_enabled, self.settings.equalizer_bands)
         self.statusBar().showMessage("Equalizer settings saved.", 3000)
 

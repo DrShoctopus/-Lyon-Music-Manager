@@ -7,7 +7,8 @@ from typing import Optional
 from PySide6.QtCore import QObject, Signal
 
 from .library import Track
-from .playback_backend import PlaybackBackend, create_playback_backend, normalize_equalizer_bands
+from .equalizer import flat_equalizer_bands, normalize_equalizer_bands
+from .playback_backend import PlaybackBackend, create_playback_backend
 
 
 class RepeatMode(Enum):
@@ -34,7 +35,7 @@ class Player(QObject):
         self._shuffle = False
         self._repeat = RepeatMode.OFF
         self._equalizer_enabled = False
-        self._equalizer_bands = [0, 0, 0, 0, 0, 0]
+        self._equalizer_bands = flat_equalizer_bands()
 
         self._backend.position_changed.connect(self.position_changed.emit)
         self._backend.state_changed.connect(self.state_changed.emit)
@@ -127,7 +128,7 @@ class Player(QObject):
         return self._backend.volume()
 
     def set_equalizer(self, enabled: bool, bands: list[int]) -> None:
-        """Store and apply the active six-band equalizer curve."""
+        """Store and apply the active ten-band equalizer curve."""
         self._equalizer_enabled = bool(enabled)
         self._equalizer_bands = normalize_equalizer_bands(bands)
         self._backend.apply_equalizer(self._equalizer_enabled, self._equalizer_bands)

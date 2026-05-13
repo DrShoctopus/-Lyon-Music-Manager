@@ -7,6 +7,14 @@ import sys
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
 
+from .equalizer import (
+    DEFAULT_EQ_CURVE_NAME,
+    RESERVED_EQ_CURVE_NAMES,
+    UNSAVED_EQ_CURVE_NAME,
+    flat_equalizer_bands,
+    normalize_equalizer_bands,
+)
+
 
 def _default_music_root() -> Path:
     if sys.platform == "win32":
@@ -40,6 +48,10 @@ def _app_version() -> str:
     return __version__
 
 
+def _is_custom_curve_name(name: str) -> bool:
+    return bool(name) and name not in RESERVED_EQ_CURVE_NAMES
+
+
 @dataclass
 class Settings:
     music_root: str = field(default_factory=lambda: str(_default_music_root()))
@@ -57,7 +69,25 @@ class Settings:
     last_volume: int = 80
     library_paths: list[str] = field(default_factory=list)
     equalizer_enabled: bool = False
-    equalizer_bands: list[int] = field(default_factory=lambda: [0, 0, 0, 0, 0, 0])
+    equalizer_bands: list[int] = field(default_factory=flat_equalizer_bands)
+    equalizer_curve_name: str = DEFAULT_EQ_CURVE_NAME
+    equalizer_custom_curves: dict[str, list[int]] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.equalizer_bands = normalize_equalizer_bands(self.equalizer_bands)
+        custom_curves = self.equalizer_custom_curves if isinstance(self.equalizer_custom_curves, dict) else {}
+        self.equalizer_custom_curves = {
+            str(name).strip(): normalize_equalizer_bands(curve)
+            for name, curve in custom_curves.items()
+            if _is_custom_curve_name(str(name).strip())
+        }
+        self.equalizer_curve_name = str(self.equalizer_curve_name or DEFAULT_EQ_CURVE_NAME).strip()
+        custom_curve_selected = self.equalizer_curve_name in self.equalizer_custom_curves
+        built_in_curve_selected = self.equalizer_curve_name in RESERVED_EQ_CURVE_NAMES
+        if self.equalizer_curve_name == UNSAVED_EQ_CURVE_NAME or not (
+            custom_curve_selected or built_in_curve_selected
+        ):
+            self.equalizer_curve_name = DEFAULT_EQ_CURVE_NAME
 
     @classmethod
     def load(cls) -> "Settings":
@@ -69,7 +99,7 @@ class Settings:
                 known = {f for f in cls.__dataclass_fields__}
                 data = {k: v for k, v in data.items() if k in known}
                 return cls(**data)
-            except (json.JSONDecodeError, TypeError):
+            except (json.JSONDecodeError, TypeError, ValueError):
                 pass
         return cls()
 
