@@ -32,9 +32,13 @@ The application version is defined in `lyon/__init__.py`.
   images from `docs/brand/`.
 - **Windows Media Player-style shell** with a dark glossy theme, tabbed
   navigation, status messages, Settings access, and a persistent transport bar.
+- **First-run setup and runtime diagnostics** to choose core folders and check
+  ffmpeg, libdiscid/discid, VLC/libVLC, and Qt WebEngine availability.
 - **Library management** backed by SQLite in the user's app-data directory. The
   scanner imports `.flac`, `.mp3`, `.m4a`, `.aac`, `.ogg`, `.opus`, `.wav`, and
   `.wma` files and reads tags with Mutagen.
+- **Library folder management** from Settings for reviewing and changing the
+  folders Lyon scans.
 - **Library browsing and search** by artist, album, and track, including
   fallbacks for blank metadata such as `Unknown Artist` and `Unknown Album`.
 - **Playback queue** with a libVLC-backed local-audio engine and Qt Multimedia

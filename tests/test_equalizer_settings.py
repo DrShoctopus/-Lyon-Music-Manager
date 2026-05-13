@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from lyon.core.equalizer import BUILTIN_EQ_CURVES, EQ_BAND_COUNT, normalize_equalizer_bands
-from lyon.core.settings import Settings
+from lyon.core.settings import Settings, normalize_library_paths
 
 
 def test_equalizer_defaults_to_ten_flat_bands_and_five_presets():
@@ -47,3 +47,15 @@ def test_settings_resets_stale_selected_custom_curve_name():
     settings = Settings(equalizer_curve_name="Missing", equalizer_custom_curves={"Saved": [1]})
 
     assert settings.equalizer_curve_name == "Flat"
+
+
+def test_library_paths_are_normalized_without_duplicates():
+    assert normalize_library_paths(["", "  /music/a  ", "/music/a", "/music/b"]) == [
+        "/music/a",
+        "/music/b",
+    ]
+    assert normalize_library_paths("/music/a") == []
+
+    settings = Settings(library_paths=["/music/a", "/music/a", " /music/b "])
+
+    assert settings.library_paths == ["/music/a", "/music/b"]
