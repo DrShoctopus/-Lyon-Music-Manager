@@ -1,3 +1,3 @@
-"""Lyon Music Manager - Windows CD ripper, library and player."""
+"""Lyon Media Manager - Windows media library, CD ripper, and player."""
 __version__ = "0.3.0"
-__app_name__ = "Lyon Music Manager"
+__app_name__ = "Lyon Media Manager"
