@@ -1,7 +1,7 @@
 """Top-level window with WMP-style title, tab bar, stacked views."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QButtonGroup, QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow,
@@ -12,7 +12,9 @@ from .. import __app_name__, __version__
 from ..core.library import Library
 from ..core.player import Player
 from ..core.settings import Settings
+from .diagnostics_dialog import DiagnosticsDialog
 from .equalizer_dialog import EqualizerDialog
+from .first_run_dialog import FirstRunDialog
 from .library_view import LibraryView
 from .now_playing import NowPlayingView, TransportBar
 from .ripper_view import RipperView
@@ -150,12 +152,15 @@ class MainWindow(QMainWindow):
         self.ripper_view.rip_completed.connect(self.library_view.refresh)
         self.ripper_view.log.connect(lambda m: sb.showMessage(m, 4000))
 
-        # Initial scan of saved roots.
-        if self.settings.library_paths:
+        # Initial scan of saved roots. First-run setup owns this scan until the
+        # user confirms or skips setup, avoiding duplicate startup scans after
+        # upgrading older settings files that do not have first_run_completed.
+        if self.settings.library_paths and self.settings.first_run_completed:
             self._start_scan(self.settings.library_paths, "Scanned")
 
         # Menu
         self._build_menu()
+        QTimer.singleShot(0, self._maybe_show_first_run)
 
     # ------------------------------------------------------------------ menu
     def _build_menu(self) -> None:
@@ -170,6 +175,7 @@ class MainWindow(QMainWindow):
         file_menu.addAction(QAction("Exit", self, triggered=self.close))
 
         help_menu = m.addMenu("&Help")
+        help_menu.addAction(QAction("Runtime Diagnostics", self, triggered=self.show_diagnostics))
         help_menu.addAction(QAction("About", self, triggered=self.show_about))
 
     # ------------------------------------------------------------------ tabs
@@ -247,13 +253,31 @@ class MainWindow(QMainWindow):
 
     def open_settings(self) -> None:
         from .settings_dialog import SettingsDialog
+        old_paths = list(self.settings.library_paths)
         dlg = SettingsDialog(self.settings, self)
         if dlg.exec():
             self.settings = dlg.result_settings
             self.settings.save()
             self.ripper_view.apply_settings(self.settings)
             self.player.set_equalizer(self.settings.equalizer_enabled, self.settings.equalizer_bands)
+            if self.settings.library_paths != old_paths and self.settings.library_paths:
+                self._start_scan(self.settings.library_paths, "Scanned")
             self.statusBar().showMessage("Settings saved.", 3000)
+
+    def _maybe_show_first_run(self) -> None:
+        if self.settings.first_run_completed:
+            return
+        dlg = FirstRunDialog(self.settings, self)
+        if dlg.exec():
+            self.settings = dlg.result_settings
+            self.settings.save()
+            self.ripper_view.apply_settings(self.settings)
+            if self.settings.library_paths:
+                self._start_scan(self.settings.library_paths, "Scanned")
+            self.statusBar().showMessage("Setup saved.", 3000)
+
+    def show_diagnostics(self) -> None:
+        DiagnosticsDialog(parent=self).exec()
 
     def open_equalizer(self) -> None:
         if self._equalizer_dialog is None:
