@@ -1,25 +1,90 @@
-"""Disc detection helpers backed by libdiscid when available."""
+"""Optical drive detection and disc ID computation.
+
+Windows-only paths are guarded so the module can be imported on any platform
+during development. At runtime on Windows we use ctypes to enumerate drives,
+read a CUETools-compatible TOC layout, and call libdiscid when available.
+"""
 from __future__ import annotations
 
-from dataclasses import dataclass
 import ctypes
 from ctypes import wintypes
-from pathlib import Path
-from typing import List, Optional
+import importlib
+import importlib.util
+import os
+import string
+import sys
+from dataclasses import dataclass, field
+
+from .settings import bundled_bin_dir
+
+DRIVE_CDROM = 5  # GetDriveTypeW return value
+GENERIC_READ = 0x80000000
+FILE_SHARE_READ = 0x00000001
+FILE_SHARE_WRITE = 0x00000002
+OPEN_EXISTING = 3
+INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+IOCTL_CDROM_READ_TOC_EX = 0x00024054
+CDROM_TOC_SIZE = 804
+CDROM_TOC_HEADER_SIZE = 4
+CDROM_TOC_TRACK_DATA_SIZE = 8
+CDROM_LEADOUT_TRACK = 0xAA
+
+
+def _bind_winapi() -> None:
+    """Bind argtypes/restype on the few Windows APIs we use via ctypes."""
+    if sys.platform != "win32":
+        return
+    k32 = ctypes.windll.kernel32
+    k32.GetLogicalDrives.argtypes = []
+    k32.GetLogicalDrives.restype = ctypes.c_ulong
+    k32.GetDriveTypeW.argtypes = [ctypes.c_wchar_p]
+    k32.GetDriveTypeW.restype = ctypes.c_uint
+    k32.CreateFileW.argtypes = [
+        ctypes.c_wchar_p,
+        ctypes.c_uint32,
+        ctypes.c_uint32,
+        ctypes.c_void_p,
+        ctypes.c_uint32,
+        ctypes.c_uint32,
+        ctypes.c_void_p,
+    ]
+    k32.CreateFileW.restype = wintypes.HANDLE
+    k32.DeviceIoControl.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_uint32,
+        ctypes.c_void_p,
+        ctypes.c_uint32,
+        ctypes.c_void_p,
+        ctypes.c_uint32,
+        ctypes.POINTER(ctypes.c_uint32),
+        ctypes.c_void_p,
+    ]
+    k32.DeviceIoControl.restype = wintypes.BOOL
+    k32.CloseHandle.argtypes = [wintypes.HANDLE]
+    k32.CloseHandle.restype = wintypes.BOOL
+    winmm = ctypes.windll.winmm
+    winmm.mciSendStringW.argtypes = [
+        ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint, ctypes.c_void_p,
+    ]
+    winmm.mciSendStringW.restype = ctypes.c_uint
+
+
+_bind_winapi()
 
 
 @dataclass
 class DiscToc:
-    drive: str
-    discid: str
-    toc_string: str
-    first_track: int
-    last_track: int
-    sectors: int
-    track_offsets: List[int]
-    track_count: int
+    drive: str                  # e.g. "D:"
+    discid: str = ""
+    freedb_id: str = ""
+    toc_string: str = ""        # MusicBrainz TOC string.
+    track_count: int = 0
+    track_offsets: list[int] = field(default_factory=list)
+    sectors: int = 0
+    ctdb_toc_string: str = ""   # CUETools layout, including data tracks when available.
+    first_track: int = 1
+    last_track: int = 0
     mcn: str | None = None
-    ctdb_toc_string: str | None = None
 
 
 @dataclass(frozen=True)
@@ -30,109 +95,138 @@ class _CtdbTocEntry:
     is_leadout: bool = False
 
 
-def read_disc(drive: str | None = None) -> Optional[DiscToc]:
-    """Read a disc TOC from ``drive``.
+def list_cd_drives() -> list[str]:
+    """Return a list of optical drive letters with media (best-effort)."""
+    if sys.platform != "win32":
+        return []
+    drives: list[str] = []
+    bitmask = ctypes.windll.kernel32.GetLogicalDrives()
+    for i, letter in enumerate(string.ascii_uppercase):
+        if bitmask & (1 << i):
+            root = f"{letter}:\\"
+            try:
+                kind = ctypes.windll.kernel32.GetDriveTypeW(root)
+            except OSError:
+                kind = 0
+            if kind == DRIVE_CDROM:
+                drives.append(f"{letter}:")
+    return drives
 
-    Returns ``None`` when no compatible disc reader is available or no disc is
-    present. On Windows, a CUETools-compatible raw TOC is also collected so
-    metadata lookups can fall back to CTDB's native layout format.
-    """
 
-    discid = _load_discid()
-    if drive is None:
-        drive = _default_drive()
-    if not drive:
+def has_audio_cd(drive: str) -> bool:
+    """True if the disc in `drive` looks like an audio CD."""
+    if sys.platform != "win32":
+        return False
+    try:
+        for entry in os.listdir(f"{drive}\\"):
+            if entry.lower().endswith(".cda"):
+                return True
+    except OSError:
+        return False
+    return False
+
+
+def read_disc(drive: str | None = None) -> DiscToc | None:
+    """Read the best available CD TOC identity for a drive."""
+    if sys.platform != "win32":
         return None
+    if drive is None:
+        drives = list_cd_drives()
+        if not drives:
+            return None
+        drive = drives[0]
 
     ctdb_entries = _read_windows_ctdb_entries(drive)
     ctdb_toc = _ctdb_toc_from_track_data(ctdb_entries)
     ctdb_fallback = _disc_toc_from_ctdb_entries(drive, ctdb_entries)
 
+    bin_dir = bundled_bin_dir()
+    if bin_dir.exists():
+        os.environ["PATH"] = str(bin_dir) + os.pathsep + os.environ.get("PATH", "")
+        try:
+            os.add_dll_directory(str(bin_dir))  # type: ignore[attr-defined]
+        except (AttributeError, OSError):
+            pass
+
+    discid = _load_discid()
     if discid is None:
         return ctdb_fallback
 
+    device = drive.rstrip("\\:") + ":"
     try:
-        disc = discid.read(drive, features=["mcn"])  # type: ignore[attr-defined]
+        d = discid.read(device, features=["mcn", "isrc"])
     except discid.DiscError:
         return ctdb_fallback
     except Exception:
         return ctdb_fallback
 
-    track_offsets = list(getattr(disc, "track_offsets", []) or [])
-    track_count = int(getattr(disc, "tracks", len(track_offsets)) or len(track_offsets))
-    first_track = int(getattr(disc, "first_track_num", 1) or 1)
-    last_track = int(getattr(disc, "last_track_num", first_track + track_count - 1) or track_count)
-    sectors = int(getattr(disc, "sectors", 0) or 0)
+    tracks = list(getattr(d, "tracks", []) or [])
     return DiscToc(
         drive=drive,
-        discid=str(getattr(disc, "id", "")),
-        toc_string=str(getattr(disc, "toc_string", "")),
-        first_track=first_track,
-        last_track=last_track,
-        sectors=sectors,
-        track_offsets=track_offsets,
-        track_count=track_count,
-        mcn=getattr(disc, "mcn", None),
+        discid=getattr(d, "id", "") or "",
+        freedb_id=getattr(d, "freedb_id", "") or "",
+        toc_string=getattr(d, "toc_string", "") or "",
+        track_count=len(tracks),
+        track_offsets=[int(getattr(track, "offset", 0) or 0) for track in tracks],
+        sectors=int(getattr(d, "sectors", 0) or 0),
         ctdb_toc_string=ctdb_toc,
+        first_track=int(getattr(d, "first_track_num", 1) or 1),
+        last_track=int(getattr(d, "last_track_num", len(tracks)) or len(tracks)),
+        mcn=getattr(d, "mcn", None),
     )
 
 
 def _load_discid():
+    if importlib.util.find_spec("discid") is None:
+        return None
     try:
-        import discid  # type: ignore
-
-        return discid
+        return importlib.import_module("discid")
     except Exception:
         return None
 
 
-def _default_drive() -> str | None:
-    for letter in "DEFGHIJKLMNOPQRSTUVWXYZ":
-        drive = f"{letter}:\\"
-        if Path(drive).exists():
-            return drive
-    return None
-
-
-def _read_windows_ctdb_toc(drive: str) -> str | None:
+def _read_windows_ctdb_toc(drive: str) -> str:
+    """Read the Windows LBA TOC and return a CUETools/CTDB layout string."""
     entries = _read_windows_ctdb_entries(drive)
     return _ctdb_toc_from_track_data(entries)
 
 
-def _read_windows_ctdb_entries(drive: str) -> List[_CtdbTocEntry]:
+def _read_windows_ctdb_entries(drive: str) -> list[_CtdbTocEntry]:
+    if sys.platform != "win32":
+        return []
     if not drive:
         return []
-    if not drive.startswith("\\\\.\\"):
-        device = "\\\\.\\" + drive.rstrip("\\/")
-    else:
-        device = drive.rstrip("\\/")
-    try:
-        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    except Exception:
-        return []
 
+    if drive.startswith("\\\\.\\"):
+        device_path = drive.rstrip("\\/")
+    else:
+        drive_letter = drive.rstrip("\\:")[:1]
+        if not drive_letter:
+            return []
+        device_path = f"\\\\.\\{drive_letter}:"
+
+    k32 = ctypes.windll.kernel32
     handle = k32.CreateFileW(
-        device,
-        0x80000000,  # GENERIC_READ
-        0x00000001 | 0x00000002,  # FILE_SHARE_READ | FILE_SHARE_WRITE
+        device_path,
+        GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
         None,
-        3,  # OPEN_EXISTING
+        OPEN_EXISTING,
         0,
         None,
     )
-    if handle == wintypes.HANDLE(-1).value:
+    if handle == INVALID_HANDLE_VALUE:
         return []
 
     try:
         return _windows_toc_entries_from_handle(k32, handle)
+    except OSError:
+        return []
     finally:
         k32.CloseHandle(handle)
 
 
-def _windows_toc_entries_from_handle(k32, handle) -> List[_CtdbTocEntry]:
-    IOCTL_CDROM_READ_TOC_EX = 0x00024054
-    CDROM_READ_TOC_EX_FORMAT_TOC = 0x00
-
+def _windows_toc_entries_from_handle(k32, handle) -> list[_CtdbTocEntry]:
     class CDROM_READ_TOC_EX(ctypes.Structure):
         _fields_ = [
             ("Format", ctypes.c_ubyte, 4),
@@ -143,44 +237,54 @@ def _windows_toc_entries_from_handle(k32, handle) -> List[_CtdbTocEntry]:
             ("Reserved3", ctypes.c_ubyte),
         ]
 
-    inbuf = CDROM_READ_TOC_EX()
-    inbuf.Format = CDROM_READ_TOC_EX_FORMAT_TOC
-    inbuf.Msf = 0
-    inbuf.SessionTrack = 1
-    outbuf = ctypes.create_string_buffer(4096)
-    returned = wintypes.DWORD()
+    request = CDROM_READ_TOC_EX()
+    request.Format = 0  # CDROM_READ_TOC_EX_FORMAT_TOC
+    request.Msf = 0  # LBA addressing, which matches CTDB's offset layout.
+    request.SessionTrack = 1
+    buffer = ctypes.create_string_buffer(CDROM_TOC_SIZE)
+    bytes_returned = ctypes.c_uint32(0)
     ok = k32.DeviceIoControl(
         handle,
         IOCTL_CDROM_READ_TOC_EX,
-        ctypes.byref(inbuf),
-        ctypes.sizeof(inbuf),
-        outbuf,
-        ctypes.sizeof(outbuf),
-        ctypes.byref(returned),
+        ctypes.byref(request),
+        ctypes.sizeof(request),
+        buffer,
+        ctypes.sizeof(buffer),
+        ctypes.byref(bytes_returned),
         None,
     )
-    if not ok or returned.value < 4:
+    if not ok:
         return []
-    return _ctdb_entries_from_windows_toc(outbuf.raw[: returned.value])
+    used = bytes_returned.value or ctypes.sizeof(buffer)
+    return _ctdb_entries_from_windows_toc(bytes(buffer.raw[:used]))
 
 
-def _ctdb_entries_from_windows_toc(raw: bytes) -> List[_CtdbTocEntry]:
-    if len(raw) < 4:
+def _ctdb_entries_from_windows_toc(raw: bytes) -> list[_CtdbTocEntry]:
+    if len(raw) < CDROM_TOC_HEADER_SIZE:
         return []
-    descriptors = raw[4:]
+
+    toc_length = int.from_bytes(raw[:2], "big", signed=False)
+    track_data_length = min(len(raw) - CDROM_TOC_HEADER_SIZE, max(0, toc_length - 2))
+    track_count = min(100, track_data_length // CDROM_TOC_TRACK_DATA_SIZE)
     entries: list[_CtdbTocEntry] = []
-    for idx in range(0, len(descriptors) - 7, 8):
-        desc = descriptors[idx : idx + 8]
-        control_adr = desc[1]
-        track_number = desc[2]
-        offset = int.from_bytes(desc[4:8], "big", signed=True)
-        is_leadout = track_number == 0xAA
+    for index in range(track_count):
+        start = CDROM_TOC_HEADER_SIZE + (index * CDROM_TOC_TRACK_DATA_SIZE)
+        end = start + CDROM_TOC_TRACK_DATA_SIZE
+        data = raw[start:end]
+        if len(data) < CDROM_TOC_TRACK_DATA_SIZE:
+            break
+
+        control_adr = data[1]
+        track_number = data[2]
+        offset = int.from_bytes(data[4:8], "big", signed=True)
+        is_leadout = track_number == CDROM_LEADOUT_TRACK
         if not is_leadout and track_number == 0:
             continue
         if offset < 0:
             continue
-        control = (control_adr & 0x0F) | (control_adr >> 4)
-        is_audio = not bool(control & 0x04)
+
+        control_bits = (control_adr & 0x0F) | (control_adr >> 4)
+        is_audio = (control_bits & 0x04) == 0
         entries.append(
             _CtdbTocEntry(
                 track_number=track_number,
@@ -192,19 +296,24 @@ def _ctdb_entries_from_windows_toc(raw: bytes) -> List[_CtdbTocEntry]:
     return entries
 
 
-def _ctdb_toc_from_track_data(entries: list[_CtdbTocEntry]) -> str | None:
-    if not entries:
-        return None
-    tracks = sorted((entry for entry in entries if not entry.is_leadout), key=lambda item: item.track_number)
-    leadouts = [entry.offset for entry in entries if entry.is_leadout]
+def _ctdb_toc_from_track_data(entries: list[_CtdbTocEntry]) -> str:
+    tracks = [entry for entry in entries if not entry.is_leadout]
+    leadouts = [entry for entry in entries if entry.is_leadout]
     if not tracks or not leadouts:
-        return None
-    parts: list[str] = []
-    for entry in tracks:
+        return ""
+
+    tokens = []
+    for entry in sorted(tracks, key=lambda item: item.track_number):
+        if entry.offset < 0:
+            return ""
         prefix = "" if entry.is_audio else "-"
-        parts.append(f"{prefix}{entry.offset}")
-    parts.append(str(max(leadouts)))
-    return ":".join(parts)
+        tokens.append(f"{prefix}{entry.offset}")
+
+    leadout = max(leadouts, key=lambda item: item.offset)
+    if leadout.offset < 0:
+        return ""
+    tokens.append(str(leadout.offset))
+    return ":".join(tokens)
 
 
 def _disc_toc_from_ctdb_entries(drive: str, entries: list[_CtdbTocEntry]) -> DiscToc | None:
@@ -220,17 +329,23 @@ def _disc_toc_from_ctdb_entries(drive: str, entries: list[_CtdbTocEntry]) -> Dis
     if not audio_tracks or not leadouts:
         return None
 
-    first_track = audio_tracks[0].track_number
-    last_track = audio_tracks[-1].track_number
-    track_offsets = [entry.offset for entry in audio_tracks]
     return DiscToc(
         drive=drive,
-        discid="",
-        toc_string="",
-        first_track=first_track,
-        last_track=last_track,
-        sectors=max(leadouts),
-        track_offsets=track_offsets,
         track_count=len(audio_tracks),
+        track_offsets=[entry.offset for entry in audio_tracks],
+        sectors=max(leadouts),
         ctdb_toc_string=ctdb_toc,
+        first_track=audio_tracks[0].track_number,
+        last_track=audio_tracks[-1].track_number,
     )
+
+
+def eject(drive: str) -> None:
+    if sys.platform != "win32":
+        return
+    mci = ctypes.windll.winmm.mciSendStringW
+    drive_letter = drive.rstrip(":")
+    mci("close lyon_cd", None, 0, None)
+    if mci(f'open {drive_letter}: type cdaudio alias lyon_cd', None, 0, None) == 0:
+        mci("set lyon_cd door open", None, 0, None)
+        mci("close lyon_cd", None, 0, None)
