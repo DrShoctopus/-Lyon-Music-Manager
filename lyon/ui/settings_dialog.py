@@ -58,6 +58,10 @@ class SettingsDialog(QDialog):
         self.artwork.setChecked(settings.download_artwork)
         form.addRow("", self.artwork)
 
+        self.metadata_diagnostics = QCheckBox("Log detailed metadata lookup diagnostics")
+        self.metadata_diagnostics.setChecked(settings.metadata_diagnostics_enabled)
+        form.addRow("", self.metadata_diagnostics)
+
         # Provider settings
         self.contact = QLineEdit(settings.musicbrainz_contact)
         form.addRow("MusicBrainz contact:", self.contact)
@@ -86,6 +90,7 @@ class SettingsDialog(QDialog):
         self.result_settings.auto_lookup_metadata = self.lookup.isChecked()
         self.result_settings.cuetools_db_metadata_enabled = self.cuetools_db.isChecked()
         self.result_settings.download_artwork = self.artwork.isChecked()
+        self.result_settings.metadata_diagnostics_enabled = self.metadata_diagnostics.isChecked()
         self.result_settings.musicbrainz_contact = self.contact.text().strip() or self.result_settings.musicbrainz_contact
         self.result_settings.theaudiodb_api_key = self.audiodb_key.text().strip() or "123"
         self.accept()

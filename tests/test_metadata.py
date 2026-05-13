@@ -447,3 +447,83 @@ def test_search_album_continues_past_incomplete_metadata(monkeypatch):
 
     assert metadata.search_album("Artist", "Album") is complete
     assert calls == ["musicbrainz", "theaudiodb"]
+
+
+def test_lookup_disc_skips_diagnostics_when_setting_disabled(caplog, monkeypatch):
+    monkeypatch.setattr(metadata, "lookup_cuetools_db_disc", lambda *args, **kwargs: None)
+    monkeypatch.setattr(metadata, "lookup_musicbrainz_disc", lambda *args: None)
+    monkeypatch.setattr(
+        metadata._settings.Settings,
+        "load",
+        lambda: types.SimpleNamespace(metadata_diagnostics_enabled=False),
+    )
+
+    with caplog.at_level("WARNING", logger="lyon.core.metadata"):
+        assert metadata.lookup_disc(
+            "disc-id",
+            "1 1 45150 150",
+            ctdb_toc="0:45000",
+            use_cuetools_db=True,
+        ) is None
+
+    assert not caplog.messages
+
+
+def test_lookup_disc_logs_diagnostics_when_enabled_and_no_metadata(caplog, monkeypatch):
+    monkeypatch.setattr(metadata, "lookup_cuetools_db_disc", lambda *args, **kwargs: None)
+    monkeypatch.setattr(metadata, "lookup_musicbrainz_disc", lambda *args: None)
+    monkeypatch.setattr(
+        metadata._settings.Settings,
+        "load",
+        lambda: types.SimpleNamespace(metadata_diagnostics_enabled=True),
+    )
+
+    with caplog.at_level("WARNING", logger="lyon.core.metadata"):
+        assert metadata.lookup_disc(
+            "disc-id",
+            "1 1 45150 150",
+            ctdb_toc="0:45000",
+            use_cuetools_db=True,
+        ) is None
+
+    message = caplog.messages[-1]
+    assert "Album metadata lookup returned no usable metadata." in message
+    assert "discid: disc-id" in message
+    assert "musicbrainz_toc: 1 1 45150 150" in message
+    assert "ctdb_toc: 0:45000" in message
+    assert "cuetools_db: returned no result" in message
+    assert "musicbrainz: returned no result" in message
+    assert "theaudiodb: not attempted" in message
+
+
+def test_search_album_logs_diagnostics_when_enabled_and_no_metadata(caplog, monkeypatch):
+    def fake_provider(name):
+        def provider(_artist, _album):
+            return None
+
+        provider.__name__ = name
+        return provider
+
+    monkeypatch.setattr(
+        metadata,
+        "_album_search_providers",
+        lambda: (
+            fake_provider("search_musicbrainz_album"),
+            fake_provider("search_theaudiodb_album"),
+        ),
+    )
+    monkeypatch.setattr(
+        metadata._settings.Settings,
+        "load",
+        lambda: types.SimpleNamespace(metadata_diagnostics_enabled=True),
+    )
+
+    with caplog.at_level("WARNING", logger="lyon.core.metadata"):
+        assert metadata.search_album("Missing Artist", "Missing Album") is None
+
+    message = caplog.messages[-1]
+    assert "Manual album metadata search returned no metadata." in message
+    assert "artist: Missing Artist" in message
+    assert "album: Missing Album" in message
+    assert "musicbrainz: returned no result" in message
+    assert "theaudiodb: returned no result" in message

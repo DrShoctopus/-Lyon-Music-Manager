@@ -66,6 +66,7 @@ class Settings:
     auto_lookup_metadata: bool = True
     cuetools_db_metadata_enabled: bool = True
     download_artwork: bool = True
+    metadata_diagnostics_enabled: bool = False
     last_volume: int = 80
     library_paths: list[str] = field(default_factory=list)
     equalizer_enabled: bool = False
