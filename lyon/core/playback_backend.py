@@ -10,26 +10,16 @@ from typing import Any, Optional
 
 from PySide6.QtCore import QObject, Signal
 
+from .equalizer import EQ_BAND_COUNT, normalize_equalizer_bands
 from .settings import bundled_bin_dir
 
 
 LOG = logging.getLogger(__name__)
-EQ_BAND_COUNT = 6
-MIN_EQ_GAIN_DB = -12
-MAX_EQ_GAIN_DB = 12
-# VLC's native equalizer bands are 60, 170, 310, 600, 1k, 3k, 6k,
-# 12k, 14k, and 16k Hz. Map Lyon's six UI bands (60, 150, 400,
-# 1k, 3k, 10k Hz) to the closest useful VLC indexes.
-VLC_EQ_BAND_INDEXES = (0, 1, 2, 4, 5, 7)
+# Lyon now exposes libVLC's complete native ten-band equalizer, so the
+# UI band order maps directly to VLC's band indexes.
+VLC_EQ_BAND_INDEXES = tuple(range(EQ_BAND_COUNT))
 _DLL_DIRECTORY_HANDLES: list[Any] = []
 _CONFIGURED_VLC_DIRS: set[Path] = set()
-
-
-def normalize_equalizer_bands(bands: list[int]) -> list[int]:
-    """Return exactly six integer EQ gains clamped to Lyon's UI range."""
-    normalized = list(bands[:EQ_BAND_COUNT])
-    normalized.extend([0] * (EQ_BAND_COUNT - len(normalized)))
-    return [max(MIN_EQ_GAIN_DB, min(MAX_EQ_GAIN_DB, int(value))) for value in normalized]
 
 
 def _prepend_path(path: Path) -> None:
@@ -282,8 +272,11 @@ class VlcPlaybackBackend(PlaybackBackend):
             equalizer = self._vlc.AudioEqualizer()
             if equalizer is None:
                 raise RuntimeError("VLC did not create an AudioEqualizer instance")
-            equalizer.set_preamp(0.0)
-            for ui_band, vlc_index in zip(normalize_equalizer_bands(bands), VLC_EQ_BAND_INDEXES, strict=True):
+            normalized_bands = normalize_equalizer_bands(bands)
+            # Keep boosted curves clean by lowering libVLC preamp for headroom
+            # instead of clipping hot masters when several bands are raised.
+            equalizer.set_preamp(float(-max(0, max(normalized_bands))))
+            for ui_band, vlc_index in zip(normalized_bands, VLC_EQ_BAND_INDEXES, strict=True):
                 equalizer.set_amp_at_index(float(ui_band), vlc_index)
             self._player.set_equalizer(equalizer)
             self._equalizer = equalizer

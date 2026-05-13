@@ -88,17 +88,17 @@ def test_set_equalizer_normalizes_and_pushes_to_backend():
 
     player.set_equalizer(True, [20, -20, 3, "4", 0])
 
-    assert player.equalizer() == (True, [12, -12, 3, 4, 0, 0])
-    assert backend.equalizer_calls == [(True, [12, -12, 3, 4, 0, 0])]
+    assert player.equalizer() == (True, [12, -12, 3, 4, 0, 0, 0, 0, 0, 0])
+    assert backend.equalizer_calls == [(True, [12, -12, 3, 4, 0, 0, 0, 0, 0, 0])]
 
 
 def test_equalizer_is_reapplied_on_track_load():
     backend = FakeBackend()
     player = Player(backend=backend)
-    player.set_equalizer(True, [1, 2, 3, 4, 5, 6])
+    player.set_equalizer(True, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
 
     player.set_queue([_track()])
 
     assert backend.sources == ["C:/Music/test.flac"]
     assert backend.play_count == 1
-    assert backend.equalizer_calls[-1] == (True, [1, 2, 3, 4, 5, 6])
+    assert backend.equalizer_calls[-1] == (True, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
