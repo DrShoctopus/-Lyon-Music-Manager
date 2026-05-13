@@ -1,6 +1,7 @@
 """Album metadata and artwork lookups from the supported provider fallbacks."""
 from __future__ import annotations
 
+import logging
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -23,6 +24,8 @@ DISC_METADATA_PROVIDER_ORDER = ("cuetools_db", "musicbrainz", "theaudiodb")
 ALBUM_METADATA_PROVIDER_ORDER = ("musicbrainz", "theaudiodb")
 ARTWORK_PROVIDER_ORDER = ("cover_art_archive", "album_artwork_url", "theaudiodb")
 METADATA_PROVIDER_ORDER = ALBUM_METADATA_PROVIDER_ORDER
+
+LOG = logging.getLogger(__name__)
 
 
 @dataclass
@@ -73,16 +76,31 @@ def lookup_disc(
     use_cuetools_db: bool | None = None,
 ) -> Optional[AlbumInfo]:
     """Look up an album by disc identity using the supported provider order."""
-    providers: list[Callable[[], Optional[AlbumInfo]]] = []
+    provider_attempts: list[tuple[str, AlbumInfo | None]] = []
+    providers: list[tuple[str, Callable[[], Optional[AlbumInfo]]]] = []
     if _use_cuetools_db(use_cuetools_db):
-        providers.append(lambda: lookup_cuetools_db_disc(toc, ctdb_toc=ctdb_toc))
+        providers.append((
+            "cuetools_db",
+            lambda: lookup_cuetools_db_disc(toc, ctdb_toc=ctdb_toc),
+        ))
     if discid_str:
-        providers.append(lambda: lookup_musicbrainz_disc(discid_str, toc))
+        providers.append(("musicbrainz", lambda: lookup_musicbrainz_disc(discid_str, toc)))
 
-    for provider in providers:
+    for provider_name, provider in providers:
         info = provider()
+        provider_attempts.append((provider_name, info))
         if _has_usable_metadata(info):
             return _with_theaudiodb_enrichment(info)
+
+    if _use_cuetools_db(use_cuetools_db) and ctdb_toc is None:
+        for fuzzy in (False, True):
+            info = lookup_ctdb_disc(toc, fuzzy=fuzzy)
+            provider_attempts.append((f"cuetools_db_legacy_fuzzy_{int(fuzzy)}", info))
+            if _has_usable_metadata(info):
+                return _with_theaudiodb_enrichment(info)
+
+    if _metadata_diagnostics_enabled():
+        _log_empty_disc_lookup(discid_str, toc, ctdb_toc, use_cuetools_db, provider_attempts)
     return None
 
 
@@ -192,12 +210,17 @@ def lookup_cuetools_db_layout(ctdb_toc: str | None, *, fuzzy: bool = False) -> O
 def search_album(artist: str, album: str) -> Optional[AlbumInfo]:
     """Search album metadata providers, preferring results with track data."""
     fallback_info = None
+    provider_attempts: list[tuple[str, AlbumInfo | None]] = []
     for provider in _album_search_providers():
+        provider_name = _provider_log_name(provider)
         info = provider(artist, album)
+        provider_attempts.append((provider_name, info))
         if _has_track_metadata(info):
             return info
         if fallback_info is None and _has_basic_metadata(info):
             fallback_info = info
+    if fallback_info is None and _metadata_diagnostics_enabled():
+        _log_empty_album_search(artist, album, provider_attempts)
     return fallback_info
 
 
@@ -266,6 +289,92 @@ def search_theaudiodb_album(artist: str, album: str) -> Optional[AlbumInfo]:
 
 def _album_search_providers() -> tuple[Callable[[str, str], Optional[AlbumInfo]], ...]:
     return (search_musicbrainz_album, search_theaudiodb_album)
+
+
+def _metadata_diagnostics_enabled() -> bool:
+    settings = _settings.Settings.load()
+    return bool(getattr(settings, "metadata_diagnostics_enabled", False))
+
+
+def _log_empty_disc_lookup(
+    discid_str: str,
+    toc: str | None,
+    ctdb_toc: str | None,
+    use_cuetools_db: bool | None,
+    provider_attempts: list[tuple[str, AlbumInfo | None]],
+) -> None:
+    """Emit detailed diagnostics for a disc lookup that found no metadata."""
+    diagnostics = [
+        "Album metadata lookup returned no usable metadata.",
+        "Lookup context:",
+        f"  discid: {_diagnostic_value(discid_str)}",
+        f"  musicbrainz_toc: {_diagnostic_value(toc)}",
+        f"  ctdb_toc: {_diagnostic_value(ctdb_toc)}",
+        f"  cuetools_db_enabled: {_use_cuetools_db(use_cuetools_db)}",
+        "Provider attempts:",
+    ]
+
+    if provider_attempts:
+        diagnostics.extend(
+            f"  {_provider_attempt_summary(provider_name, info)}"
+            for provider_name, info in provider_attempts
+        )
+    else:
+        diagnostics.append("  none (no enabled provider had enough lookup input)")
+
+    if not any(_has_basic_metadata(info) for _provider_name, info in provider_attempts):
+        diagnostics.append(
+            "  theaudiodb: not attempted; disc providers did not return artist/album "
+            "identifiers for enrichment"
+        )
+    LOG.warning("\n".join(diagnostics))
+
+
+def _log_empty_album_search(
+    artist: str,
+    album: str,
+    provider_attempts: list[tuple[str, AlbumInfo | None]],
+) -> None:
+    """Emit detailed diagnostics for a manual album search with no metadata."""
+    diagnostics = [
+        "Manual album metadata search returned no metadata.",
+        "Search context:",
+        f"  artist: {_diagnostic_value(artist)}",
+        f"  album: {_diagnostic_value(album)}",
+        "Provider attempts:",
+    ]
+    diagnostics.extend(
+        f"  {_provider_attempt_summary(provider_name, info)}"
+        for provider_name, info in provider_attempts
+    )
+    LOG.warning("\n".join(diagnostics))
+
+
+def _provider_attempt_summary(provider_name: str, info: AlbumInfo | None) -> str:
+    if info is None:
+        return f"{provider_name}: returned no result"
+    if not _has_basic_metadata(info):
+        return f"{provider_name}: returned an empty metadata object"
+    return (
+        f"{provider_name}: returned partial metadata "
+        f"(source={_diagnostic_value(info.metadata_source)}, "
+        f"artist={_diagnostic_value(info.artist)}, "
+        f"album={_diagnostic_value(info.album)}, "
+        f"date={_diagnostic_value(info.date)}, "
+        f"tracks={len(info.tracks)}, "
+        f"musicbrainz_albumid={_diagnostic_value(info.musicbrainz_albumid)}, "
+        f"artwork_url={_diagnostic_value(info.artwork_url)})"
+    )
+
+
+def _provider_log_name(provider: Callable[[str, str], Optional[AlbumInfo]]) -> str:
+    name = getattr(provider, "__name__", "metadata_provider")
+    return name.removeprefix("search_").removesuffix("_album")
+
+
+def _diagnostic_value(value: Any) -> str:
+    text = _text(value)
+    return text if text else "<empty>"
 
 
 def _primary_artwork_urls(album: AlbumInfo) -> list[str]:
