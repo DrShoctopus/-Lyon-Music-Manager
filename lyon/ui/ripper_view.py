@@ -12,7 +12,6 @@ from PySide6.QtWidgets import (
 )
 
 from ..core import cd_detect
-from ..core.ctdb_lookup import lookup_ctdb_layout
 from ..core.library import Library
 from ..core.metadata import AlbumInfo, TrackInfo, fetch_artwork, lookup_disc, search_album
 from ..core.ripper import RipRequest, Ripper, target_file, target_folder
@@ -79,11 +78,12 @@ class _LookupThread(QThread):
         self.settings = settings
 
     def run(self) -> None:
-        info = lookup_disc(self.toc.discid, self.toc.toc_string)
-        if info is None and self.toc.ctdb_toc_string:
-            info = lookup_ctdb_layout(self.toc.ctdb_toc_string)
-            if info is None:
-                info = lookup_ctdb_layout(self.toc.ctdb_toc_string, fuzzy=True)
+        info = lookup_disc(
+            self.toc.discid,
+            self.toc.toc_string,
+            ctdb_toc=self.toc.ctdb_toc_string,
+            use_cuetools_db=self.settings.cuetools_db_metadata_enabled,
+        )
         art = None
         if info and self.settings.download_artwork:
             art = fetch_artwork(info)
@@ -349,7 +349,8 @@ class RipperView(QWidget):
         self._lookup = None
         if info is None:
             self.status_label.setText(
-                "Disc not found in CTDB or MusicBrainz. Edit titles manually or click Search Online."
+                "Disc not found in CUETools DB, MusicBrainz, or TheAudioDB. "
+                "Edit titles manually or click Search Online."
             )
             self.start_btn.setEnabled(True)
             return
@@ -385,7 +386,7 @@ class RipperView(QWidget):
             return
         if self._search is not None and self._search.isRunning():
             return
-        self.status_label.setText("Searching MusicBrainz...")
+        self.status_label.setText("Searching MusicBrainz and TheAudioDB...")
         self.relookup_btn.setEnabled(False)
         self._search = _AlbumSearchThread(artist, album, self.settings, self)
         self._search.finished_with.connect(self._on_search_done)
