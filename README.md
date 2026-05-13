@@ -9,7 +9,8 @@ to FLAC, organizing a local music library, playing tracks, and browsing YouTube
 from one Windows Media Player-inspired interface.
 
 The app is built with Python, PySide6, Qt Multimedia, Qt WebEngine, SQLite,
-Mutagen, MusicBrainz, Cover Art Archive, ffmpeg, libdiscid, and libVLC.
+Mutagen, MusicBrainz, TheAudioDB, CUETools DB, Cover Art Archive, ffmpeg,
+libdiscid, and libVLC.
 
 ## Current Status
 
@@ -46,10 +47,12 @@ The application version is defined in `lyon/__init__.py`.
 - **Six-band equalizer** with persisted settings. When libVLC is available the
   EQ is applied to playback; the Qt Multimedia fallback keeps the controls
   available but plays audio flat.
-- **Audio CD detection** on Windows using Win32 optical-drive APIs and libdiscid.
-- **CTDB metadata lookup with MusicBrainz fallback** by disc TOC, plus manual
-  artist/album search from the ripper view.
-- **Cover Art Archive support** for downloading album art when enabled.
+- **Audio CD detection** on Windows using Win32 optical-drive APIs and libdiscid,
+  including a CUETools-compatible CTDB layout for metadata matching.
+- **CUETools DB Metadata Plugin-style lookup** as the primary disc metadata
+  source, with MusicBrainz and TheAudioDB fallbacks.
+- **Cover Art Archive, CUETools DB, and TheAudioDB artwork support** when cover
+  downloads are enabled.
 - **CD-to-FLAC ripping** through ffmpeg/libcdio, with per-track output, FLAC
   compression settings, Vorbis comments, embedded cover art, overwrite
   confirmation, cancellation, and optional disc eject after a successful rip.
@@ -135,8 +138,12 @@ outside Windows.
    - Choose the music root. The default is `Music\Lyon` under the current user.
    - Set FLAC compression from `0` (fastest) to `8` (smallest files).
    - Optionally set a default CD drive such as `D:`.
+   - Keep **Use CUETools DB Metadata Plugin lookup** enabled to make CUETools DB
+     the primary disc metadata source.
    - Update the MusicBrainz contact value before redistributing or doing heavy
      metadata lookups.
+   - TheAudioDB defaults to the documented free API key, but Settings allows a
+     custom key.
 
 3. **Build or scan a library**
    - Open **Library**.
@@ -252,7 +259,7 @@ lyon/__init__.py                App name and version
 lyon/app.py                     QApplication setup, splash, and main window launch
 lyon/core/cd_detect.py          Windows optical-drive and libdiscid helpers
 lyon/core/library.py            SQLite library index and search queries
-lyon/core/metadata.py           CTDB, MusicBrainz, and Cover Art Archive lookups
+lyon/core/metadata.py           CUETools DB, MusicBrainz, TheAudioDB, and artwork lookups
 lyon/core/player.py             Playback queue, shuffle, repeat, volume, EQ state
 lyon/core/playback_backend.py   libVLC playback backend and Qt Multimedia fallback
 lyon/core/ripper.py             ffmpeg-backed CD-to-FLAC worker
@@ -280,11 +287,11 @@ pytest
 ```
 
 Current automated coverage includes MusicBrainz multi-disc metadata selection,
-CTDB-first lookup fallback behavior, ripper command construction, library query
-behavior, library-view tooltip formatting, and player equalizer normalization.
-More coverage should be added around full library scanning, playback queue
-behavior, rip overwrite/cancel flows, and branding startup as those areas
-continue to settle.
+CUETools DB-first lookup fallback behavior, TheAudioDB fallback mapping, ripper
+command construction, library query behavior, library-view tooltip formatting,
+and player equalizer normalization. More coverage should be added around full
+library scanning, playback queue behavior, rip overwrite/cancel flows, and
+branding startup as those areas continue to settle.
 
 ## Troubleshooting
 
@@ -293,9 +300,9 @@ continue to settle.
 - **No CD drive appears**: CD detection is Windows-only and relies on the Win32
   optical-drive APIs plus libdiscid. Confirm the drive is visible to Windows and
   contains an audio CD.
-- **Disc metadata does not resolve**: confirm internet access and set a real
-  MusicBrainz contact string in Settings. MusicBrainz may rate-limit generic or
-  abusive clients.
+- **Disc metadata does not resolve**: keep CUETools DB metadata lookup enabled,
+  confirm internet access, and set a real MusicBrainz contact string in
+  Settings. MusicBrainz may rate-limit generic or abusive clients.
 - **YouTube tab says WebEngine is unavailable**: install `PySide6-Addons` into
   the active environment and restart the app.
 - **Equalizer controls move but audio does not change**: confirm `python-vlc` is
@@ -307,8 +314,9 @@ continue to settle.
 
 ## Credits And Third-Party Services
 
-Lyon Media Manager uses MusicBrainz metadata, Cover Art Archive artwork,
-ffmpeg/libcdio for CD audio extraction, libdiscid for disc IDs, libVLC for
-local playback and equalizer support, Mutagen for tag handling, and Qt/PySide6
-for the desktop UI. Respect the MusicBrainz access
-policy by setting an appropriate contact value before distributing builds.
+Lyon Media Manager uses CUETools DB and MusicBrainz metadata, TheAudioDB album
+metadata and artwork, Cover Art Archive artwork, ffmpeg/libcdio for CD audio
+extraction, libdiscid for disc IDs, libVLC for local playback and equalizer
+support, Mutagen for tag handling, and Qt/PySide6 for the desktop UI. Respect the
+MusicBrainz access policy by setting an appropriate contact value before
+distributing builds.

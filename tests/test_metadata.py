@@ -27,6 +27,20 @@ from lyon.core.metadata import (  # noqa: E402
 )
 
 
+def _stub_settings(monkeypatch) -> None:
+    monkeypatch.setattr(
+        metadata._settings.Settings,
+        "load",
+        lambda: types.SimpleNamespace(
+            musicbrainz_app="LyonTest",
+            musicbrainz_version="1.0",
+            musicbrainz_contact="test@example.invalid",
+            cuetools_db_metadata_enabled=True,
+            theaudiodb_api_key="123",
+        ),
+    )
+
+
 def test_release_to_album_filters_to_matching_disc_medium():
     release = {
         "id": "release-1",
@@ -63,67 +77,135 @@ def test_musicbrainz_toc_converts_to_ctdb_offsets():
     assert _musicbrainz_toc_to_ctdb_toc(toc) == "0:15000:30000:45000"
 
 
-def test_lookup_disc_uses_musicbrainz_before_ctdb(monkeypatch):
-    musicbrainz_album = metadata.AlbumInfo(artist="MB Artist", album="MB Album")
-    calls = {}
+def test_lookup_disc_uses_cuetools_db_before_musicbrainz(monkeypatch):
+    ctdb_album = metadata.AlbumInfo(
+        artist="CTDB Artist",
+        album="CTDB Album",
+        artwork_url="https://example.test/cover.jpg",
+        tracks=[metadata.TrackInfo(number=1, title="Song")],
+    )
+    calls = []
 
-    def fake_ctdb_lookup(toc):
-        calls["ctdb_toc"] = toc
-        return metadata.AlbumInfo(artist="CTDB Artist", album="CTDB Album")
-
-    def fake_musicbrainz_lookup(discid, toc):
-        calls["musicbrainz"] = (discid, toc)
-        return musicbrainz_album
-
-    monkeypatch.setattr(metadata, "lookup_ctdb_disc", fake_ctdb_lookup)
-    monkeypatch.setattr(metadata, "lookup_musicbrainz_disc", fake_musicbrainz_lookup)
-
-    assert metadata.lookup_disc("disc-id", "toc-data") is musicbrainz_album
-    assert calls == {"musicbrainz": ("disc-id", "toc-data")}
-
-
-def test_lookup_disc_falls_back_to_ctdb_when_musicbrainz_has_no_match(monkeypatch):
-    ctdb_album = metadata.AlbumInfo(artist="CTDB Artist", album="CTDB Album")
-    calls = {}
-
-    def fake_ctdb_lookup(toc):
-        calls["ctdb_toc"] = toc
+    def fake_cuetools(toc, ctdb_toc=None):
+        calls.append(("cuetools", toc, ctdb_toc))
         return ctdb_album
 
-    def fake_musicbrainz_lookup(discid, toc):
-        calls["musicbrainz"] = (discid, toc)
+    def fake_musicbrainz(_discid, _toc):
+        calls.append(("musicbrainz",))
+        return metadata.AlbumInfo(artist="MB Artist", album="MB Album")
+
+    monkeypatch.setattr(metadata, "lookup_cuetools_db_disc", fake_cuetools)
+    monkeypatch.setattr(metadata, "lookup_musicbrainz_disc", fake_musicbrainz)
+
+    assert metadata.lookup_disc("disc-id", "mb-toc", ctdb_toc="ctdb-toc") is ctdb_album
+    assert calls == [("cuetools", "mb-toc", "ctdb-toc")]
+
+
+def test_lookup_disc_respects_cuetools_toggle(monkeypatch):
+    musicbrainz_album = metadata.AlbumInfo(
+        artist="MB Artist",
+        album="MB Album",
+        artwork_url="https://example.test/mb.jpg",
+        tracks=[metadata.TrackInfo(number=1, title="MB Song")],
+    )
+    calls = []
+
+    def fail_cuetools(*_args, **_kwargs):
+        raise AssertionError("CUETools DB should be disabled")
+
+    def fake_musicbrainz(discid, toc):
+        calls.append((discid, toc))
+        return musicbrainz_album
+
+    monkeypatch.setattr(metadata, "lookup_cuetools_db_disc", fail_cuetools)
+    monkeypatch.setattr(metadata, "lookup_musicbrainz_disc", fake_musicbrainz)
+
+    assert metadata.lookup_disc("disc-id", "toc-data", use_cuetools_db=False) is musicbrainz_album
+    assert calls == [("disc-id", "toc-data")]
+
+
+def test_lookup_disc_falls_back_to_musicbrainz_when_cuetools_has_no_match(monkeypatch):
+    musicbrainz_album = metadata.AlbumInfo(
+        artist="MB Artist",
+        album="MB Album",
+        artwork_url="https://example.test/mb.jpg",
+        tracks=[metadata.TrackInfo(number=1, title="MB Song")],
+    )
+    calls = []
+
+    def fake_cuetools(toc, ctdb_toc=None):
+        calls.append(("cuetools", toc, ctdb_toc))
         return None
 
-    monkeypatch.setattr(metadata, "lookup_ctdb_disc", fake_ctdb_lookup)
-    monkeypatch.setattr(metadata, "lookup_musicbrainz_disc", fake_musicbrainz_lookup)
+    def fake_musicbrainz(discid, toc):
+        calls.append(("musicbrainz", discid, toc))
+        return musicbrainz_album
 
-    assert metadata.lookup_disc("disc-id", "toc-data") is ctdb_album
-    assert calls == {"musicbrainz": ("disc-id", "toc-data"), "ctdb_toc": "toc-data"}
+    monkeypatch.setattr(metadata, "lookup_cuetools_db_disc", fake_cuetools)
+    monkeypatch.setattr(metadata, "lookup_musicbrainz_disc", fake_musicbrainz)
+
+    assert metadata.lookup_disc("disc-id", "mb-toc", ctdb_toc="ctdb-toc") is musicbrainz_album
+    assert calls == [
+        ("cuetools", "mb-toc", "ctdb-toc"),
+        ("musicbrainz", "disc-id", "mb-toc"),
+    ]
 
 
-def test_lookup_musicbrainz_disc_returns_none_when_no_release(monkeypatch):
-    monkeypatch.setattr(metadata, "_init", lambda: None)
-    monkeypatch.setattr(
-        metadata.musicbrainzngs,
-        "get_releases_by_discid",
-        lambda *args, **kwargs: {"disc": {}},
+def test_lookup_disc_enriches_incomplete_result_with_theaudiodb(monkeypatch):
+    base = metadata.AlbumInfo(artist="Artist", album="Album", metadata_source="musicbrainz")
+    audiodb = metadata.AlbumInfo(
+        artist="Artist",
+        album="Album",
+        artwork_url="https://example.test/audiodb.jpg",
+        tracks=[metadata.TrackInfo(number=1, title="Track")],
+        metadata_source="theaudiodb",
     )
 
-    assert metadata.lookup_musicbrainz_disc("disc-id", "toc-data") is None
+    monkeypatch.setattr(metadata, "lookup_cuetools_db_disc", lambda *args, **kwargs: None)
+    monkeypatch.setattr(metadata, "lookup_musicbrainz_disc", lambda *args: base)
+    monkeypatch.setattr(metadata, "search_theaudiodb_album", lambda *args: audiodb)
+
+    album = metadata.lookup_disc("disc-id", "toc-data")
+
+    assert album is base
+    assert album.artwork_url == "https://example.test/audiodb.jpg"
+    assert [track.title for track in album.tracks] == ["Track"]
+    assert album.metadata_source == "musicbrainz+theaudiodb"
 
 
-def test_lookup_ctdb_disc_uses_exact_toc_matching_by_default(monkeypatch):
+def test_lookup_cuetools_db_disc_uses_full_layout_before_converted_toc(monkeypatch):
+    calls = []
+    expected = metadata.AlbumInfo(artist="Artist", album="Album")
+
+    def fake_layout(layout, fuzzy=False):
+        calls.append((layout, fuzzy))
+        return expected
+
+    monkeypatch.setattr(metadata, "lookup_cuetools_db_layout", fake_layout)
+
+    assert metadata.lookup_cuetools_db_disc(
+        "1 1 45150 150", ctdb_toc="0:15000:-30000:45000"
+    ) is expected
+    assert calls == [("0:15000:-30000:45000", False)]
+
+
+def test_lookup_cuetools_db_disc_falls_back_to_fuzzy(monkeypatch):
+    calls = []
+    expected = metadata.AlbumInfo(artist="Artist", album="Album")
+
+    def fake_layout(layout, fuzzy=False):
+        calls.append((layout, fuzzy))
+        return expected if fuzzy else None
+
+    monkeypatch.setattr(metadata, "lookup_cuetools_db_layout", fake_layout)
+
+    assert metadata.lookup_cuetools_db_disc("1 1 45150 150") is expected
+    assert calls == [("0:45000", False), ("0:45000", True)]
+
+
+def test_lookup_cuetools_db_layout_uses_exact_toc_matching_by_default(monkeypatch):
     captured = {}
-
-    monkeypatch.setattr(
-        metadata._settings.Settings,
-        "load",
-        lambda: types.SimpleNamespace(
-            musicbrainz_app="LyonTest",
-            musicbrainz_version="1.0",
-            musicbrainz_contact="test@example.invalid",
-        ),
-    )
+    _stub_settings(monkeypatch)
 
     class FakeResponse:
         status_code = 200
@@ -138,7 +220,7 @@ def test_lookup_ctdb_disc_uses_exact_toc_matching_by_default(monkeypatch):
 
     monkeypatch.setattr(metadata.requests, "get", fake_get)
 
-    album = metadata.lookup_ctdb_disc("1 1 45150 150")
+    album = metadata.lookup_cuetools_db_layout("0:45000")
 
     assert album is not None
     assert album.album == "Album"
@@ -146,34 +228,6 @@ def test_lookup_ctdb_disc_uses_exact_toc_matching_by_default(monkeypatch):
     assert captured["params"]["fuzzy"] == "0"
     assert captured["params"]["toc"] == "0:45000"
 
-
-def test_lookup_ctdb_disc_allows_explicit_fuzzy_lookup(monkeypatch):
-    captured = {}
-
-    monkeypatch.setattr(
-        metadata._settings.Settings,
-        "load",
-        lambda: types.SimpleNamespace(
-            musicbrainz_app="LyonTest",
-            musicbrainz_version="1.0",
-            musicbrainz_contact="test@example.invalid",
-        ),
-    )
-
-    class FakeResponse:
-        status_code = 200
-        content = b'<ctdb><metadata source="musicbrainz" artist="Artist" album="Album" /></ctdb>'
-
-    def fake_get(url, params, headers, timeout):
-        captured["params"] = params
-        return FakeResponse()
-
-    monkeypatch.setattr(metadata.requests, "get", fake_get)
-
-    album = metadata.lookup_ctdb_disc("1 1 45150 150", fuzzy=True)
-
-    assert album is not None
-    assert captured["params"]["fuzzy"] == "1"
 
 def test_ctdb_meta_to_album_maps_tracks_and_primary_art():
     meta = ET.fromstring(
@@ -192,20 +246,20 @@ def test_ctdb_meta_to_album_maps_tracks_and_primary_art():
     assert album.artist == "Artist"
     assert album.album == "Album"
     assert album.genre == "Rock"
-    assert album.metadata_source == "ctdb:discogs"
+    assert album.metadata_source == "cuetools_db:discogs"
     assert [track.title for track in album.tracks] == ["One", "Two"]
     assert album.tracks[0].artist == "Guest"
     assert album.tracks[1].artist == "Artist"
     assert album.artwork_url == "http://db.cuetools.net/covers/front.jpg"
 
 
-def test_search_album_uses_top_provider_order(monkeypatch):
+def test_search_album_uses_musicbrainz_before_theaudiodb(monkeypatch):
     calls = []
-    deezer_album = metadata.AlbumInfo(
-        artist="Deezer Artist",
-        album="Deezer Album",
+    audiodb_album = metadata.AlbumInfo(
+        artist="AudioDB Artist",
+        album="AudioDB Album",
         tracks=[metadata.TrackInfo(number=1, title="Song")],
-        metadata_source="deezer",
+        metadata_source="theaudiodb",
     )
 
     def fake_provider(name, result=None):
@@ -220,130 +274,88 @@ def test_search_album_uses_top_provider_order(monkeypatch):
         "_album_search_providers",
         lambda: (
             fake_provider("musicbrainz"),
-            fake_provider("discogs"),
-            fake_provider("itunes"),
-            fake_provider("deezer", deezer_album),
-            fake_provider("lastfm"),
+            fake_provider("theaudiodb", audiodb_album),
         ),
     )
 
-    assert metadata.search_album("Artist", "Album") is deezer_album
+    assert metadata.search_album("Artist", "Album") is audiodb_album
     assert calls == [
         ("musicbrainz", "Artist", "Album"),
-        ("discogs", "Artist", "Album"),
-        ("itunes", "Artist", "Album"),
-        ("deezer", "Artist", "Album"),
+        ("theaudiodb", "Artist", "Album"),
     ]
 
 
-def test_search_album_provider_names_keep_musicbrainz_first_and_four_fallbacks():
-    assert metadata.ALBUM_METADATA_PROVIDER_ORDER == (
+def test_provider_names_keep_only_supported_metadata_sources():
+    assert metadata.DISC_METADATA_PROVIDER_ORDER == (
+        "cuetools_db",
         "musicbrainz",
-        "discogs",
-        "itunes",
-        "deezer",
-        "lastfm",
+        "theaudiodb",
     )
-    assert metadata.DISC_METADATA_PROVIDER_ORDER == ("musicbrainz", "ctdb")
+    assert metadata.ALBUM_METADATA_PROVIDER_ORDER == ("musicbrainz", "theaudiodb")
+    assert metadata.ARTWORK_PROVIDER_ORDER == (
+        "cover_art_archive",
+        "album_artwork_url",
+        "theaudiodb",
+    )
     assert metadata.METADATA_PROVIDER_ORDER == metadata.ALBUM_METADATA_PROVIDER_ORDER
 
 
-def test_itunes_search_maps_tracks_and_artwork(monkeypatch):
-    class FakeResponse:
-        status_code = 200
-
-        def json(self):
-            return {
-                "results": [
-                    {
-                        "artistName": "Artist",
-                        "collectionName": "Album",
-                        "trackName": "Two",
-                        "trackNumber": 2,
-                        "discNumber": 1,
-                        "trackTimeMillis": 2000,
-                        "releaseDate": "2001-02-03T08:00:00Z",
-                        "primaryGenreName": "Rock",
-                        "artworkUrl100": "https://example.test/100x100bb.jpg",
-                    },
-                    {
-                        "artistName": "Artist",
-                        "collectionName": "Album",
-                        "trackName": "One",
-                        "trackNumber": 1,
-                        "discNumber": 1,
-                        "trackTimeMillis": 1000,
-                        "releaseDate": "2001-02-03T08:00:00Z",
-                        "primaryGenreName": "Rock",
-                        "artworkUrl100": "https://example.test/100x100bb.jpg",
-                    },
-                ]
-            }
-
-    monkeypatch.setattr(metadata.requests, "get", lambda *args, **kwargs: FakeResponse())
-
-    album = metadata.search_itunes_album("Artist", "Album")
-
-    assert album.artist == "Artist"
-    assert album.album == "Album"
-    assert album.date == "2001-02-03"
-    assert album.genre == "Rock"
-    assert album.metadata_source == "itunes"
-    assert album.artwork_url == "https://example.test/600x600bb.jpg"
-    assert [track.title for track in album.tracks] == ["One", "Two"]
-
-
-def test_deezer_search_maps_album_detail_tracks_and_artwork(monkeypatch):
+def test_theaudiodb_search_maps_album_tracks_and_artwork(monkeypatch):
     responses = [
         {
-            "data": [
+            "album": [
                 {
-                    "id": 42,
-                    "title": "Album",
-                    "artist": {"name": "Artist"},
+                    "idAlbum": "42",
+                    "strArtist": "Artist",
+                    "strAlbum": "Album",
+                    "intYearReleased": "2002",
+                    "strGenre": "Rock",
+                    "strAlbumThumb": "https://example.test/album.jpg",
                 }
             ]
         },
         {
-            "id": 42,
-            "title": "Album",
-            "artist": {"name": "Artist"},
-            "release_date": "2002-03-04",
-            "cover_xl": "https://example.test/deezer.jpg",
-            "genres": {"data": [{"name": "Pop"}]},
-            "tracks": {
-                "data": [
-                    {
-                        "title": "Track A",
-                        "track_position": 1,
-                        "disk_number": 1,
-                        "duration": 12,
-                        "artist": {"name": "Artist"},
-                    }
-                ]
-            },
+            "track": [
+                {
+                    "strTrack": "Two",
+                    "intTrackNumber": "2",
+                    "intDuration": "120000",
+                    "strArtist": "Artist",
+                },
+                {
+                    "strTrack": "One",
+                    "intTrackNumber": "1",
+                    "intDuration": "60000",
+                    "strArtist": "Artist",
+                },
+            ]
         },
     ]
+    calls = []
 
-    class FakeResponse:
-        status_code = 200
+    def fake_get_json(url, params=None, headers=None):
+        calls.append((url, params, headers))
+        return responses.pop(0)
 
-        def json(self):
-            return responses.pop(0)
+    monkeypatch.setattr(metadata, "_get_json", fake_get_json)
+    monkeypatch.setattr(metadata, "_theaudiodb_api_key", lambda: "123")
 
-    monkeypatch.setattr(metadata.requests, "get", lambda *args, **kwargs: FakeResponse())
-
-    album = metadata.search_deezer_album("Artist", "Album")
+    album = metadata.search_theaudiodb_album("Artist", "Album")
 
     assert album.artist == "Artist"
     assert album.album == "Album"
-    assert album.date == "2002-03-04"
-    assert album.genre == "Pop"
-    assert album.metadata_source == "deezer"
-    assert album.artwork_url == "https://example.test/deezer.jpg"
+    assert album.date == "2002"
+    assert album.genre == "Rock"
+    assert album.metadata_source == "theaudiodb"
+    assert album.artwork_url == "https://example.test/album.jpg"
     assert [(track.number, track.title, track.length_ms) for track in album.tracks] == [
-        (1, "Track A", 12000)
+        (1, "One", 60000),
+        (2, "Two", 120000),
     ]
+    assert calls[0][0].endswith("/123/searchalbum.php")
+    assert calls[0][1] == {"a": "Album", "s": "Artist"}
+    assert calls[1][0].endswith("/123/track.php")
+    assert calls[1][1] == {"m": "42"}
 
 
 def test_fetch_artwork_uses_cover_art_archive_then_album_artwork(monkeypatch):
@@ -367,9 +379,6 @@ def test_fetch_artwork_uses_cover_art_archive_then_album_artwork(monkeypatch):
         return FakeResponse(200, b"image-bytes")
 
     monkeypatch.setattr(metadata.requests, "get", fake_get)
-    monkeypatch.setattr(metadata, "search_itunes_album", lambda *args: None)
-    monkeypatch.setattr(metadata, "search_deezer_album", lambda *args: None)
-    monkeypatch.setattr(metadata, "search_lastfm_album", lambda *args: None)
 
     assert metadata.fetch_artwork(album) == b"image-bytes"
     assert [url for url, _kwargs in calls] == [
@@ -378,83 +387,7 @@ def test_fetch_artwork_uses_cover_art_archive_then_album_artwork(monkeypatch):
     ]
 
 
-def test_search_album_continues_past_incomplete_metadata(monkeypatch):
-    incomplete = metadata.AlbumInfo(artist="Artist", album="Album", metadata_source="musicbrainz")
-    complete = metadata.AlbumInfo(
-        artist="Artist",
-        album="Album",
-        tracks=[metadata.TrackInfo(number=1, title="Complete Track")],
-        metadata_source="discogs",
-    )
-    calls = []
-
-    def fake_provider(name, result=None):
-        def provider(artist, album):
-            calls.append(name)
-            return result
-
-        return provider
-
-    monkeypatch.setattr(
-        metadata,
-        "_album_search_providers",
-        lambda: (
-            fake_provider("musicbrainz", incomplete),
-            fake_provider("discogs", complete),
-            fake_provider("itunes"),
-        ),
-    )
-
-    assert metadata.search_album("Artist", "Album") is complete
-    assert calls == ["musicbrainz", "discogs"]
-
-
-def test_search_album_returns_first_basic_metadata_when_no_tracks(monkeypatch):
-    incomplete = metadata.AlbumInfo(artist="Artist", album="Album", metadata_source="musicbrainz")
-
-    monkeypatch.setattr(
-        metadata,
-        "_album_search_providers",
-        lambda: (
-            lambda _artist, _album: incomplete,
-            lambda _artist, _album: None,
-        ),
-    )
-
-    assert metadata.search_album("Artist", "Album") is incomplete
-
-
-def test_fetch_artwork_does_not_search_providers_when_primary_url_succeeds(monkeypatch):
-    album = metadata.AlbumInfo(
-        artist="Artist",
-        album="Album",
-        musicbrainz_albumid="release-id",
-        artwork_url="https://example.test/fallback.jpg",
-    )
-    calls = []
-
-    class FakeResponse:
-        status_code = 200
-        content = b"cover-art"
-
-    def fake_get(url, **kwargs):
-        calls.append(url)
-        return FakeResponse()
-
-    def fail_provider(*_args):
-        raise AssertionError("provider artwork lookup should not run")
-
-    monkeypatch.setattr(metadata.requests, "get", fake_get)
-    monkeypatch.setattr(metadata, "search_discogs_album", fail_provider)
-    monkeypatch.setattr(metadata, "search_itunes_album", fail_provider)
-    monkeypatch.setattr(metadata, "search_deezer_album", fail_provider)
-    monkeypatch.setattr(metadata, "search_lastfm_album", fail_provider)
-
-    assert metadata.fetch_artwork(album) == b"cover-art"
-    assert calls == ["https://coverartarchive.org/release/release-id/front-500"]
-
-
-def test_fetch_artwork_uses_provider_artwork_after_primary_urls_fail(monkeypatch):
+def test_fetch_artwork_uses_theaudiodb_after_primary_urls_fail(monkeypatch):
     album = metadata.AlbumInfo(
         artist="Artist",
         album="Album",
@@ -464,7 +397,7 @@ def test_fetch_artwork_uses_provider_artwork_after_primary_urls_fail(monkeypatch
         artist="Artist",
         album="Album",
         artwork_url="https://example.test/provider.jpg",
-        metadata_source="discogs",
+        metadata_source="theaudiodb",
     )
     calls = []
 
@@ -480,96 +413,37 @@ def test_fetch_artwork_uses_provider_artwork_after_primary_urls_fail(monkeypatch
         return FakeResponse(404, b"")
 
     monkeypatch.setattr(metadata.requests, "get", fake_get)
-    monkeypatch.setattr(metadata, "search_discogs_album", lambda *args: provider_album)
-    monkeypatch.setattr(metadata, "search_itunes_album", lambda *args: None)
-    monkeypatch.setattr(metadata, "search_deezer_album", lambda *args: None)
-    monkeypatch.setattr(metadata, "search_lastfm_album", lambda *args: None)
+    monkeypatch.setattr(metadata, "search_theaudiodb_album", lambda *args: provider_album)
 
     assert metadata.fetch_artwork(album) == b"provider-art"
     assert calls == ["https://example.test/primary.jpg", "https://example.test/provider.jpg"]
 
 
-def test_itunes_search_orders_multi_disc_tracks(monkeypatch):
-    class FakeResponse:
-        status_code = 200
+def test_search_album_continues_past_incomplete_metadata(monkeypatch):
+    incomplete = metadata.AlbumInfo(artist="Artist", album="Album", metadata_source="musicbrainz")
+    complete = metadata.AlbumInfo(
+        artist="Artist",
+        album="Album",
+        tracks=[metadata.TrackInfo(number=1, title="Complete Track")],
+        metadata_source="theaudiodb",
+    )
+    calls = []
 
-        def json(self):
-            return {
-                "results": [
-                    {
-                        "artistName": "Artist",
-                        "collectionName": "Album",
-                        "trackName": "Disc Two One",
-                        "trackNumber": 1,
-                        "discNumber": 2,
-                    },
-                    {
-                        "artistName": "Artist",
-                        "collectionName": "Album",
-                        "trackName": "Disc One Two",
-                        "trackNumber": 2,
-                        "discNumber": 1,
-                    },
-                    {
-                        "artistName": "Artist",
-                        "collectionName": "Album",
-                        "trackName": "Disc One One",
-                        "trackNumber": 1,
-                        "discNumber": 1,
-                    },
-                ]
-            }
+    def fake_provider(name, result=None):
+        def provider(artist, album):
+            calls.append(name)
+            return result
 
-    monkeypatch.setattr(metadata.requests, "get", lambda *args, **kwargs: FakeResponse())
+        return provider
 
-    album = metadata.search_itunes_album("Artist", "Album")
+    monkeypatch.setattr(
+        metadata,
+        "_album_search_providers",
+        lambda: (
+            fake_provider("musicbrainz", incomplete),
+            fake_provider("theaudiodb", complete),
+        ),
+    )
 
-    assert [(track.disc_number, track.number, track.title) for track in album.tracks] == [
-        (1, 1, "Disc One One"),
-        (1, 2, "Disc One Two"),
-        (2, 1, "Disc Two One"),
-    ]
-
-
-def test_discogs_search_maps_tracks_and_artwork(monkeypatch):
-    responses = [
-        {
-            "results": [
-                {
-                    "id": 7,
-                    "master_id": 7,
-                    "type": "master",
-                    "title": "Artist - Album",
-                    "cover_image": "https://example.test/search.jpg",
-                    "year": 2003,
-                }
-            ]
-        },
-        {
-            "id": 7,
-            "title": "Album",
-            "year": 2003,
-            "artists": [{"name": "Artist"}],
-            "genres": ["Electronic"],
-            "images": [{"uri": "https://example.test/discogs.jpg"}],
-            "tracklist": [
-                {"position": "1-1", "title": "One", "duration": "1:02"},
-                {"position": "1-2", "title": "Two", "duration": "2:03"},
-            ],
-        },
-    ]
-
-    monkeypatch.setattr(metadata, "_get_json", lambda *args, **kwargs: responses.pop(0))
-
-    album = metadata.search_discogs_album("Artist", "Album")
-
-    assert album.artist == "Artist"
-    assert album.album == "Album"
-    assert album.date == "2003"
-    assert album.genre == "Electronic"
-    assert album.metadata_source == "discogs"
-    assert album.artwork_url == "https://example.test/discogs.jpg"
-    assert [(track.disc_number, track.number, track.title, track.length_ms) for track in album.tracks] == [
-        (1, 1, "One", 62000),
-        (1, 2, "Two", 123000),
-    ]
+    assert metadata.search_album("Artist", "Album") is complete
+    assert calls == ["musicbrainz", "theaudiodb"]
