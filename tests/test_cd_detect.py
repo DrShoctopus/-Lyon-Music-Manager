@@ -31,7 +31,7 @@ def test_ctdb_toc_from_track_data_marks_data_track():
 def test_ctdb_toc_from_track_data_requires_leadout():
     entries = [_CtdbTocEntry(track_number=1, offset=0, is_audio=True)]
 
-    assert _ctdb_toc_from_track_data(entries) is None
+    assert _ctdb_toc_from_track_data(entries) == ""
 
 
 def test_disc_toc_can_be_built_from_ctdb_entries():
