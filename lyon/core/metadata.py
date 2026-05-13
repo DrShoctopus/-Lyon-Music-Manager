@@ -80,8 +80,8 @@ def _init() -> None:
 
 
 def lookup_disc(discid_str: str, toc: str | None = None) -> Optional[AlbumInfo]:
-    """Look up an album by disc identity using MusicBrainz before fallback sources."""
-    for provider in (_disc_musicbrainz_provider, _disc_ctdb_provider):
+    """Look up an album by disc identity using exact providers before fuzzy CTDB."""
+    for provider in (_disc_musicbrainz_provider, _disc_ctdb_provider, _disc_ctdb_fuzzy_provider):
         info = provider(discid_str, toc)
         if _has_usable_metadata(info):
             return info
@@ -411,6 +411,10 @@ def _disc_musicbrainz_provider(discid_str: str, toc: str | None) -> Optional[Alb
 
 def _disc_ctdb_provider(_discid_str: str, toc: str | None) -> Optional[AlbumInfo]:
     return lookup_ctdb_disc(toc)
+
+
+def _disc_ctdb_fuzzy_provider(_discid_str: str, toc: str | None) -> Optional[AlbumInfo]:
+    return lookup_ctdb_disc(toc, fuzzy=True)
 
 
 def _album_search_providers() -> tuple[Callable[[str, str], Optional[AlbumInfo]], ...]:
