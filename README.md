@@ -1,10 +1,10 @@
 <p align="center">
-  <img src="docs/brand/lyon-readme-banner.svg" alt="Lyon Music Manager vintage robot brand banner" width="100%">
+  <img src="docs/brand/lyon-readme-banner.svg" alt="Lyon Media Manager sea lion brand banner" width="100%">
 </p>
 
-# Lyon Music Manager
+# Lyon Media Manager
 
-Lyon Music Manager is a Windows-focused desktop music app for ripping audio CDs
+Lyon Media Manager is a Windows-focused desktop media app for ripping audio CDs
 to FLAC, organizing a local music library, playing tracks, and browsing YouTube
 from one Windows Media Player-inspired interface.
 
@@ -14,7 +14,7 @@ Mutagen, MusicBrainz, Cover Art Archive, ffmpeg, libdiscid, and libVLC.
 ## Current Status
 
 `LMM-DEV` is an active desktop application branch. It includes the core music
-library, playback, CD-ripping, YouTube, Windows build, and vintage robot branding
+library, playback, CD-ripping, YouTube, Windows build, and sea lion branding
 work. The app can be run from source for development, and Windows packaging is
 available through PyInstaller and a manual GitHub Actions workflow.
 
@@ -27,7 +27,7 @@ The application version is defined in `lyon/__init__.py`.
 
 ## Current Capabilities
 
-- **Vintage robot startup branding** with a PySide6-drawn app icon and short
+- **Sea lion startup branding** with a PySide6-drawn glossy app icon and short
   splash screen at launch.
 - **Windows Media Player-style shell** with a dark glossy theme, tabbed
   navigation, status messages, Settings access, and a persistent transport bar.
@@ -128,7 +128,7 @@ outside Windows.
 
 1. **Start the app**
    - Launch from source with `py main.py`.
-   - The vintage robot splash appears briefly before the main window opens.
+   - The sea lion splash appears briefly before the main window opens.
 
 2. **Configure settings**
    - Open **Settings**.
@@ -258,7 +258,7 @@ lyon/core/playback_backend.py   libVLC playback backend and Qt Multimedia fallba
 lyon/core/ripper.py             ffmpeg-backed CD-to-FLAC worker
 lyon/core/settings.py           Settings defaults, persistence, bin lookup
 lyon/core/tagger.py             FLAC/Vorbis comment and cover-art writer
-lyon/ui/branding.py             Vintage robot app icon and startup splash drawing
+lyon/ui/branding.py             Sea lion app icon and startup splash drawing
 lyon/ui/                        Main window, tabs, dialogs, styles, widgets
 docs/brand/                     README branding artwork
 build/lyon.spec                 PyInstaller build definition
@@ -307,7 +307,7 @@ continue to settle.
 
 ## Credits And Third-Party Services
 
-Lyon Music Manager uses MusicBrainz metadata, Cover Art Archive artwork,
+Lyon Media Manager uses MusicBrainz metadata, Cover Art Archive artwork,
 ffmpeg/libcdio for CD audio extraction, libdiscid for disc IDs, libVLC for
 local playback and equalizer support, Mutagen for tag handling, and Qt/PySide6
 for the desktop UI. Respect the MusicBrainz access
