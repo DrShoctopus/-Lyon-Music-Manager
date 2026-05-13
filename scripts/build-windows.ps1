@@ -169,7 +169,9 @@ if ($SkipBinaries) {
         if (-not $root) { throw "VLC archive did not contain an extracted root directory." }
         if (Test-Path $vlcDir) { Remove-Item $vlcDir -Recurse -Force }
         New-Item -ItemType Directory -Force -Path $vlcDir | Out-Null
-        Copy-Item -Path (Join-Path $root.FullName '*') -Destination $vlcDir -Recurse -Force
+        Copy-Item -Path (Join-Path $root.FullName 'libvlc.dll') -Destination $vlcDir -Force
+        Copy-Item -Path (Join-Path $root.FullName 'libvlccore.dll') -Destination $vlcDir -Force
+        Copy-Item -Path (Join-Path $root.FullName 'plugins') -Destination $vlcDir -Recurse -Force
         if (-not (Test-Path (Join-Path $vlcDir 'libvlc.dll'))) { throw "libvlc.dll was not copied to bin\vlc." }
         if (-not (Test-Path (Join-Path $vlcDir 'libvlccore.dll'))) { throw "libvlccore.dll was not copied to bin\vlc." }
         if (-not (Test-Path (Join-Path $vlcDir 'plugins'))) { throw "VLC plugins directory was not copied to bin\vlc." }

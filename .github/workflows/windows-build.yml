@@ -88,7 +88,9 @@ jobs:
           $vlcOut = "bin\vlc"
           if (Test-Path $vlcOut) { Remove-Item $vlcOut -Recurse -Force }
           New-Item -ItemType Directory -Force -Path $vlcOut | Out-Null
-          Copy-Item -Path (Join-Path $root.FullName '*') -Destination $vlcOut -Recurse -Force
+          Copy-Item -Path (Join-Path $root.FullName 'libvlc.dll') -Destination $vlcOut -Force
+          Copy-Item -Path (Join-Path $root.FullName 'libvlccore.dll') -Destination $vlcOut -Force
+          Copy-Item -Path (Join-Path $root.FullName 'plugins') -Destination $vlcOut -Recurse -Force
           if (-not (Test-Path (Join-Path $vlcOut 'libvlc.dll'))) { throw "libvlc.dll was not copied to bin\vlc." }
           if (-not (Test-Path (Join-Path $vlcOut 'libvlccore.dll'))) { throw "libvlccore.dll was not copied to bin\vlc." }
           if (-not (Test-Path (Join-Path $vlcOut 'plugins'))) { throw "VLC plugins directory was not copied to bin\vlc." }

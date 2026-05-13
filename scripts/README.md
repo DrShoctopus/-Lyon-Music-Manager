@@ -18,7 +18,8 @@ scripts\build-windows.ps1
 3. Installs `requirements.txt` + `pyinstaller`.
 4. Downloads `ffmpeg.exe` (gyan.dev essentials build), `discid.dll`
    (MetaBrainz libdiscid v0.6.4), and the VideoLAN VLC runtime into `bin\` if
-   not already present.
+   not already present. The VLC runtime is pruned to `libvlc.dll`,
+   `libvlccore.dll`, and `plugins\`.
 5. Smoke-tests both `from lyon.app import main` and creation of a libVLC media
    player through python-vlc.
 6. Runs `pyinstaller --noconfirm build\lyon.spec`.

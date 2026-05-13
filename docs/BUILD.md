@@ -12,8 +12,9 @@ you grab a Python build that still supports it (3.8 was the last).
 - **libdiscid.dll** (Windows 64-bit) from
   https://musicbrainz.org/doc/libdiscid#Download
 - **VLC runtime** (Windows 64-bit zip package) from VideoLAN. The automated
-  GitHub workflow and `scripts\build-windows.ps1` download VLC 3.0.21 into
-  `bin\vlc\` before packaging.
+  GitHub workflow and `scripts\build-windows.ps1` download VLC 3.0.21, then
+  prune it to `libvlc.dll`, `libvlccore.dll`, and `plugins\` under `bin\vlc\`
+  before packaging.
 
 For manual builds, place these files into `bin/` at the project root:
 
@@ -79,8 +80,8 @@ python-vlc.
 For Windows packaging, prefer the bundled runtime path used by CI:
 
 1. Download the 64-bit VLC zip package from VideoLAN.
-2. Copy the extracted VLC folder contents into `bin\vlc\` so `libvlc.dll`,
-   `libvlccore.dll`, and `plugins\` are directly under that folder.
+2. Copy only `libvlc.dll`, `libvlccore.dll`, and the `plugins\` directory into
+   `bin\vlc\` so those three entries are directly under that folder.
 3. Run PyInstaller normally. The app prepends the bundled VLC folder to PATH and
    sets `VLC_PLUGIN_PATH` at runtime before importing python-vlc.
 
