@@ -15,7 +15,7 @@ class SettingsDialog(QDialog):
     def __init__(self, settings: Settings, parent: QWidget | None = None):
         super().__init__(parent)
         self.setWindowTitle("Settings")
-        self.resize(520, 320)
+        self.resize(520, 360)
         self.result_settings = replace(settings)
 
         form = QFormLayout()
@@ -50,13 +50,21 @@ class SettingsDialog(QDialog):
         self.lookup.setChecked(settings.auto_lookup_metadata)
         form.addRow("", self.lookup)
 
+        self.cuetools_db = QCheckBox("Use CUETools DB Metadata Plugin lookup")
+        self.cuetools_db.setChecked(settings.cuetools_db_metadata_enabled)
+        form.addRow("", self.cuetools_db)
+
         self.artwork = QCheckBox("Download cover art")
         self.artwork.setChecked(settings.download_artwork)
         form.addRow("", self.artwork)
 
-        # MB contact (etiquette)
+        # Provider settings
         self.contact = QLineEdit(settings.musicbrainz_contact)
         form.addRow("MusicBrainz contact:", self.contact)
+
+        self.audiodb_key = QLineEdit(settings.theaudiodb_api_key)
+        self.audiodb_key.setPlaceholderText("123")
+        form.addRow("TheAudioDB API key:", self.audiodb_key)
 
         layout = QVBoxLayout(self)
         layout.addLayout(form)
@@ -76,6 +84,8 @@ class SettingsDialog(QDialog):
         self.result_settings.cd_drive = self.drive.text().strip()
         self.result_settings.eject_after_rip = self.eject.isChecked()
         self.result_settings.auto_lookup_metadata = self.lookup.isChecked()
+        self.result_settings.cuetools_db_metadata_enabled = self.cuetools_db.isChecked()
         self.result_settings.download_artwork = self.artwork.isChecked()
         self.result_settings.musicbrainz_contact = self.contact.text().strip() or self.result_settings.musicbrainz_contact
+        self.result_settings.theaudiodb_api_key = self.audiodb_key.text().strip() or "123"
         self.accept()
