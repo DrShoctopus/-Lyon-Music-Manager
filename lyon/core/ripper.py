@@ -18,6 +18,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import threading
 from ctypes import wintypes
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -30,6 +31,13 @@ from .settings import Settings, bundled_bin_dir
 
 
 SAFE_CHARS_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+# Windows refuses to create files whose basename (with or without extension)
+# matches one of these reserved device names, even on NTFS via Win32.
+_WINDOWS_RESERVED_NAMES = frozenset({
+    "CON", "PRN", "AUX", "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+})
 CD_SECTORS_PER_SECOND = 75
 CDDA_SECTOR_SIZE = 2352
 CDDA_COOKED_SECTOR_SIZE = 2048
@@ -58,9 +66,17 @@ class _WindowsCddaReadError(OSError):
 
 
 def safe_path_component(name: str) -> str:
-    name = name.strip().rstrip(".")
+    # Trailing dots and spaces are silently stripped by Win32 path APIs and
+    # would make "Foo." and "Foo" collide; strip them first so the result is
+    # stable across rips of the same album.
+    name = name.strip().rstrip(" .")
     name = SAFE_CHARS_RE.sub("_", name)
-    return name or "Unknown"
+    if not name:
+        return "Unknown"
+    stem, dot, ext = name.partition(".")
+    if stem.upper() in _WINDOWS_RESERVED_NAMES:
+        name = f"{stem}_{dot}{ext}" if dot else f"{stem}_"
+    return name
 
 
 def find_ffmpeg() -> Optional[str]:
@@ -244,6 +260,8 @@ def _ffmpeg_supports_demuxer(ffmpeg: str, name: str) -> bool:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=15,
             creationflags=_NO_WINDOW,
             check=False,
@@ -714,63 +732,94 @@ class RipWorker(QObject):
             self.log.emit(reason)
             return FfmpegAttemptFailure(cmd, None, reason)
 
+        # Drain ffmpeg's stdout in a background thread. Without this, a long
+        # rip can produce more diagnostic output than the OS pipe buffer holds
+        # (~64KB on Windows); ffmpeg then blocks on its own write, stops
+        # consuming stdin, and our writer below deadlocks. The drained bytes
+        # are decoded once the process has exited.
+        stdout_buffer = bytearray()
+        stdout_lock = threading.Lock()
+
+        def _drain_stdout() -> None:
+            if proc.stdout is None:
+                return
+            try:
+                for chunk in iter(lambda: proc.stdout.read(4096), b""):
+                    with stdout_lock:
+                        stdout_buffer.extend(chunk)
+            except OSError:
+                pass
+
+        reader = threading.Thread(target=_drain_stdout, name="ffmpeg-stdout-drain", daemon=True)
+        reader.start()
+
+        def _collected_output() -> list[str]:
+            with stdout_lock:
+                data = bytes(stdout_buffer)
+            return _decode_process_output(data)[-FFMPEG_ERROR_LINES:]
+
+        def _cleanup_partial() -> None:
+            try:
+                out.unlink(missing_ok=True)
+            except OSError:
+                pass
+
         read_sectors = 0
-        output: list[str] = []
         try:
             if proc.stdin is None:
                 raise OSError("ffmpeg stdin pipe was not created")
             for chunk in _read_windows_cdda_sectors(self.request.drive, start, total_sectors):
                 if self._cancel:
+                    try:
+                        proc.stdin.close()
+                    except OSError:
+                        pass
                     proc.kill()
                     proc.wait()
-                    return FfmpegAttemptFailure(cmd, proc.returncode, "Cancelled by user.", output)
+                    reader.join(timeout=2)
+                    _cleanup_partial()
+                    return FfmpegAttemptFailure(
+                        cmd, proc.returncode, "Cancelled by user.", _collected_output()
+                    )
                 proc.stdin.write(chunk)
                 read_sectors += len(chunk) // CDDA_SECTOR_SIZE
                 if total_sectors > 0:
                     pct = max(0, min(99, int(read_sectors * 100 / total_sectors)))
                     self.track_progress.emit(track_no, pct)
-            proc.stdin.close()
-            if proc.stdout is not None:
-                output = _decode_process_output(proc.stdout.read())[-FFMPEG_ERROR_LINES:]
+            try:
+                proc.stdin.close()
+            except OSError:
+                pass
             proc.wait()
+            reader.join(timeout=2)
+            output = _collected_output()
         except _WindowsCddaReadError as e:
             reason = f"Windows raw CD reader failed: {e}"
             self.log.emit(reason)
             if proc.poll() is None:
                 proc.kill()
-            if proc.stdout is not None:
-                output = _decode_process_output(proc.stdout.read())[-FFMPEG_ERROR_LINES:]
             proc.wait()
-            try:
-                out.unlink(missing_ok=True)
-            except OSError:
-                pass
-            return FfmpegAttemptFailure(cmd, proc.returncode, reason, output)
+            reader.join(timeout=2)
+            _cleanup_partial()
+            return FfmpegAttemptFailure(cmd, proc.returncode, reason, _collected_output())
         except (BrokenPipeError, OSError) as e:
             if proc.poll() is None:
                 proc.kill()
-            if proc.stdout is not None:
-                output = _decode_process_output(proc.stdout.read())[-FFMPEG_ERROR_LINES:]
             proc.wait()
+            reader.join(timeout=2)
+            output = _collected_output()
             reason = _summarize_ffmpeg_failure(output, proc.returncode)
             if not output:
                 reason = f"ffmpeg raw CD audio pipe failed: {e}"
             self.log.emit(reason)
-            try:
-                out.unlink(missing_ok=True)
-            except OSError:
-                pass
+            _cleanup_partial()
             return FfmpegAttemptFailure(cmd, proc.returncode, reason, output)
 
         if proc.returncode == 0 and out.exists() and out.stat().st_size > 0:
             self.track_progress.emit(track_no, 100)
             return None
 
-        try:
-            out.unlink(missing_ok=True)
-        except OSError:
-            pass
-
+        _cleanup_partial()
         reason = _summarize_ffmpeg_failure(output, proc.returncode)
         if output:
             self.log.emit("ffmpeg: " + " | ".join(output))
@@ -790,6 +839,7 @@ class RipWorker(QObject):
                 cmd,
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, bufsize=1,
+                encoding="utf-8", errors="replace",
                 creationflags=_NO_WINDOW,
             )
         except OSError as e:
