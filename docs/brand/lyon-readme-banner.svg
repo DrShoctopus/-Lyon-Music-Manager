@@ -1,70 +1,68 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360" role="img" aria-labelledby="title desc">
-  <title id="title">Lyon Music Manager</title>
-  <desc id="desc">Vintage robot branding for the Lyon Music Manager README.</desc>
+  <title id="title">Lyon Media Manager</title>
+  <desc id="desc">Glossy sea lion branding for the Lyon Media Manager README.</desc>
   <defs>
-    <linearGradient id="paper" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#fff9ec"/>
-      <stop offset="1" stop-color="#f2dfbf"/>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#12385f"/>
+      <stop offset=".52" stop-color="#061a33"/>
+      <stop offset="1" stop-color="#010812"/>
     </linearGradient>
-    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
-      <feDropShadow dx="0" dy="12" stdDeviation="0" flood-color="#08223a" flood-opacity=".22"/>
+    <radialGradient id="glow" cx="28%" cy="55%" r="55%">
+      <stop offset="0" stop-color="#1da5de" stop-opacity=".42"/>
+      <stop offset=".55" stop-color="#09355d" stop-opacity=".23"/>
+      <stop offset="1" stop-color="#000" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="seal" x1=".28" y1=".08" x2=".66" y2=".85">
+      <stop offset="0" stop-color="#f4fbff"/>
+      <stop offset=".34" stop-color="#b9d4ea"/>
+      <stop offset=".76" stop-color="#5f8bb2"/>
+      <stop offset="1" stop-color="#edf8ff"/>
+    </linearGradient>
+    <linearGradient id="tail" x1=".15" y1=".1" x2=".9" y2=".9">
+      <stop offset="0" stop-color="#067fa5"/>
+      <stop offset=".5" stop-color="#15c8dc"/>
+      <stop offset="1" stop-color="#034c77"/>
+    </linearGradient>
+    <filter id="softShadow" x="-25%" y="-25%" width="150%" height="150%">
+      <feDropShadow dx="0" dy="22" stdDeviation="18" flood-color="#00d9f5" flood-opacity=".28"/>
+      <feDropShadow dx="0" dy="10" stdDeviation="10" flood-color="#000" flood-opacity=".45"/>
     </filter>
   </defs>
-  <rect width="1200" height="360" rx="18" fill="url(#paper)"/>
-  <g transform="translate(212 180)" opacity=".34">
-    <g fill="#df4932">
-      <path d="M0 0 210 -18 210 18z"/>
-      <path d="M0 0 191 89 174 122z"/>
-      <path d="M0 0 122 174 89 191z"/>
-      <path d="M0 0 18 210 -18 210z"/>
-      <path d="M0 0 -89 191 -122 174z"/>
-      <path d="M0 0 -174 122 -191 89z"/>
-      <path d="M0 0 -210 18 -210 -18z"/>
-      <path d="M0 0 -191 -89 -174 -122z"/>
-      <path d="M0 0 -122 -174 -89 -191z"/>
-      <path d="M0 0 -18 -210 18 -210z"/>
-      <path d="M0 0 89 -191 122 -174z"/>
-      <path d="M0 0 174 -122 191 -89z"/>
+  <rect width="1200" height="360" fill="url(#bg)"/>
+  <rect width="1200" height="360" fill="url(#glow)"/>
+  <g fill="none" stroke="#0dcaeb" stroke-width="1.4" opacity=".28">
+    <path d="M-30 254 C180 198 352 310 560 252 C730 204 884 274 1230 208"/>
+    <path d="M-30 270 C190 220 360 326 566 270 C736 226 900 292 1230 232" opacity=".72"/>
+    <path d="M-30 286 C200 242 372 342 582 286 C760 242 926 310 1230 256" opacity=".55"/>
+    <path d="M-30 302 C216 264 384 350 596 302 C778 260 944 326 1230 280" opacity=".4"/>
+  </g>
+  <g opacity=".24" stroke="#2693cd" fill="#08233e">
+    <rect x="918" y="78" width="132" height="78" rx="7"/>
+    <rect x="1068" y="64" width="130" height="80" rx="7"/>
+    <rect x="918" y="184" width="104" height="70" rx="7"/>
+    <rect x="1042" y="172" width="104" height="74" rx="7"/>
+    <rect x="964" y="272" width="184" height="76" rx="7"/>
+    <path d="M952 102v32l32-16z" fill="#25a8dc" stroke="none"/>
+    <circle cx="1074" cy="210" r="10" fill="#25a8dc" stroke="none"/>
+    <rect x="1084" y="184" width="8" height="36" rx="2" fill="#25a8dc" stroke="none"/>
+  </g>
+  <g filter="url(#softShadow)" transform="translate(142 34) scale(1.04)">
+    <ellipse cx="148" cy="250" rx="132" ry="42" fill="#00d9f5" opacity=".22"/>
+    <path d="M92 214 C134 252 220 260 268 218 C248 271 172 296 92 244 C64 226 47 196 40 164 C54 184 68 201 92 214 Z" fill="url(#tail)" stroke="#37ecff" stroke-width="3"/>
+    <path d="M194 225 C236 202 252 180 268 162 C270 196 240 229 198 246 Z" fill="url(#tail)" stroke="#37ecff" stroke-width="3"/>
+    <path d="M64 226 C17 143 73 56 142 42 C170 36 185 52 210 50 C230 51 242 62 243 76 C227 72 203 80 182 103 C130 158 142 207 196 226 C151 238 103 238 64 226 Z" fill="url(#seal)" stroke="#bdeeff" stroke-width="3"/>
+    <path d="M106 224 C76 159 102 91 154 61 C131 99 121 148 145 193 C154 210 171 220 193 227 C157 233 128 232 106 224 Z" fill="#fff" opacity=".13"/>
+    <ellipse cx="208" cy="67" rx="8" ry="5" fill="#021225" stroke="#aeeaff" stroke-width="2"/>
+    <g stroke="#e6f8ff" stroke-width="1.6" stroke-linecap="round" opacity=".78">
+      <path d="M226 76 258 61"/><path d="M226 80 258 80"/><path d="M226 84 258 99"/>
     </g>
+    <path d="M75 159 C73 94 118 56 159 50" fill="none" stroke="#fff" stroke-width="6" stroke-linecap="round" opacity=".42"/>
   </g>
-  <g filter="url(#shadow)" transform="translate(98 54)">
-    <rect x="0" y="0" width="248" height="248" rx="36" fill="#fff6e6" stroke="#08223a" stroke-width="10"/>
-    <rect x="16" y="16" width="216" height="216" rx="28" fill="#9fc5b3"/>
-    <ellipse cx="124" cy="223" rx="72" ry="14" fill="#08223a" opacity=".18"/>
-    <path d="M70 112 98 84v104l-28 16z" fill="#6d938b" stroke="#08223a" stroke-width="9" stroke-linejoin="round"/>
-    <rect x="94" y="76" width="124" height="104" rx="9" fill="#dce9d2" stroke="#08223a" stroke-width="9"/>
-    <line x1="156" y1="66" x2="156" y2="44" stroke="#08223a" stroke-width="8" stroke-linecap="round"/>
-    <circle cx="156" cy="30" r="17" fill="#df4932" stroke="#08223a" stroke-width="7"/>
-    <circle cx="151" cy="25" r="6" fill="#ffe1ca"/>
-    <ellipse cx="60" cy="132" rx="17" ry="25" fill="#df4932" stroke="#08223a" stroke-width="7"/>
-    <ellipse cx="224" cy="132" rx="17" ry="25" fill="#df4932" stroke="#08223a" stroke-width="7"/>
-    <circle cx="116" cy="118" r="18" fill="#fff6e6" stroke="#08223a" stroke-width="6"/>
-    <circle cx="176" cy="118" r="18" fill="#fff6e6" stroke="#08223a" stroke-width="6"/>
-    <ellipse cx="123" cy="118" rx="9" ry="13" fill="#08223a"/>
-    <ellipse cx="183" cy="118" rx="9" ry="13" fill="#08223a"/>
-    <circle cx="127" cy="112" r="4" fill="#fff6e6"/>
-    <circle cx="187" cy="112" r="4" fill="#fff6e6"/>
-    <path d="M158 133 146 156h24z" fill="#78aebe" stroke="#08223a" stroke-width="5" stroke-linejoin="round"/>
-    <g stroke="#08223a" stroke-width="7" stroke-linecap="round">
-      <line x1="121" y1="174" x2="121" y2="190"/>
-      <line x1="137" y1="174" x2="137" y2="190"/>
-      <line x1="153" y1="174" x2="153" y2="190"/>
-      <line x1="169" y1="174" x2="169" y2="190"/>
-      <line x1="185" y1="174" x2="185" y2="190"/>
-    </g>
-    <rect x="120" y="202" width="76" height="15" rx="4" fill="#70a8bd" stroke="#08223a" stroke-width="7"/>
+  <g transform="translate(520 104)">
+    <text x="0" y="70" font-family="Segoe UI, Arial, sans-serif" font-size="88" font-weight="300" fill="#d9ecfb" opacity=".96">Lyon</text>
+    <text x="4" y="136" font-family="Segoe UI, Arial, sans-serif" font-size="42" font-weight="300" letter-spacing="12" fill="#42d6f5">Media Manager</text>
+    <line x1="6" y1="177" x2="382" y2="177" stroke="#10d5f0" stroke-opacity=".55"/>
+    <circle cx="184" cy="177" r="5" fill="#10d5f0"/>
+    <text x="80" y="226" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="300" letter-spacing="8" fill="#a6c4e1" opacity=".75">Organize. Play. Create.</text>
   </g>
-  <g transform="translate(410 75)">
-    <line x1="0" y1="0" x2="470" y2="0" stroke="#08223a" stroke-width="8"/>
-    <text x="0" y="92" font-family="Arial Narrow, Impact, sans-serif" font-size="86" font-weight="900" fill="#df4932">LYON</text>
-    <text x="0" y="170" font-family="Arial Narrow, Impact, sans-serif" font-size="78" font-weight="900" fill="#08223a">MUSIC</text>
-    <text x="0" y="248" font-family="Arial Narrow, Impact, sans-serif" font-size="78" font-weight="900" fill="#08223a">MANAGER</text>
-    <line x1="0" y1="274" x2="470" y2="274" stroke="#08223a" stroke-width="8"/>
-    <rect x="495" y="250" width="24" height="24" fill="#9fc5b3"/>
-    <rect x="530" y="238" width="24" height="36" fill="#df4932"/>
-    <rect x="565" y="256" width="24" height="18" fill="#dce9d2"/>
-  </g>
-  <text x="905" y="166" font-family="Segoe UI, Arial, sans-serif" font-size="30" font-weight="700" fill="#08223a">Rip CDs</text>
-  <text x="905" y="207" font-family="Segoe UI, Arial, sans-serif" font-size="30" font-weight="700" fill="#08223a">Manage Library</text>
-  <text x="905" y="248" font-family="Segoe UI, Arial, sans-serif" font-size="30" font-weight="700" fill="#08223a">Play Music</text>
 </svg>
