@@ -83,10 +83,10 @@ class DiscToc:
     discid: str = ""
     freedb_id: str = ""
     toc_string: str = ""        # "1 LAST FIRST_OFFSET LEAD_OFFSET ..."
-    ctdb_toc_string: str = ""   # CUETools layout, including data tracks when available.
     track_count: int = 0
     track_offsets: list[int] = field(default_factory=list)
     sectors: int = 0
+    ctdb_toc_string: str = ""   # CUETools layout, including data tracks when available.
 
 
 @dataclass(frozen=True)
@@ -163,10 +163,10 @@ def read_disc(drive: str | None = None) -> DiscToc | None:
         discid=d.id,
         freedb_id=getattr(d, "freedb_id", "") or "",
         toc_string=d.toc_string,
-        ctdb_toc_string=_read_windows_ctdb_toc(drive),
         track_count=len(d.tracks),
         track_offsets=[t.offset for t in d.tracks],
         sectors=getattr(d, "sectors", 0) or 0,
+        ctdb_toc_string=_read_windows_ctdb_toc(drive),
     )
 
 
