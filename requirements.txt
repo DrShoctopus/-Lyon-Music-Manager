@@ -5,3 +5,4 @@ musicbrainzngs>=0.7.1
 discid>=1.2; sys_platform == "win32"
 requests>=2.31
 Pillow>=10.0
+python-vlc>=3.0.20
