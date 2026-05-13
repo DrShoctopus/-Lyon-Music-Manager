@@ -16,9 +16,12 @@ scripts\build-windows.ps1
 1. Locates Python 3.14 (`py -3.14` first, then `python` if it's 3.14).
 2. Creates `.venv\` and upgrades pip.
 3. Installs `requirements.txt` + `pyinstaller`.
-4. Downloads `ffmpeg.exe` (gyan.dev essentials build) and `discid.dll`
-   (MetaBrainz libdiscid v0.6.4) into `bin\` if not already present.
-5. Smoke-tests `from lyon.app import main`.
+4. Downloads `ffmpeg.exe` (gyan.dev essentials build), `discid.dll`
+   (MetaBrainz libdiscid v0.6.4), and the VideoLAN VLC runtime into `bin\` if
+   not already present. The VLC runtime is pruned to `libvlc.dll`,
+   `libvlccore.dll`, and `plugins\`.
+5. Smoke-tests both `from lyon.app import main` and creation of a libVLC media
+   player through python-vlc.
 6. Runs `pyinstaller --noconfirm build\lyon.spec`.
 7. Zips the result into `dist\LyonMusicManager-windows.zip`.
 
@@ -29,8 +32,8 @@ scripts\build-windows.ps1
 
 ### Flags
 
-- `-SkipBinaries` — don't re-download `ffmpeg.exe` / `discid.dll` if
-  they're already in `bin\`. Useful for repeat builds.
+- `-SkipBinaries` — don't re-download `ffmpeg.exe`, `discid.dll`, or
+  `bin\vlc\` if they're already present. Useful for repeat builds.
 - `-SkipZip` — produce the PyInstaller bundle in `dist\` but don't
   zip it.
 - `-Clean` — wipe `.venv`, `build\`, `dist\` before building.

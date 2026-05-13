@@ -4,6 +4,7 @@
 # Drop these into a `bin/` folder at the project root before building:
 #   bin/ffmpeg.exe         (static Windows build, e.g. from gyan.dev)
 #   bin/discid.dll         (libdiscid Windows release)
+#   optional: a VLC runtime directory if you choose to bundle libVLC
 #
 # They are bundled next to the .exe so the app works offline.
 # -*- mode: python ; coding: utf-8 -*-
@@ -19,13 +20,18 @@ if BIN.exists():
     for entry in BIN.iterdir():
         if entry.is_file():
             binaries.append((str(entry), "bin"))
+        elif entry.is_dir():
+            for child in entry.rglob("*"):
+                if child.is_file():
+                    dest = Path("bin") / entry.name / child.relative_to(entry).parent
+                    datas.append((str(child), str(dest)))
 
 a = Analysis(
     [str(ROOT / "main.py")],
     pathex=[str(ROOT)],
     binaries=binaries,
     datas=datas,
-    hiddenimports=["discid", "musicbrainzngs", "mutagen", "PIL"],
+    hiddenimports=["discid", "musicbrainzngs", "mutagen", "PIL", "vlc"],
     hookspath=[],
     runtime_hooks=[],
     excludes=[],

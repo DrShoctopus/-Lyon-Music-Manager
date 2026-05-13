@@ -30,13 +30,15 @@ jobs:
           Invoke-WebRequest -Uri $url -OutFile ffmpeg.zip
           Expand-Archive ffmpeg.zip -DestinationPath ffmpeg-extract
           $exe = Get-ChildItem -Path ffmpeg-extract -Recurse -Filter ffmpeg.exe | Select-Object -First 1
-          Copy-Item $exe.FullName -Destination bin\ffmpeg.exe
+          if (-not $exe) { throw "ffmpeg.exe was not found in the downloaded archive." }
+          Copy-Item $exe.FullName -Destination bin\ffmpeg.exe -Force
           Remove-Item ffmpeg.zip
           Remove-Item -Recurse -Force ffmpeg-extract
 
       - name: Fetch libdiscid.dll
         shell: pwsh
         run: |
+          New-Item -ItemType Directory -Force -Path bin | Out-Null
           $urls = @(
             'https://ftp.musicbrainz.org/pub/musicbrainz/libdiscid/libdiscid-0.6.4-win.zip',
             'https://ftp.osuosl.org/pub/musicbrainz/libdiscid/libdiscid-0.6.4-win.zip',
@@ -73,11 +75,49 @@ jobs:
           Remove-Item $zip
           Remove-Item -Recurse -Force libdiscid-extract
 
+      - name: Fetch libVLC runtime
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path bin | Out-Null
+          $vlcVersion = "3.0.21"
+          $url = "https://download.videolan.org/pub/videolan/vlc/$vlcVersion/win64/vlc-$vlcVersion-win64.zip"
+          Invoke-WebRequest -Uri $url -OutFile vlc.zip
+          Expand-Archive vlc.zip -DestinationPath vlc-extract -Force
+          $root = Get-ChildItem -Path vlc-extract -Directory | Select-Object -First 1
+          if (-not $root) { throw "VLC archive did not contain an extracted root directory." }
+          $vlcOut = "bin\vlc"
+          if (Test-Path $vlcOut) { Remove-Item $vlcOut -Recurse -Force }
+          New-Item -ItemType Directory -Force -Path $vlcOut | Out-Null
+          Copy-Item -Path (Join-Path $root.FullName 'libvlc.dll') -Destination $vlcOut -Force
+          Copy-Item -Path (Join-Path $root.FullName 'libvlccore.dll') -Destination $vlcOut -Force
+          Copy-Item -Path (Join-Path $root.FullName 'plugins') -Destination $vlcOut -Recurse -Force
+          if (-not (Test-Path (Join-Path $vlcOut 'libvlc.dll'))) { throw "libvlc.dll was not copied to bin\vlc." }
+          if (-not (Test-Path (Join-Path $vlcOut 'libvlccore.dll'))) { throw "libvlccore.dll was not copied to bin\vlc." }
+          if (-not (Test-Path (Join-Path $vlcOut 'plugins'))) { throw "VLC plugins directory was not copied to bin\vlc." }
+          Remove-Item vlc.zip
+          Remove-Item -Recurse -Force vlc-extract
+
       - name: Smoke-test imports
-        run: python -c "from lyon.app import main; print('imports OK')"
+        shell: pwsh
+        run: |
+          $env:PATH = "${{ github.workspace }}\bin\vlc;$env:PATH"
+          $env:VLC_PLUGIN_PATH = "${{ github.workspace }}\bin\vlc\plugins"
+          python -c "from lyon.app import main; print('imports OK')"
+          python -c "from PySide6.QtCore import QCoreApplication; app = QCoreApplication([]); from lyon.core.playback_backend import create_playback_backend; backend = create_playback_backend(); print(type(backend).__name__); assert type(backend).__name__ == 'VlcPlaybackBackend'"
 
       - name: Build with PyInstaller
         run: python -m PyInstaller --noconfirm build/lyon.spec
+
+      - name: Verify packaged VLC runtime
+        shell: pwsh
+        run: |
+          $bundleVlc = "dist\LyonMusicManager\_internal\bin\vlc"
+          if (-not (Test-Path $bundleVlc)) {
+            $bundleVlc = "dist\LyonMusicManager\bin\vlc"
+          }
+          if (-not (Test-Path (Join-Path $bundleVlc 'libvlc.dll'))) { throw "Packaged app is missing libvlc.dll." }
+          if (-not (Test-Path (Join-Path $bundleVlc 'libvlccore.dll'))) { throw "Packaged app is missing libvlccore.dll." }
+          if (-not (Test-Path (Join-Path $bundleVlc 'plugins'))) { throw "Packaged app is missing VLC plugins." }
 
       - name: Zip dist folder
         shell: pwsh

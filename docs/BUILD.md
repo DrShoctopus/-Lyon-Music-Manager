@@ -11,13 +11,21 @@ you grab a Python build that still supports it (3.8 was the last).
   the standard Windows builds.
 - **libdiscid.dll** (Windows 64-bit) from
   https://musicbrainz.org/doc/libdiscid#Download
+- **VLC runtime** (Windows 64-bit zip package) from VideoLAN. The automated
+  GitHub workflow and `scripts\build-windows.ps1` download VLC 3.0.21, then
+  prune it to `libvlc.dll`, `libvlccore.dll`, and `plugins\` under `bin\vlc\`
+  before packaging.
 
-Place both files into `bin/` at the project root:
+For manual builds, place these files into `bin/` at the project root:
 
 ```
 bin\
   ffmpeg.exe
   libdiscid.dll
+  vlc\
+    libvlc.dll
+    libvlccore.dll
+    plugins\
 ```
 
 ## 2. Install dependencies
@@ -61,3 +69,23 @@ which trades faster startup for a slower first launch.
 - **Metadata never resolves** — check internet access, CTDB availability, and the MusicBrainz
   contact value in *Settings*. Hammering MusicBrainz with a generic
   user-agent gets your IP rate-limited.
+
+## 6. VLC playback backend packaging
+
+Lyon now prefers libVLC for local music playback so the existing six-band EQ
+controls can drive VLC's real `AudioEqualizer`. Source installs need both the
+Python binding from `requirements.txt` and a VLC runtime discoverable by
+python-vlc.
+
+For Windows packaging, prefer the bundled runtime path used by CI:
+
+1. Download the 64-bit VLC zip package from VideoLAN.
+2. Copy only `libvlc.dll`, `libvlccore.dll`, and the `plugins\` directory into
+   `bin\vlc\` so those three entries are directly under that folder.
+3. Run PyInstaller normally. The app prepends the bundled VLC folder to PATH and
+   sets `VLC_PLUGIN_PATH` at runtime before importing python-vlc.
+
+A system-wide 64-bit VLC install can still work for source runs, but packaged
+releases should include `bin\vlc\` to avoid depending on target machines. The
+app falls back to the Qt Multimedia backend if python-vlc or libVLC cannot be
+created, but that fallback cannot apply audible per-band EQ.

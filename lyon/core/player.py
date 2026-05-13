@@ -1,13 +1,13 @@
-"""Music player wrapping QMediaPlayer."""
+"""High-level music player with queue and transport logic."""
 from __future__ import annotations
 
 from enum import Enum
 from typing import Optional
 
-from PySide6.QtCore import QObject, QUrl, Signal, Slot
-from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
+from PySide6.QtCore import QObject, Signal
 
 from .library import Track
+from .playback_backend import PlaybackBackend, create_playback_backend, normalize_equalizer_bands
 
 
 class RepeatMode(Enum):
@@ -22,12 +22,12 @@ class Player(QObject):
     position_changed = Signal(int, int)   # (ms, total_ms)
     queue_changed = Signal()
 
-    def __init__(self, parent: Optional[QObject] = None):
+    def __init__(self, parent: Optional[QObject] = None, backend: PlaybackBackend | None = None):
         super().__init__(parent)
-        self._player = QMediaPlayer(self)
-        self._audio = QAudioOutput(self)
-        self._player.setAudioOutput(self._audio)
-        self._audio.setVolume(0.8)
+        self._backend = backend or create_playback_backend(self)
+        backend_parent = getattr(self._backend, "parent", None)
+        if callable(backend_parent) and backend_parent() is None:
+            self._backend.setParent(self)
 
         self._queue: list[Track] = []
         self._index: int = -1
@@ -36,10 +36,9 @@ class Player(QObject):
         self._equalizer_enabled = False
         self._equalizer_bands = [0, 0, 0, 0, 0, 0]
 
-        self._player.positionChanged.connect(self._emit_position)
-        self._player.durationChanged.connect(self._emit_position_dur)
-        self._player.playbackStateChanged.connect(self._on_state)
-        self._player.mediaStatusChanged.connect(self._on_media_status)
+        self._backend.position_changed.connect(self.position_changed.emit)
+        self._backend.state_changed.connect(self.state_changed.emit)
+        self._backend.end_reached.connect(self.next)
 
     # --------------------------------------------------------------- queue
     def set_queue(self, tracks: list[Track], start_index: int = 0) -> None:
@@ -65,7 +64,7 @@ class Player(QObject):
         return None
 
     def is_playing(self) -> bool:
-        return self._player.playbackState() == QMediaPlayer.PlayingState
+        return self._backend.is_playing()
 
     # --------------------------------------------------------------- transport
     def play_index(self, idx: int) -> None:
@@ -73,27 +72,28 @@ class Player(QObject):
             return
         self._index = idx
         track = self._queue[idx]
-        self._player.setSource(QUrl.fromLocalFile(track.path))
-        self._player.play()
+        self._backend.set_source(track.path)
+        self._backend.apply_equalizer(self._equalizer_enabled, self._equalizer_bands)
+        self._backend.play()
         self.track_changed.emit(track)
 
     def play(self) -> None:
         if self._index < 0 and self._queue:
             self.play_index(0)
             return
-        self._player.play()
+        self._backend.play()
 
     def pause(self) -> None:
-        self._player.pause()
+        self._backend.pause()
 
     def toggle(self) -> None:
-        if self._player.playbackState() == QMediaPlayer.PlayingState:
+        if self._backend.is_playing():
             self.pause()
         else:
             self.play()
 
     def stop(self) -> None:
-        self._player.stop()
+        self._backend.stop()
 
     def next(self) -> None:
         if not self._queue:
@@ -110,42 +110,36 @@ class Player(QObject):
         self.play_index(nxt)
 
     def previous(self) -> None:
-        if self._player.position() > 4000:
-            self._player.setPosition(0)
+        if self._backend.position() > 4000:
+            self._backend.set_position(0)
             return
         if self._index > 0:
             self.play_index(self._index - 1)
 
     def seek(self, ms: int) -> None:
-        self._player.setPosition(ms)
+        self._backend.set_position(ms)
 
     # --------------------------------------------------------------- modes
     def set_volume(self, percent: int) -> None:
-        self._audio.setVolume(max(0.0, min(1.0, percent / 100.0)))
+        self._backend.set_volume(percent)
 
     def volume(self) -> int:
-        return int(round(self._audio.volume() * 100))
+        return self._backend.volume()
 
     def set_equalizer(self, enabled: bool, bands: list[int]) -> None:
-        """Store the active six-band equalizer curve.
-
-        QMediaPlayer does not expose per-band DSP controls, so the player keeps
-        the curve as runtime state for the equalizer UI and any future audio
-        processing backend.
-        """
+        """Store and apply the active six-band equalizer curve."""
         self._equalizer_enabled = bool(enabled)
-        normalized = list(bands[:6])
-        normalized.extend([0] * (6 - len(normalized)))
-        self._equalizer_bands = [max(-12, min(12, int(value))) for value in normalized]
+        self._equalizer_bands = normalize_equalizer_bands(bands)
+        self._backend.apply_equalizer(self._equalizer_enabled, self._equalizer_bands)
 
     def equalizer(self) -> tuple[bool, list[int]]:
         return self._equalizer_enabled, list(self._equalizer_bands)
 
     def set_muted(self, muted: bool) -> None:
-        self._audio.setMuted(muted)
+        self._backend.set_muted(muted)
 
     def is_muted(self) -> bool:
-        return self._audio.isMuted()
+        return self._backend.is_muted()
 
     def shuffle(self) -> bool:
         return self._shuffle
@@ -175,25 +169,3 @@ class Player(QObject):
         if self._repeat == RepeatMode.ALL:
             return 0
         return None
-
-    @Slot(int)
-    def _emit_position(self, pos: int) -> None:
-        self.position_changed.emit(pos, self._player.duration())
-
-    @Slot(int)
-    def _emit_position_dur(self, dur: int) -> None:
-        self.position_changed.emit(self._player.position(), dur)
-
-    @Slot()
-    def _on_state(self, state) -> None:
-        mapping = {
-            QMediaPlayer.PlayingState: "playing",
-            QMediaPlayer.PausedState: "paused",
-            QMediaPlayer.StoppedState: "stopped",
-        }
-        self.state_changed.emit(mapping.get(state, "stopped"))
-
-    @Slot()
-    def _on_media_status(self, status) -> None:
-        if status == QMediaPlayer.EndOfMedia:
-            self.next()
