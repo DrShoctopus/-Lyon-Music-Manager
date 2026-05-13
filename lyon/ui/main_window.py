@@ -4,8 +4,9 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
-    QButtonGroup, QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow,
-    QMessageBox, QPushButton, QStackedWidget, QStatusBar, QVBoxLayout, QWidget,
+    QAbstractSpinBox, QButtonGroup, QFileDialog, QFrame, QHBoxLayout, QLabel,
+    QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QPushButton,
+    QStackedWidget, QStatusBar, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from .. import __app_name__, __version__
@@ -17,6 +18,7 @@ from .equalizer_dialog import EqualizerDialog
 from .first_run_dialog import FirstRunDialog
 from .library_view import LibraryView
 from .now_playing import NowPlayingView, TransportBar
+from .queue_dialog import QueueDialog
 from .ripper_view import RipperView
 from .styles import WMP_QSS
 from .youtube_view import YouTubeView
@@ -51,6 +53,7 @@ class MainWindow(QMainWindow):
         self.player.set_equalizer(self.settings.equalizer_enabled, self.settings.equalizer_bands)
         self._scan_thread: _LibraryScanThread | None = None
         self._equalizer_dialog: EqualizerDialog | None = None
+        self._queue_dialog: QueueDialog | None = None
 
         self.setWindowTitle(__app_name__)
         self.resize(1100, 720)
@@ -95,6 +98,10 @@ class MainWindow(QMainWindow):
         settings_btn.setObjectName("navTab")
         settings_btn.clicked.connect(self.open_settings)
         tlayout.addWidget(settings_btn)
+        queue_btn = QPushButton("Queue")
+        queue_btn.setObjectName("navTab")
+        queue_btn.clicked.connect(self.open_queue)
+        tlayout.addWidget(queue_btn)
         equalizer_btn = QPushButton("10 Band EQ")
         equalizer_btn.setObjectName("navTab")
         equalizer_btn.clicked.connect(self.open_equalizer)
@@ -174,11 +181,42 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
         file_menu.addAction(QAction("Exit", self, triggered=self.close))
 
+        playback_menu = m.addMenu("&Playback")
+        play_action = QAction("Play/Pause", self, triggered=self._on_transport_play_requested)
+        play_action.setShortcut("Ctrl+Space")
+        playback_menu.addAction(play_action)
+        prev_action = QAction("Previous", self, triggered=self.player.previous)
+        prev_action.setShortcut("Ctrl+Left")
+        playback_menu.addAction(prev_action)
+        next_action = QAction("Next", self, triggered=self.player.next)
+        next_action.setShortcut("Ctrl+Right")
+        playback_menu.addAction(next_action)
+        queue_action = QAction("Show Queue", self, triggered=self.open_queue)
+        queue_action.setShortcut("Ctrl+Q")
+        playback_menu.addAction(queue_action)
+        search_action = QAction("Focus Library Search", self, triggered=self._focus_library_search)
+        search_action.setShortcut("Ctrl+F")
+        playback_menu.addAction(search_action)
+
         help_menu = m.addMenu("&Help")
         help_menu.addAction(QAction("Runtime Diagnostics", self, triggered=self.show_diagnostics))
         help_menu.addAction(QAction("About", self, triggered=self.show_about))
 
     # ------------------------------------------------------------------ tabs
+
+    def keyPressEvent(self, ev) -> None:
+        if ev.key() == Qt.Key_Space and not self._focus_widget_accepts_text():
+            self._on_transport_play_requested()
+            ev.accept()
+            return
+        super().keyPressEvent(ev)
+
+    def _focus_widget_accepts_text(self) -> bool:
+        return isinstance(
+            self.focusWidget(),
+            (QLineEdit, QTextEdit, QPlainTextEdit, QAbstractSpinBox),
+        )
+
     def _on_transport_play_requested(self) -> None:
         if self.stack.currentWidget() is self.library_view and not self.player.is_playing():
             playback = self.library_view.highlighted_playback()
@@ -278,6 +316,22 @@ class MainWindow(QMainWindow):
 
     def show_diagnostics(self) -> None:
         DiagnosticsDialog(parent=self).exec()
+
+    def open_queue(self) -> None:
+        if self._queue_dialog is None:
+            self._queue_dialog = QueueDialog(self.player, self)
+            self._queue_dialog.finished.connect(self._clear_queue_dialog)
+        self._queue_dialog.show()
+        self._queue_dialog.raise_()
+        self._queue_dialog.activateWindow()
+
+    def _clear_queue_dialog(self, *_args) -> None:
+        self._queue_dialog = None
+
+    def _focus_library_search(self) -> None:
+        self._tab_buttons["Library"].setChecked(True)
+        self.library_view.search.setFocus()
+        self.library_view.search.selectAll()
 
     def open_equalizer(self) -> None:
         if self._equalizer_dialog is None:

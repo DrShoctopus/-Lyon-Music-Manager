@@ -113,6 +113,7 @@ _install_dependency_stubs()
 
 from lyon.core.cd_detect import DiscToc  # noqa: E402
 from lyon.core.metadata import AlbumInfo, TrackInfo  # noqa: E402
+from lyon.core.settings import Settings  # noqa: E402
 from lyon.core.ripper import (  # noqa: E402
     FfmpegAttemptFailure,
     RipFailure,
@@ -125,6 +126,8 @@ from lyon.core.ripper import (  # noqa: E402
     _track_sector_span,
     _windows_cdda_drive_path,
     _write_failure_log,
+    target_folder,
+    unique_target_folder,
 )
 from lyon.ui.ripper_view import _rip_request_from_toc  # noqa: E402
 
@@ -275,3 +278,28 @@ def test_rip_failure_log_includes_track_reason_command_and_output(tmp_path):
     assert "Command:" in text
     assert "Unknown input format: 'libcdio'" in text
     assert "Leadout sector: 15150" in text
+
+
+def test_second_unknown_album_uses_new_folder_without_overwriting(tmp_path):
+    settings = Settings(music_root=str(tmp_path))
+    album = AlbumInfo(artist="Unknown Artist", album="Unknown Album")
+    album.tracks = [TrackInfo(number=1, title="Track 01")]
+    first = target_folder(settings, album)
+    first.mkdir(parents=True)
+    (first / "01 - Track 01.flac").write_bytes(b"first rip")
+
+    second = unique_target_folder(settings, album, create=True)
+
+    assert second == first.with_name("Unknown Album (2)")
+    assert second.exists()
+    assert (first / "01 - Track 01.flac").read_bytes() == b"first rip"
+
+
+def test_known_album_keeps_stable_folder_for_overwrite_confirmation(tmp_path):
+    settings = Settings(music_root=str(tmp_path))
+    album = AlbumInfo(artist="Artist", album="Album")
+    first = target_folder(settings, album)
+    first.mkdir(parents=True)
+    (first / "01 - Song.flac").write_bytes(b"existing")
+
+    assert unique_target_folder(settings, album) == first
