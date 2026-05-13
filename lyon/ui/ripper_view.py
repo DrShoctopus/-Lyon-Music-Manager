@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..core import cd_detect
+from ..core.ctdb_lookup import lookup_ctdb_layout
 from ..core.library import Library
 from ..core.metadata import AlbumInfo, TrackInfo, fetch_artwork, lookup_disc, search_album
 from ..core.ripper import RipRequest, Ripper, target_file, target_folder
@@ -79,6 +80,10 @@ class _LookupThread(QThread):
 
     def run(self) -> None:
         info = lookup_disc(self.toc.discid, self.toc.toc_string)
+        if info is None and self.toc.ctdb_toc_string:
+            info = lookup_ctdb_layout(self.toc.ctdb_toc_string)
+            if info is None:
+                info = lookup_ctdb_layout(self.toc.ctdb_toc_string, fuzzy=True)
         art = None
         if info and self.settings.download_artwork:
             art = fetch_artwork(info)

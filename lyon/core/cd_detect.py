@@ -7,6 +7,7 @@ and call libdiscid (bundled DLL) for identification.
 from __future__ import annotations
 
 import ctypes
+from ctypes import wintypes
 import importlib
 import importlib.util
 import os
@@ -18,6 +19,16 @@ from pathlib import Path
 from .settings import bundled_bin_dir
 
 DRIVE_CDROM = 5  # GetDriveTypeW return value
+GENERIC_READ = 0x80000000
+FILE_SHARE_READ = 0x00000001
+FILE_SHARE_WRITE = 0x00000002
+OPEN_EXISTING = 3
+INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+IOCTL_CDROM_READ_TOC_EX = 0x00024054
+CDROM_TOC_SIZE = 804
+CDROM_TOC_HEADER_SIZE = 4
+CDROM_TOC_TRACK_DATA_SIZE = 8
+CDROM_LEADOUT_TRACK = 0xAA
 
 
 def _bind_winapi() -> None:
@@ -33,6 +44,29 @@ def _bind_winapi() -> None:
     k32.GetLogicalDrives.restype = ctypes.c_ulong
     k32.GetDriveTypeW.argtypes = [ctypes.c_wchar_p]
     k32.GetDriveTypeW.restype = ctypes.c_uint
+    k32.CreateFileW.argtypes = [
+        ctypes.c_wchar_p,
+        ctypes.c_uint32,
+        ctypes.c_uint32,
+        ctypes.c_void_p,
+        ctypes.c_uint32,
+        ctypes.c_uint32,
+        ctypes.c_void_p,
+    ]
+    k32.CreateFileW.restype = wintypes.HANDLE
+    k32.DeviceIoControl.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_uint32,
+        ctypes.c_void_p,
+        ctypes.c_uint32,
+        ctypes.c_void_p,
+        ctypes.c_uint32,
+        ctypes.POINTER(ctypes.c_uint32),
+        ctypes.c_void_p,
+    ]
+    k32.DeviceIoControl.restype = wintypes.BOOL
+    k32.CloseHandle.argtypes = [wintypes.HANDLE]
+    k32.CloseHandle.restype = wintypes.BOOL
     winmm = ctypes.windll.winmm
     winmm.mciSendStringW.argtypes = [
         ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint, ctypes.c_void_p,
@@ -52,6 +86,15 @@ class DiscToc:
     track_count: int = 0
     track_offsets: list[int] = field(default_factory=list)
     sectors: int = 0
+    ctdb_toc_string: str = ""   # CUETools layout, including data tracks when available.
+
+
+@dataclass(frozen=True)
+class _CtdbTocEntry:
+    track_number: int
+    offset: int
+    is_audio: bool
+    is_leadout: bool = False
 
 
 def list_cd_drives() -> list[str]:
@@ -123,6 +166,7 @@ def read_disc(drive: str | None = None) -> DiscToc | None:
         track_count=len(d.tracks),
         track_offsets=[t.offset for t in d.tracks],
         sectors=getattr(d, "sectors", 0) or 0,
+        ctdb_toc_string=_read_windows_ctdb_toc(drive),
     )
 
 
@@ -133,6 +177,108 @@ def _load_discid():
         return importlib.import_module("discid")
     except OSError:
         return None
+
+
+def _read_windows_ctdb_toc(drive: str) -> str:
+    """Read the full Windows TOC and return a CUETools/CTDB layout string."""
+    if sys.platform != "win32":
+        return ""
+    drive_letter = drive.rstrip("\\:")[:1]
+    if not drive_letter:
+        return ""
+
+    device_path = f"\\\\.\\{drive_letter}:"
+    k32 = ctypes.windll.kernel32
+    handle = k32.CreateFileW(
+        device_path,
+        GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        None,
+        OPEN_EXISTING,
+        0,
+        None,
+    )
+    if handle == INVALID_HANDLE_VALUE:
+        return ""
+
+    try:
+        request = (ctypes.c_ubyte * 4)()
+        buffer = ctypes.create_string_buffer(CDROM_TOC_SIZE)
+        bytes_returned = ctypes.c_uint32(0)
+        ok = k32.DeviceIoControl(
+            handle,
+            IOCTL_CDROM_READ_TOC_EX,
+            ctypes.byref(request),
+            ctypes.sizeof(request),
+            buffer,
+            ctypes.sizeof(buffer),
+            ctypes.byref(bytes_returned),
+            None,
+        )
+        if not ok:
+            return ""
+        used = bytes_returned.value or ctypes.sizeof(buffer)
+        entries = _ctdb_entries_from_windows_toc(bytes(buffer.raw[:used]))
+        return _ctdb_toc_from_track_data(entries)
+    except OSError:
+        return ""
+    finally:
+        k32.CloseHandle(handle)
+
+
+def _ctdb_entries_from_windows_toc(raw: bytes) -> list[_CtdbTocEntry]:
+    if len(raw) < CDROM_TOC_HEADER_SIZE:
+        return []
+
+    toc_length = int.from_bytes(raw[:2], "big", signed=False)
+    track_data_length = min(len(raw) - CDROM_TOC_HEADER_SIZE, max(0, toc_length - 2))
+    track_count = min(100, track_data_length // CDROM_TOC_TRACK_DATA_SIZE)
+    entries: list[_CtdbTocEntry] = []
+    for index in range(track_count):
+        start = CDROM_TOC_HEADER_SIZE + (index * CDROM_TOC_TRACK_DATA_SIZE)
+        end = start + CDROM_TOC_TRACK_DATA_SIZE
+        data = raw[start:end]
+        if len(data) < CDROM_TOC_TRACK_DATA_SIZE:
+            break
+
+        control_adr = data[1]
+        track_number = data[2]
+        offset = int.from_bytes(data[4:8], "big", signed=True)
+        if offset < 0:
+            continue
+
+        control_bits = (control_adr & 0x0F) | (control_adr >> 4)
+        is_audio = (control_bits & 0x04) == 0
+        is_leadout = track_number == CDROM_LEADOUT_TRACK
+        entries.append(
+            _CtdbTocEntry(
+                track_number=track_number,
+                offset=offset,
+                is_audio=is_audio,
+                is_leadout=is_leadout,
+            )
+        )
+    return entries
+
+
+def _ctdb_toc_from_track_data(entries: list[_CtdbTocEntry]) -> str:
+    tracks = [entry for entry in entries if not entry.is_leadout]
+    leadouts = [entry for entry in entries if entry.is_leadout]
+    if not tracks or not leadouts:
+        return ""
+
+    tokens = []
+    for entry in sorted(tracks, key=lambda item: item.track_number):
+        if entry.offset < 0:
+            return ""
+        prefix = "" if entry.is_audio else "-"
+        tokens.append(f"{prefix}{entry.offset}")
+
+    leadout = max(leadouts, key=lambda item: item.offset)
+    if leadout.offset < 0:
+        return ""
+    tokens.append(str(leadout.offset))
+    return ":".join(tokens)
 
 
 def eject(drive: str) -> None:
