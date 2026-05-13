@@ -8,3 +8,5 @@ Expected files:
 - `lyon-splash.png` — startup splash screen used by `lyon.ui.branding.startup_splash_pixmap()`.
 
 The app intentionally loads these image files directly rather than recreating the artwork with Qt drawing commands, so the runtime branding matches the supplied artwork exactly. If the files are missing, the app skips the splash and leaves the application icon unset instead of silently showing a recreated substitute.
+
+PyInstaller derives the Windows executable `.ico` from `lyon-app-icon.png` during the build, so the repository does not need to store a generated binary icon file.

@@ -1,28 +1,67 @@
 """Lyon Media Manager startup branding helpers."""
 from __future__ import annotations
 
+import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QIcon, QPixmap
-from PySide6.QtWidgets import QApplication, QMainWindow, QSplashScreen
+if TYPE_CHECKING:
+    from PySide6.QtGui import QIcon, QPixmap
+    from PySide6.QtWidgets import QApplication, QMainWindow, QSplashScreen
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_BRAND_DIR = _REPO_ROOT / "docs" / "brand"
-_ICON_ASSET = _BRAND_DIR / "lyon-app-icon.png"
-_SPLASH_ASSET = _BRAND_DIR / "lyon-splash.png"
+_BRAND_SUBDIRS = (
+    Path("docs") / "brand",
+    Path("Docs") / "brand",
+)
+_ICON_ASSET_NAME = "lyon-app-icon.png"
+_SPLASH_ASSET_NAME = "lyon-splash.png"
 _ICON_SIZES = (32, 64, 128, 256)
 
 
-def _load_pixmap(path: Path) -> QPixmap:
+def _resource_roots() -> tuple[Path, ...]:
+    """Return possible roots for source-tree and PyInstaller-bundled resources."""
+    roots: list[Path] = []
+    pyinstaller_root = getattr(sys, "_MEIPASS", None)
+    if pyinstaller_root:
+        roots.append(Path(pyinstaller_root))
+    roots.append(_REPO_ROOT)
+    roots.append(Path.cwd())
+
+    unique_roots: list[Path] = []
+    for root in roots:
+        if root not in unique_roots:
+            unique_roots.append(root)
+    return tuple(unique_roots)
+
+
+def _brand_asset_path(asset_name: str) -> Path:
+    """Return the first available checked-in branding asset path."""
+    candidates = [
+        root / subdir / asset_name
+        for root in _resource_roots()
+        for subdir in _BRAND_SUBDIRS
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
+def _load_pixmap(path: Path) -> "QPixmap":
     """Load a project branding image from disk."""
+    from PySide6.QtGui import QPixmap
+
     return QPixmap(str(path))
 
 
-def app_icon() -> QIcon:
+def app_icon() -> "QIcon":
     """Return the application icon from the checked-in branding image."""
-    source = _load_pixmap(_ICON_ASSET)
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QIcon
+
+    source = _load_pixmap(_brand_asset_path(_ICON_ASSET_NAME))
     icon = QIcon()
     if source.isNull():
         return icon
@@ -38,12 +77,15 @@ def app_icon() -> QIcon:
     return icon
 
 
-def startup_splash_pixmap() -> QPixmap:
+def startup_splash_pixmap() -> "QPixmap":
     """Return the startup splash from the checked-in branding image."""
-    return _load_pixmap(_SPLASH_ASSET)
+    return _load_pixmap(_brand_asset_path(_SPLASH_ASSET_NAME))
 
 
-def create_startup_splash(app: QApplication) -> QSplashScreen | None:
+def create_startup_splash(app: "QApplication") -> "QSplashScreen | None":
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QSplashScreen
+
     splash_pixmap = startup_splash_pixmap()
     if splash_pixmap.isNull():
         return None
@@ -54,7 +96,11 @@ def create_startup_splash(app: QApplication) -> QSplashScreen | None:
     return splash
 
 
-def finish_startup_splash(app: QApplication, window: QMainWindow, duration_ms: int = 1400) -> None:
+def finish_startup_splash(
+    app: "QApplication", window: "QMainWindow", duration_ms: int = 1400
+) -> None:
+    from PySide6.QtCore import QTimer
+
     splash = getattr(app, "_lyon_startup_splash", None)
     if splash is None:
         return

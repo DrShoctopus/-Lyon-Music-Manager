@@ -10,11 +10,39 @@
 # -*- mode: python ; coding: utf-8 -*-
 from pathlib import Path
 
+from PIL import Image
+
 ROOT = Path(SPECPATH).resolve().parent
 BIN = ROOT / "bin"
+BRAND_DIRS = (
+    ROOT / "docs" / "brand",
+    ROOT / "Docs" / "brand",
+)
+ICON_PNG_NAME = "lyon-app-icon.png"
+GENERATED_ICON = ROOT / "build" / "lyon-app-icon.ico"
 
 binaries = []
 datas = []
+icon_file = None
+
+
+def windows_icon_from_png(icon_png: Path) -> str:
+    """Create a temporary Windows .ico for PyInstaller from the brand PNG."""
+    GENERATED_ICON.parent.mkdir(parents=True, exist_ok=True)
+    Image.open(icon_png).convert("RGBA").save(
+        GENERATED_ICON,
+        format="ICO",
+        sizes=[
+            (16, 16),
+            (24, 24),
+            (32, 32),
+            (48, 48),
+            (64, 64),
+            (128, 128),
+            (256, 256),
+        ],
+    )
+    return str(GENERATED_ICON)
 
 if BIN.exists():
     for entry in BIN.iterdir():
@@ -25,6 +53,16 @@ if BIN.exists():
                 if child.is_file():
                     dest = Path("bin") / entry.name / child.relative_to(entry).parent
                     datas.append((str(child), str(dest)))
+
+for brand_dir in BRAND_DIRS:
+    if brand_dir.exists():
+        for asset in brand_dir.iterdir():
+            if asset.is_file():
+                datas.append((str(asset), str(Path("docs") / "brand")))
+        icon_candidate = brand_dir / ICON_PNG_NAME
+        if icon_candidate.exists():
+            icon_file = windows_icon_from_png(icon_candidate)
+        break
 
 a = Analysis(
     [str(ROOT / "main.py")],
@@ -50,7 +88,7 @@ exe = EXE(
     strip=False,
     upx=False,
     console=False,
-    icon=None,
+    icon=icon_file,
 )
 coll = COLLECT(
     exe,
