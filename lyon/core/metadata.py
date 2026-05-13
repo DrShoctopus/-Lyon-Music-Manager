@@ -1,7 +1,6 @@
-"""Album metadata and artwork lookups from prioritized provider fallbacks."""
+"""Album metadata and artwork lookups from the supported provider fallbacks."""
 from __future__ import annotations
 
-import os
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -17,25 +16,12 @@ from . import settings as _settings
 CTDB_LOOKUP_URL = "http://db.cuetools.net/lookup2.php"
 CTDB_BASE_URL = "http://db.cuetools.net/"
 CTDB_TIMEOUT_SECONDS = 20
-ITUNES_SEARCH_URL = "https://itunes.apple.com/search"
-DISCOGS_DATABASE_SEARCH_URL = "https://api.discogs.com/database/search"
-DISCOGS_MASTER_URL = "https://api.discogs.com/masters/{discogs_id}"
-DISCOGS_RELEASE_URL = "https://api.discogs.com/releases/{discogs_id}"
-DEEZER_ALBUM_SEARCH_URL = "https://api.deezer.com/search/album"
-DEEZER_ALBUM_URL = "https://api.deezer.com/album/{album_id}"
-LASTFM_API_URL = "https://ws.audioscrobbler.com/2.0/"
+THEAUDIODB_API_BASE = "https://www.theaudiodb.com/api/v1/json"
+THEAUDIODB_DEFAULT_API_KEY = "123"
 HTTP_TIMEOUT_SECONDS = 15
-LASTFM_API_KEY_ENV = "LASTFM_API_KEY"
-DISC_METADATA_PROVIDER_ORDER = ("musicbrainz", "ctdb")
-ALBUM_METADATA_PROVIDER_ORDER = ("musicbrainz", "discogs", "itunes", "deezer", "lastfm")
-ARTWORK_PROVIDER_ORDER = (
-    "cover_art_archive",
-    "album_artwork_url",
-    "discogs",
-    "itunes",
-    "deezer",
-    "lastfm",
-)
+DISC_METADATA_PROVIDER_ORDER = ("cuetools_db", "musicbrainz", "theaudiodb")
+ALBUM_METADATA_PROVIDER_ORDER = ("musicbrainz", "theaudiodb")
+ARTWORK_PROVIDER_ORDER = ("cover_art_archive", "album_artwork_url", "theaudiodb")
 METADATA_PROVIDER_ORDER = ALBUM_METADATA_PROVIDER_ORDER
 
 
@@ -79,18 +65,40 @@ def _init() -> None:
     _initialised = True
 
 
-def lookup_disc(discid_str: str, toc: str | None = None) -> Optional[AlbumInfo]:
-    """Look up an album by disc identity using exact providers before fuzzy CTDB."""
-    for provider in (_disc_musicbrainz_provider, _disc_ctdb_provider, _disc_ctdb_fuzzy_provider):
-        info = provider(discid_str, toc)
+def lookup_disc(
+    discid_str: str,
+    toc: str | None = None,
+    *,
+    ctdb_toc: str | None = None,
+    use_cuetools_db: bool | None = None,
+) -> Optional[AlbumInfo]:
+    """Look up an album by disc identity using the supported provider order."""
+    providers: list[Callable[[], Optional[AlbumInfo]]] = []
+    if _use_cuetools_db(use_cuetools_db):
+        providers.append(lambda: lookup_cuetools_db_disc(toc, ctdb_toc=ctdb_toc))
+    providers.append(lambda: lookup_musicbrainz_disc(discid_str, toc))
+
+    for provider in providers:
+        info = provider()
         if _has_usable_metadata(info):
-            return info
+            return _with_theaudiodb_enrichment(info)
     return None
 
 
-def lookup_disc_with_fallback(discid_str: str, toc: str | None = None) -> Optional[AlbumInfo]:
+def lookup_disc_with_fallback(
+    discid_str: str,
+    toc: str | None = None,
+    *,
+    ctdb_toc: str | None = None,
+    use_cuetools_db: bool | None = None,
+) -> Optional[AlbumInfo]:
     """Compatibility wrapper for disc lookup with provider fallbacks."""
-    return lookup_disc(discid_str, toc)
+    return lookup_disc(
+        discid_str,
+        toc,
+        ctdb_toc=ctdb_toc,
+        use_cuetools_db=use_cuetools_db,
+    )
 
 
 def lookup_musicbrainz_disc(discid_str: str, toc: str | None = None) -> Optional[AlbumInfo]:
@@ -114,18 +122,38 @@ def lookup_musicbrainz_disc(discid_str: str, toc: str | None = None) -> Optional
     return _release_to_album(release, discid_str)
 
 
-def lookup_ctdb_disc(toc: str | None, *, fuzzy: bool = False) -> Optional[AlbumInfo]:
-    """Look up album metadata through the CUETools Database metadata endpoint.
-
-    CTDB fuzzy matches may describe a similar, but not identical, disc TOC.
-    Keep the default lookup exact so fallback metadata cannot mask an exact
-    MusicBrainz disc ID resolution in the automatic metadata flow.
-    """
-    ctdb_toc = _musicbrainz_toc_to_ctdb_toc(toc)
-    if not ctdb_toc:
+def lookup_cuetools_db_disc(
+    toc: str | None,
+    *,
+    ctdb_toc: str | None = None,
+) -> Optional[AlbumInfo]:
+    """Look up album metadata through the CUETools Database metadata endpoint."""
+    layouts = _unique_non_empty(
+        [_sanitize_ctdb_layout(ctdb_toc), _musicbrainz_toc_to_ctdb_toc(toc)]
+    )
+    if not layouts:
         return None
 
-    user_agent = _user_agent()
+    for fuzzy in (False, True):
+        for layout in layouts:
+            info = lookup_cuetools_db_layout(layout, fuzzy=fuzzy)
+            if _has_usable_metadata(info):
+                return info
+    return None
+
+
+def lookup_ctdb_disc(toc: str | None, *, fuzzy: bool = False) -> Optional[AlbumInfo]:
+    """Compatibility wrapper for older CTDB lookup call sites."""
+    layout = _musicbrainz_toc_to_ctdb_toc(toc)
+    return lookup_cuetools_db_layout(layout, fuzzy=fuzzy)
+
+
+def lookup_cuetools_db_layout(ctdb_toc: str | None, *, fuzzy: bool = False) -> Optional[AlbumInfo]:
+    """Look up album metadata from a CUETools-style CTDB TOC layout."""
+    layout = _sanitize_ctdb_layout(ctdb_toc)
+    if not layout:
+        return None
+
     try:
         response = requests.get(
             CTDB_LOOKUP_URL,
@@ -134,9 +162,9 @@ def lookup_ctdb_disc(toc: str | None, *, fuzzy: bool = False) -> Optional[AlbumI
                 "ctdb": "0",
                 "metadata": "extensive",
                 "fuzzy": "1" if fuzzy else "0",
-                "toc": ctdb_toc,
+                "toc": layout,
             },
-            headers={"User-Agent": user_agent},
+            headers={"User-Agent": _user_agent()},
             timeout=CTDB_TIMEOUT_SECONDS,
         )
         if response.status_code != 200 or not response.content:
@@ -171,7 +199,7 @@ def search_album(artist: str, album: str) -> Optional[AlbumInfo]:
 
 
 def fetch_artwork(album: AlbumInfo) -> bytes | None:
-    """Fetch artwork lazily from primary URLs before provider lookups."""
+    """Fetch artwork lazily from primary URLs before TheAudioDB fallback lookup."""
     for url in _primary_artwork_urls(album):
         artwork = _fetch_artwork_url(url)
         if artwork:
@@ -180,13 +208,9 @@ def fetch_artwork(album: AlbumInfo) -> bytes | None:
     if not (album.artist and album.album):
         return None
 
-    for provider in _artwork_search_providers():
-        info = provider(album.artist, album.album)
-        if not info or not info.artwork_url:
-            continue
-        artwork = _fetch_artwork_url(info.artwork_url)
-        if artwork:
-            return artwork
+    info = search_theaudiodb_album(album.artist, album.album)
+    if info and info.artwork_url:
+        return _fetch_artwork_url(info.artwork_url)
     return None
 
 
@@ -210,230 +234,35 @@ def search_musicbrainz_album(artist: str, album: str) -> Optional[AlbumInfo]:
     return _release_to_album(full)
 
 
-def search_discogs_album(artist: str, album: str) -> Optional[AlbumInfo]:
-    """Search Discogs for album tracks and artwork."""
-    result = _search_discogs_album_result(artist, album, "master")
-    if result is None:
-        result = _search_discogs_album_result(artist, album, "release")
-    if result is None:
+def search_theaudiodb_album(artist: str, album: str) -> Optional[AlbumInfo]:
+    """Search TheAudioDB by album and optional artist name."""
+    artist = artist.strip()
+    album = album.strip()
+    if not album:
         return None
 
-    detail = _discogs_detail(result)
-    data = detail or result
-    artist_name = _discogs_artist_name(data) or artist
-    album_title = str(data.get("title") or _discogs_result_album_title(result) or album)
-    artwork_url = _discogs_artwork_url(data) or str(result.get("cover_image") or "")
-    genres = data.get("genres") if isinstance(data.get("genres"), list) else []
-
-    info = AlbumInfo(
-        artist=artist_name,
-        album=album_title,
-        date=str(data.get("year") or result.get("year") or ""),
-        genre=str(genres[0]) if genres else "",
-        artwork_url=artwork_url,
-        metadata_source="discogs",
-    )
-    for index, track in enumerate(data.get("tracklist") or [], start=1):
-        if not isinstance(track, dict) or track.get("type_") == "heading":
-            continue
-        track_number, disc_number = _discogs_track_numbers(track.get("position"), index)
-        info.tracks.append(
-            TrackInfo(
-                number=track_number,
-                title=str(track.get("title") or f"Track {index}"),
-                length_ms=_duration_to_ms(str(track.get("duration") or "")),
-                artist=artist_name,
-                disc_number=disc_number,
-            )
-        )
-    return info
-
-
-def search_itunes_album(artist: str, album: str) -> Optional[AlbumInfo]:
-    """Search iTunes for album tracks and artwork."""
-    payload = _get_json(
-        ITUNES_SEARCH_URL,
-        params={
-            "term": f"{artist} {album}",
-            "entity": "song",
-            "media": "music",
-            "limit": "50",
-        },
-    )
-    results = payload.get("results") if isinstance(payload, dict) else None
-    if not isinstance(results, list):
-        return None
-
-    matches = [
-        song for song in results if _is_album_match(song, artist, album)
-    ]
-    if not matches:
-        return None
-    matches.sort(
-        key=lambda song: (
-            _safe_int(song.get("discNumber"), 1),
-            _safe_int(song.get("trackNumber"), 0),
-        )
-    )
-
-    first = matches[0]
-    info = AlbumInfo(
-        artist=str(first.get("artistName") or artist),
-        album=str(first.get("collectionName") or album),
-        date=str(first.get("releaseDate") or "")[:10],
-        genre=str(first.get("primaryGenreName") or ""),
-        artwork_url=_itunes_artwork_url(str(first.get("artworkUrl100") or "")),
-        metadata_source="itunes",
-    )
-    for index, song in enumerate(matches, start=1):
-        info.tracks.append(
-            TrackInfo(
-                number=_safe_int(song.get("trackNumber"), index),
-                title=str(song.get("trackName") or f"Track {index}"),
-                length_ms=_safe_int(song.get("trackTimeMillis"), 0),
-                artist=str(song.get("artistName") or info.artist),
-                disc_number=_safe_int(song.get("discNumber"), 1),
-            )
-        )
-    return info
-
-
-def search_deezer_album(artist: str, album: str) -> Optional[AlbumInfo]:
-    """Search Deezer for album tracks and artwork."""
-    payload = _get_json(
-        DEEZER_ALBUM_SEARCH_URL,
-        params={"q": f'artist:"{artist}" album:"{album}"', "limit": "5"},
-    )
-    albums = payload.get("data") if isinstance(payload, dict) else None
-    if not isinstance(albums, list):
+    params = {"a": album}
+    if artist:
+        params["s"] = artist
+    payload = _get_json(_theaudiodb_url("searchalbum.php"), params=params)
+    albums = _ensure_list(payload.get("album") or payload.get("albums"))
+    if not albums:
         return None
 
     match = next(
-        (candidate for candidate in albums if _is_album_match(candidate, artist, album)),
+        (candidate for candidate in albums if _is_theaudiodb_album_match(candidate, artist, album)),
         None,
-    )
-    if not match:
-        return None
+    ) or albums[0]
+    info = _theaudiodb_album_to_info(match, artist, album)
 
-    album_id = match.get("id")
-    detail = _get_json(DEEZER_ALBUM_URL.format(album_id=album_id)) if album_id else {}
-    data = detail if isinstance(detail, dict) and detail.get("id") else match
-    artist_data = data.get("artist") if isinstance(data.get("artist"), dict) else {}
-    tracks_data = (
-        data.get("tracks", {}).get("data", [])
-        if isinstance(data.get("tracks"), dict)
-        else []
-    )
-
-    info = AlbumInfo(
-        artist=str(artist_data.get("name") or artist),
-        album=str(data.get("title") or album),
-        date=str(data.get("release_date") or ""),
-        genre=_deezer_genre(data),
-        artwork_url=str(
-            data.get("cover_xl") or data.get("cover_big") or data.get("cover_medium") or ""
-        ),
-        metadata_source="deezer",
-    )
-    for index, track in enumerate(tracks_data, start=1):
-        track_artist = track.get("artist") if isinstance(track.get("artist"), dict) else {}
-        info.tracks.append(
-            TrackInfo(
-                number=_safe_int(track.get("track_position"), index),
-                title=str(track.get("title") or f"Track {index}"),
-                length_ms=_safe_int(track.get("duration"), 0) * 1000,
-                artist=str(track_artist.get("name") or info.artist),
-                disc_number=_safe_int(track.get("disk_number"), 1),
-            )
-        )
+    album_id = _text(match.get("idAlbum"))
+    if album_id:
+        info.tracks = _theaudiodb_tracks(album_id, info.artist)
     return info
-
-
-def search_lastfm_album(artist: str, album: str) -> Optional[AlbumInfo]:
-    """Search Last.fm album metadata when LASTFM_API_KEY is configured."""
-    api_key = os.environ.get(LASTFM_API_KEY_ENV, "").strip()
-    if not api_key:
-        return None
-
-    payload = _get_json(
-        LASTFM_API_URL,
-        params={
-            "method": "album.getinfo",
-            "api_key": api_key,
-            "artist": artist,
-            "album": album,
-            "format": "json",
-        },
-    )
-    data = payload.get("album") if isinstance(payload, dict) else None
-    if not isinstance(data, dict):
-        return None
-
-    tracks = (
-        data.get("tracks", {}).get("track", [])
-        if isinstance(data.get("tracks"), dict)
-        else []
-    )
-    if isinstance(tracks, dict):
-        tracks = [tracks]
-    tags = data.get("tags", {}).get("tag", []) if isinstance(data.get("tags"), dict) else []
-    images = data.get("image", []) if isinstance(data.get("image"), list) else []
-
-    info = AlbumInfo(
-        artist=str(data.get("artist") or artist),
-        album=str(data.get("name") or album),
-        genre=_lastfm_genre(tags),
-        artwork_url=_lastfm_artwork_url(images),
-        metadata_source="lastfm",
-    )
-    for index, track in enumerate(tracks, start=1):
-        if not isinstance(track, dict):
-            continue
-        info.tracks.append(
-            TrackInfo(
-                number=_safe_int(
-                    track.get("@attr", {}).get("rank")
-                    if isinstance(track.get("@attr"), dict)
-                    else None,
-                    index,
-                ),
-                title=str(track.get("name") or f"Track {index}"),
-                length_ms=_safe_int(track.get("duration"), 0) * 1000,
-                artist=info.artist,
-            )
-        )
-    return info
-
-
-def _disc_musicbrainz_provider(discid_str: str, toc: str | None) -> Optional[AlbumInfo]:
-    return lookup_musicbrainz_disc(discid_str, toc)
-
-
-def _disc_ctdb_provider(_discid_str: str, toc: str | None) -> Optional[AlbumInfo]:
-    return lookup_ctdb_disc(toc)
-
-
-def _disc_ctdb_fuzzy_provider(_discid_str: str, toc: str | None) -> Optional[AlbumInfo]:
-    return lookup_ctdb_disc(toc, fuzzy=True)
 
 
 def _album_search_providers() -> tuple[Callable[[str, str], Optional[AlbumInfo]], ...]:
-    return (
-        search_musicbrainz_album,
-        search_discogs_album,
-        search_itunes_album,
-        search_deezer_album,
-        search_lastfm_album,
-    )
-
-
-def _artwork_search_providers() -> tuple[Callable[[str, str], Optional[AlbumInfo]], ...]:
-    return (
-        search_discogs_album,
-        search_itunes_album,
-        search_deezer_album,
-        search_lastfm_album,
-    )
+    return (search_musicbrainz_album, search_theaudiodb_album)
 
 
 def _primary_artwork_urls(album: AlbumInfo) -> list[str]:
@@ -495,7 +324,7 @@ def _ctdb_meta_to_album(meta: ET.Element) -> Optional[AlbumInfo]:
         album=album,
         date=_ctdb_date(meta),
         genre=(meta.get("genre") or "").strip(),
-        metadata_source=f"ctdb:{(meta.get('source') or 'unknown').strip()}",
+        metadata_source=f"cuetools_db:{(meta.get('source') or 'unknown').strip()}",
     )
 
     disc_number = _safe_int(meta.get("discnumber"), 1)
@@ -536,6 +365,84 @@ def _select_ctdb_cover(covers: list[ET.Element]) -> str:
     return ""
 
 
+def _theaudiodb_album_to_info(data: dict[str, Any], artist: str, album: str) -> AlbumInfo:
+    musicbrainz_id = _text(
+        data.get("strMusicBrainzID") or data.get("strMusicBrainzAlbumID")
+    )
+    release_date = _text(data.get("strReleaseDate"))
+    year = _text(data.get("intYearReleased"))
+    return AlbumInfo(
+        artist=_text(data.get("strArtist")) or artist,
+        album=_text(data.get("strAlbum")) or album,
+        date=release_date or year,
+        musicbrainz_albumid=musicbrainz_id,
+        genre=_text(data.get("strGenre") or data.get("strStyle")),
+        artwork_url=_theaudiodb_artwork_url(data),
+        metadata_source="theaudiodb",
+    )
+
+
+def _theaudiodb_tracks(album_id: str, album_artist: str) -> list[TrackInfo]:
+    payload = _get_json(_theaudiodb_url("track.php"), params={"m": album_id})
+    tracks = _ensure_list(payload.get("track") or payload.get("tracks"))
+    mapped = []
+    for index, track in enumerate(tracks, start=1):
+        if not isinstance(track, dict):
+            continue
+        number = _safe_int(track.get("intTrackNumber"), index)
+        mapped.append(
+            TrackInfo(
+                number=number,
+                title=_text(track.get("strTrack")) or f"Track {number:02d}",
+                length_ms=_theaudiodb_duration_ms(track.get("intDuration")),
+                artist=_text(track.get("strArtist")) or album_artist,
+            )
+        )
+    return sorted(mapped, key=lambda item: item.number)
+
+
+def _theaudiodb_artwork_url(data: dict[str, Any]) -> str:
+    for key in ("strAlbumThumb", "strAlbumCDart", "strAlbum3DCase", "strAlbumSpine"):
+        url = _text(data.get(key))
+        if url:
+            return url
+    return ""
+
+
+def _with_theaudiodb_enrichment(info: AlbumInfo | None) -> AlbumInfo | None:
+    if not info or not (info.artist and info.album):
+        return info
+    if info.tracks and info.artwork_url:
+        return info
+
+    fallback = search_theaudiodb_album(info.artist, info.album)
+    if not fallback:
+        return info
+    return _merge_album_info(info, fallback)
+
+
+def _merge_album_info(primary: AlbumInfo, fallback: AlbumInfo) -> AlbumInfo:
+    supplemented = False
+    if not primary.tracks and fallback.tracks:
+        primary.tracks = fallback.tracks
+        supplemented = True
+    if not primary.artwork_url and fallback.artwork_url:
+        primary.artwork_url = fallback.artwork_url
+        supplemented = True
+    if not primary.genre and fallback.genre:
+        primary.genre = fallback.genre
+        supplemented = True
+    if not primary.date and fallback.date:
+        primary.date = fallback.date
+        supplemented = True
+    if not primary.musicbrainz_albumid and fallback.musicbrainz_albumid:
+        primary.musicbrainz_albumid = fallback.musicbrainz_albumid
+        supplemented = True
+    if supplemented and "theaudiodb" not in primary.metadata_source:
+        primary.metadata_source = f"{primary.metadata_source}+theaudiodb"
+    return primary
+
+
 def _fetch_artwork_url(url: str) -> bytes | None:
     try:
         response = requests.get(url, timeout=HTTP_TIMEOUT_SECONDS)
@@ -563,96 +470,6 @@ def _get_json(
     return payload if isinstance(payload, dict) else {}
 
 
-def _search_discogs_album_result(artist: str, album: str, result_type: str) -> dict[str, Any] | None:
-    payload = _get_json(
-        DISCOGS_DATABASE_SEARCH_URL,
-        params={
-            "artist": artist,
-            "release_title": album,
-            "type": result_type,
-            "per_page": "5",
-        },
-        headers=_metadata_headers(),
-    )
-    results = payload.get("results") if isinstance(payload, dict) else None
-    if not isinstance(results, list):
-        return None
-    return next(
-        (result for result in results if _is_discogs_match(result, artist, album)),
-        None,
-    )
-
-
-def _discogs_detail(result: dict[str, Any]) -> dict[str, Any]:
-    discogs_id = result.get("master_id") or result.get("id")
-    if not discogs_id:
-        return {}
-    if result.get("master_id") or result.get("type") == "master":
-        url = DISCOGS_MASTER_URL.format(discogs_id=discogs_id)
-    else:
-        url = DISCOGS_RELEASE_URL.format(discogs_id=discogs_id)
-    return _get_json(url, headers=_metadata_headers())
-
-
-def _discogs_artist_name(data: dict[str, Any]) -> str:
-    artists = data.get("artists")
-    if isinstance(artists, list) and artists and isinstance(artists[0], dict):
-        return str(artists[0].get("name") or "")
-    return ""
-
-
-def _discogs_artwork_url(data: dict[str, Any]) -> str:
-    images = data.get("images")
-    if isinstance(images, list):
-        for image in images:
-            if not isinstance(image, dict):
-                continue
-            uri = image.get("uri") or image.get("resource_url")
-            if uri:
-                return str(uri)
-    return ""
-
-
-def _discogs_result_album_title(result: dict[str, Any]) -> str:
-    title = str(result.get("title") or "")
-    if " - " in title:
-        return title.split(" - ", 1)[1].strip()
-    return title
-
-
-def _is_discogs_match(result: dict[str, Any], artist: str, album: str) -> bool:
-    result_title = _discogs_result_album_title(result)
-    full_title = str(result.get("title") or "")
-    return _normalize(album) in _normalize(result_title or full_title) and (
-        not artist or _normalize(artist) in _normalize(full_title)
-    )
-
-
-def _discogs_track_numbers(position: Any, fallback: int) -> tuple[int, int]:
-    text = str(position or "").strip()
-    if not text:
-        return fallback, 1
-    parts = text.replace("-", ".").split(".")
-    numbers = [part for part in parts if part.isdigit()]
-    if len(numbers) >= 2:
-        return int(numbers[-1]), int(numbers[0])
-    digits = "".join(char for char in text if char.isdigit())
-    return (int(digits), 1) if digits else (fallback, 1)
-
-
-def _duration_to_ms(value: str) -> int:
-    if not value or ":" not in value:
-        return 0
-    try:
-        parts = [int(part) for part in value.split(":")]
-    except ValueError:
-        return 0
-    seconds = 0
-    for part in parts:
-        seconds = seconds * 60 + part
-    return seconds * 1000
-
-
 def _musicbrainz_artist(entity: dict) -> str:
     artist_credit = entity.get("artist-credit") or []
     if artist_credit:
@@ -663,45 +480,12 @@ def _musicbrainz_artist(entity: dict) -> str:
     return entity.get("artist-credit-phrase", "")
 
 
-def _is_album_match(item: dict, artist: str, album: str) -> bool:
-    title = item.get("collectionName") or item.get("title") or item.get("name") or ""
-    artist_name = _provider_artist_name(item)
-    return _normalize(album) in _normalize(str(title)) and (
+def _is_theaudiodb_album_match(item: dict[str, Any], artist: str, album: str) -> bool:
+    title = _text(item.get("strAlbum"))
+    artist_name = _text(item.get("strArtist"))
+    return _normalize(album) in _normalize(title) and (
         not artist or _normalize(artist) in _normalize(artist_name)
     )
-
-
-def _provider_artist_name(item: dict) -> str:
-    if item.get("artistName"):
-        return str(item["artistName"])
-    artist = item.get("artist")
-    if isinstance(artist, dict):
-        return str(artist.get("name") or "")
-    return str(artist or "")
-
-
-def _itunes_artwork_url(url: str) -> str:
-    return url.replace("100x100bb", "600x600bb") if url else ""
-
-
-def _deezer_genre(data: dict) -> str:
-    genres = data.get("genres", {}).get("data", []) if isinstance(data.get("genres"), dict) else []
-    if genres and isinstance(genres[0], dict):
-        return str(genres[0].get("name") or "")
-    return ""
-
-
-def _lastfm_genre(tags: list) -> str:
-    if tags and isinstance(tags[0], dict):
-        return str(tags[0].get("name") or "")
-    return ""
-
-
-def _lastfm_artwork_url(images: list) -> str:
-    for image in reversed(images):
-        if isinstance(image, dict) and image.get("#text"):
-            return str(image["#text"])
-    return ""
 
 
 def _musicbrainz_toc_to_ctdb_toc(toc: str | None) -> str:
@@ -727,9 +511,32 @@ def _musicbrainz_toc_to_ctdb_toc(toc: str | None) -> str:
     return ":".join(str(offset - 150) for offset in ctdb_offsets)
 
 
+def _sanitize_ctdb_layout(ctdb_toc: str | None) -> str:
+    if not ctdb_toc:
+        return ""
+
+    tokens = [token.strip() for token in ctdb_toc.strip().split(":")]
+    if len(tokens) < 2 or any(not token for token in tokens):
+        return ""
+
+    cleaned = []
+    for index, token in enumerate(tokens):
+        is_data_track = token.startswith("-")
+        if is_data_track and index == len(tokens) - 1:
+            return ""
+
+        offset_text = token[1:] if is_data_track else token
+        if not offset_text.isdigit():
+            return ""
+
+        offset = int(offset_text, 10)
+        cleaned.append(f"-{offset}" if is_data_track else str(offset))
+    return ":".join(cleaned)
+
+
 def _ctdb_album_score(info: AlbumInfo) -> tuple[int, int, int]:
     source = info.metadata_source.lower()
-    source_score = 3 if "musicbrainz" in source else 2 if "discogs" in source else 1
+    source_score = 3 if "musicbrainz" in source else 2 if "theaudiodb" in source else 1
     return source_score, len(info.tracks), 1 if info.artwork_url else 0
 
 
@@ -743,6 +550,22 @@ def _matching_media(media: list[dict], discid: str | None) -> list[dict]:
                 matches.append(medium)
                 break
     return matches or media
+
+
+def _theaudiodb_url(endpoint: str) -> str:
+    return f"{THEAUDIODB_API_BASE}/{_theaudiodb_api_key()}/{endpoint}"
+
+
+def _theaudiodb_api_key() -> str:
+    settings = _settings.Settings.load()
+    return getattr(settings, "theaudiodb_api_key", "") or THEAUDIODB_DEFAULT_API_KEY
+
+
+def _use_cuetools_db(value: bool | None) -> bool:
+    if value is not None:
+        return value
+    settings = _settings.Settings.load()
+    return bool(getattr(settings, "cuetools_db_metadata_enabled", True))
 
 
 def _has_usable_metadata(info: AlbumInfo | None) -> bool:
@@ -778,6 +601,43 @@ def _unique_non_empty(values: list[str]) -> list[str]:
             unique.append(value)
             seen.add(value)
     return unique
+
+
+def _ensure_list(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, dict):
+        return [value]
+    return []
+
+
+def _text(value: Any) -> str:
+    if value is None:
+        return ""
+    text = str(value).strip()
+    return "" if text.lower() == "none" else text
+
+
+def _theaudiodb_duration_ms(value: Any) -> int:
+    text = _text(value)
+    if not text:
+        return 0
+    if ":" in text:
+        return _duration_to_ms(text)
+    return _safe_int(text, 0)
+
+
+def _duration_to_ms(value: str) -> int:
+    if not value or ":" not in value:
+        return 0
+    try:
+        parts = [int(part) for part in value.split(":")]
+    except ValueError:
+        return 0
+    seconds = 0
+    for part in parts:
+        seconds = seconds * 60 + part
+    return seconds * 1000
 
 
 def _safe_int(value, default: int) -> int:
