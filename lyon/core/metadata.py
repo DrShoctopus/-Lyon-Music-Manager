@@ -76,7 +76,8 @@ def lookup_disc(
     providers: list[Callable[[], Optional[AlbumInfo]]] = []
     if _use_cuetools_db(use_cuetools_db):
         providers.append(lambda: lookup_cuetools_db_disc(toc, ctdb_toc=ctdb_toc))
-    providers.append(lambda: lookup_musicbrainz_disc(discid_str, toc))
+    if discid_str:
+        providers.append(lambda: lookup_musicbrainz_disc(discid_str, toc))
 
     for provider in providers:
         info = provider()
@@ -103,6 +104,8 @@ def lookup_disc_with_fallback(
 
 def lookup_musicbrainz_disc(discid_str: str, toc: str | None = None) -> Optional[AlbumInfo]:
     """Look up an album by MusicBrainz disc ID."""
+    if not discid_str:
+        return None
     _init()
     try:
         result = musicbrainzngs.get_releases_by_discid(
