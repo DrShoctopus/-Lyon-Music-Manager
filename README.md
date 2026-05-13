@@ -1,20 +1,20 @@
 <p align="center">
-  <img src="docs/brand/lyon-readme-banner.svg" alt="Lyon Music Manager vintage robot brand banner" width="100%">
+  <img src="docs/brand/lyon-readme-banner.svg" alt="Lyon Media Manager sea lion brand banner" width="100%">
 </p>
 
-# Lyon Music Manager
+# Lyon Media Manager
 
-Lyon Music Manager is a Windows-focused desktop music app for ripping audio CDs
+Lyon Media Manager is a Windows-focused desktop media app for ripping audio CDs
 to FLAC, organizing a local music library, playing tracks, and browsing YouTube
 from one Windows Media Player-inspired interface.
 
 The app is built with Python, PySide6, Qt Multimedia, Qt WebEngine, SQLite,
-Mutagen, MusicBrainz, Cover Art Archive, ffmpeg, and libdiscid.
+Mutagen, MusicBrainz, Cover Art Archive, ffmpeg, libdiscid, and libVLC.
 
 ## Current Status
 
 `LMM-DEV` is an active desktop application branch. It includes the core music
-library, playback, CD-ripping, YouTube, Windows build, and vintage robot branding
+library, playback, CD-ripping, YouTube, Windows build, and sea lion branding
 work. The app can be run from source for development, and Windows packaging is
 available through PyInstaller and a manual GitHub Actions workflow.
 
@@ -27,8 +27,8 @@ The application version is defined in `lyon/__init__.py`.
 
 ## Current Capabilities
 
-- **Vintage robot startup branding** with a PySide6-drawn app icon and short
-  splash screen at launch.
+- **Sea lion startup branding** using checked-in app icon and splash screen
+  images from `docs/brand/`.
 - **Windows Media Player-style shell** with a dark glossy theme, tabbed
   navigation, status messages, Settings access, and a persistent transport bar.
 - **Library management** backed by SQLite in the user's app-data directory. The
@@ -36,15 +36,19 @@ The application version is defined in `lyon/__init__.py`.
   `.wma` files and reads tags with Mutagen.
 - **Library browsing and search** by artist, album, and track, including
   fallbacks for blank metadata such as `Unknown Artist` and `Unknown Album`.
-- **Playback queue** powered by `QMediaPlayer`, including play/pause, previous,
-  next, seek/scrub, volume, shuffle, repeat-all, repeat-one, enqueue, and a Now
-  Playing view with cover art.
+- **Playback queue** with a libVLC-backed local-audio engine and Qt Multimedia
+  fallback, including play/pause, previous, next, seek/scrub, volume, mute,
+  shuffle, repeat-all, repeat-one, enqueue, and a Now Playing view with cover
+  art.
 - **Library playback polish** including enqueue feedback, current-track
   highlighting, selected-track scrolling, and track tooltips with artist, album,
   time, and file type.
+- **Six-band equalizer** with persisted settings. When libVLC is available the
+  EQ is applied to playback; the Qt Multimedia fallback keeps the controls
+  available but plays audio flat.
 - **Audio CD detection** on Windows using Win32 optical-drive APIs and libdiscid.
-- **CTDB metadata lookup with MusicBrainz fallback** by disc TOC, plus manual artist/album search
-  from the ripper view.
+- **CTDB metadata lookup with MusicBrainz fallback** by disc TOC, plus manual
+  artist/album search from the ripper view.
 - **Cover Art Archive support** for downloading album art when enabled.
 - **CD-to-FLAC ripping** through ffmpeg/libcdio, with per-track output, FLAC
   compression settings, Vorbis comments, embedded cover art, overwrite
@@ -67,17 +71,23 @@ Install the packages from `requirements.txt`:
 - `mutagen` for reading and writing audio tags.
 - `musicbrainzngs` and `requests` for metadata and artwork lookup.
 - `Pillow` for image handling.
+- `python-vlc` for the preferred local playback backend and audible equalizer.
 - `discid` on Windows for MusicBrainz disc IDs.
 
-### External Binaries For Ripping
+### External Binaries For Playback And Ripping
 
-CD ripping and disc identification require external binaries. Put them in
-`bin/` at the project root or otherwise make them available on `PATH`:
+CD ripping, disc identification, and the preferred VLC playback backend require
+external binaries. Put them in `bin/` at the project root for source runs and
+Windows packaging:
 
 ```text
 bin/
   ffmpeg.exe
   discid.dll
+  vlc/
+    libvlc.dll
+    libvlccore.dll
+    plugins/
 ```
 
 Notes:
@@ -86,8 +96,12 @@ Notes:
   script and PyInstaller spec expect `discid.dll`.
 - `ffmpeg.exe` must be a build with CDDA/libcdio support. The Windows essentials
   builds from gyan.dev are the intended source used by the build automation.
+- `bin/vlc/` should contain the extracted 64-bit VLC runtime folder contents.
+  It is optional for launching, but without it the app may use a system VLC
+  install or fall back to Qt Multimedia. The fallback plays audio flat, so the
+  six-band EQ will not audibly affect playback.
 - The app can still launch without these files, but CD detection and ripping
-  will not be functional.
+  will not be functional without ffmpeg/libdiscid.
 
 ## Quick Start From Source
 
@@ -99,8 +113,8 @@ py -3.11 -m venv .venv
 python -m pip install --upgrade pip
 pip install -r requirements.txt
 
-:: Optional for ripping, required for a fully functional app:
-:: place ffmpeg.exe and discid.dll in bin\
+:: Optional for playback EQ and ripping, required for a fully functional app:
+:: place ffmpeg.exe, discid.dll, and the extracted VLC runtime in bin\
 
 py main.py
 ```
@@ -114,7 +128,7 @@ outside Windows.
 
 1. **Start the app**
    - Launch from source with `py main.py`.
-   - The vintage robot splash appears briefly before the main window opens.
+   - The sea lion splash appears briefly before the main window opens.
 
 2. **Configure settings**
    - Open **Settings**.
@@ -136,6 +150,7 @@ outside Windows.
    - Double-click a track or use play/enqueue actions.
    - Control playback from the bottom transport bar or the **Now Playing** tab.
    - Use shuffle and repeat controls from the transport bar.
+   - Open **6 Band EQ** to enable and adjust the persisted equalizer curve.
 
 5. **Rip a CD**
    - Put `ffmpeg.exe` and `discid.dll` in `bin/` first.
@@ -179,8 +194,8 @@ scripts\build-windows.ps1
 ```
 
 The script creates `.venv`, installs dependencies and PyInstaller, downloads
-`ffmpeg.exe` and `discid.dll` when missing, smoke-tests imports, builds the
-PyInstaller bundle, and writes:
+`ffmpeg.exe`, `discid.dll`, and the VLC runtime when missing, smoke-tests
+imports plus VLC backend creation, builds the PyInstaller bundle, and writes:
 
 ```text
 dist\LyonMusicManager-windows.zip
@@ -224,9 +239,10 @@ See `docs/BUILD.md` for the longer build guide.
 ### GitHub Actions Build
 
 The workflow at `.github/workflows/windows-build.yml` is a manual
-`workflow_dispatch` Windows build. It installs dependencies, downloads ffmpeg
-and libdiscid, runs PyInstaller, and uploads `LyonMusicManager-windows.zip` as
-an artifact.
+`workflow_dispatch` Windows build. It installs dependencies, downloads ffmpeg,
+libdiscid, and the VLC runtime, verifies that the VLC backend can be created,
+runs PyInstaller, checks that VLC files were packaged, and uploads
+`LyonMusicManager-windows.zip` as an artifact.
 
 ## Repository Layout
 
@@ -237,13 +253,14 @@ lyon/app.py                     QApplication setup, splash, and main window laun
 lyon/core/cd_detect.py          Windows optical-drive and libdiscid helpers
 lyon/core/library.py            SQLite library index and search queries
 lyon/core/metadata.py           CTDB, MusicBrainz, and Cover Art Archive lookups
-lyon/core/player.py             QMediaPlayer queue, shuffle, repeat, volume
+lyon/core/player.py             Playback queue, shuffle, repeat, volume, EQ state
+lyon/core/playback_backend.py   libVLC playback backend and Qt Multimedia fallback
 lyon/core/ripper.py             ffmpeg-backed CD-to-FLAC worker
 lyon/core/settings.py           Settings defaults, persistence, bin lookup
 lyon/core/tagger.py             FLAC/Vorbis comment and cover-art writer
-lyon/ui/branding.py             Vintage robot app icon and startup splash drawing
+lyon/ui/branding.py             Sea lion app icon and startup splash image loading
 lyon/ui/                        Main window, tabs, dialogs, styles, widgets
-docs/brand/                     README branding artwork
+docs/brand/                     README, app icon, and splash branding artwork
 build/lyon.spec                 PyInstaller build definition
 docs/BUILD.md                   Windows build guide
 scripts/build-windows.ps1       End-to-end Windows build script
@@ -262,10 +279,12 @@ pip install pytest
 pytest
 ```
 
-Current automated coverage includes MusicBrainz multi-disc metadata selection and CTDB-first lookup fallback behavior.
-More coverage should be added around library scanning, playback queue behavior,
-rip overwrite/cancel flows, and branding startup as those areas continue to
-settle.
+Current automated coverage includes MusicBrainz multi-disc metadata selection,
+CTDB-first lookup fallback behavior, ripper command construction, library query
+behavior, library-view tooltip formatting, and player equalizer normalization.
+More coverage should be added around full library scanning, playback queue
+behavior, rip overwrite/cancel flows, and branding startup as those areas
+continue to settle.
 
 ## Troubleshooting
 
@@ -279,13 +298,17 @@ settle.
   abusive clients.
 - **YouTube tab says WebEngine is unavailable**: install `PySide6-Addons` into
   the active environment and restart the app.
+- **Equalizer controls move but audio does not change**: confirm `python-vlc` is
+  installed and a 64-bit VLC runtime is either installed system-wide or present
+  under `bin\vlc\` with `libvlc.dll`, `libvlccore.dll`, and `plugins\`.
 - **Built zip does not run on another machine**: distribute the complete
   `dist\LyonMusicManager\` folder or the generated zip, not just
   `LyonMusicManager.exe`.
 
 ## Credits And Third-Party Services
 
-Lyon Music Manager uses MusicBrainz metadata, Cover Art Archive artwork,
-ffmpeg/libcdio for CD audio extraction, libdiscid for disc IDs, Mutagen for tag
-handling, and Qt/PySide6 for the desktop UI. Respect the MusicBrainz access
+Lyon Media Manager uses MusicBrainz metadata, Cover Art Archive artwork,
+ffmpeg/libcdio for CD audio extraction, libdiscid for disc IDs, libVLC for
+local playback and equalizer support, Mutagen for tag handling, and Qt/PySide6
+for the desktop UI. Respect the MusicBrainz access
 policy by setting an appropriate contact value before distributing builds.
