@@ -64,9 +64,16 @@ class _DiscReadThread(QThread):
     def __init__(self, drive: str, parent=None):
         super().__init__(parent)
         self.drive = drive
+        self._cancelled = False
+
+    def cancel(self) -> None:
+        self._cancelled = True
 
     def run(self) -> None:
-        self.finished_with.emit(cd_detect.read_disc(self.drive))
+        toc = cd_detect.read_disc(self.drive)
+        if self._cancelled:
+            return
+        self.finished_with.emit(toc)
 
 
 class _LookupThread(QThread):
@@ -76,6 +83,10 @@ class _LookupThread(QThread):
         super().__init__(parent)
         self.toc = toc
         self.settings = settings
+        self._cancelled = False
+
+    def cancel(self) -> None:
+        self._cancelled = True
 
     def run(self) -> None:
         info = lookup_disc(
@@ -84,9 +95,13 @@ class _LookupThread(QThread):
             ctdb_toc=self.toc.ctdb_toc_string,
             use_cuetools_db=self.settings.cuetools_db_metadata_enabled,
         )
+        if self._cancelled:
+            return
         art = None
         if info and self.settings.download_artwork:
             art = fetch_artwork(info)
+        if self._cancelled:
+            return
         self.finished_with.emit(info, art)
 
 
@@ -98,12 +113,20 @@ class _AlbumSearchThread(QThread):
         self.artist = artist
         self.album = album
         self.settings = settings
+        self._cancelled = False
+
+    def cancel(self) -> None:
+        self._cancelled = True
 
     def run(self) -> None:
         info = search_album(self.artist, self.album)
+        if self._cancelled:
+            return
         art = None
         if info and self.settings.download_artwork:
             art = fetch_artwork(info)
+        if self._cancelled:
+            return
         self.finished_with.emit(info, art)
 
 
@@ -481,12 +504,32 @@ class RipperView(QWidget):
         self.status_label.setText("Cancelling...")
 
     def shutdown(self) -> None:
-        """Stop ripper + worker threads. Called from MainWindow.closeEvent."""
+        """Stop ripper + worker threads. Called from MainWindow.closeEvent.
+
+        The libdiscid read and MusicBrainz / CTDB / TheAudioDB HTTP calls
+        these threads make have no cancellation primitive, so we (1) disconnect
+        the result signals to keep stale emits from reaching the about-to-be-
+        destroyed widget, (2) flag the thread so any post-network work is
+        skipped, and (3) cap the per-thread wait to keep app close responsive.
+        terminate() is the last-resort fallback so Qt does not abort with
+        "Destroyed while thread is still running" when the process is exiting.
+        """
         self.ripper.shutdown()
         for thread_attr in ("_disc_reader", "_lookup", "_search"):
             t = getattr(self, thread_attr, None)
-            if t is not None and t.isRunning():
-                t.wait(5000)
+            if t is None:
+                continue
+            try:
+                t.finished_with.disconnect()
+            except (TypeError, RuntimeError):
+                pass
+            try:
+                t.cancel()
+            except AttributeError:
+                pass
+            if t.isRunning() and not t.wait(1500):
+                t.terminate()
+                t.wait(500)
 
     # ------------------------------------------------------------------ progress
     def _on_track_started(self, n: int, title: str) -> None:

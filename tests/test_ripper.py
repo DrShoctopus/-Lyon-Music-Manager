@@ -126,6 +126,7 @@ from lyon.core.ripper import (  # noqa: E402
     _track_sector_span,
     _windows_cdda_drive_path,
     _write_failure_log,
+    safe_path_component,
     target_folder,
     unique_target_folder,
 )
@@ -208,6 +209,33 @@ def test_windows_cdda_drive_path_normalises_drive_letters():
     assert _windows_cdda_drive_path("D:") == "\\\\.\\D:"
     assert _windows_cdda_drive_path("e") == "\\\\.\\E:"
     assert _windows_cdda_drive_path("\\\\.\\F:") == "\\\\.\\F:"
+
+
+def test_safe_path_component_strips_trailing_dots_and_spaces():
+    # Windows silently drops trailing dots/spaces from file/dir names; two
+    # albums named "Foo." and "Foo" would otherwise collide on the filesystem.
+    assert safe_path_component("Album.") == "Album"
+    assert safe_path_component("Album ") == "Album"
+    assert safe_path_component("Album. . .") == "Album"
+
+
+def test_safe_path_component_suffixes_windows_reserved_names():
+    # Windows refuses to create files named after legacy device handles,
+    # even on NTFS via Win32. An album literally titled "CON" or "NUL"
+    # should not abort the whole rip with an OSError on mkdir.
+    assert safe_path_component("CON") == "CON_"
+    assert safe_path_component("nul") == "nul_"
+    assert safe_path_component("COM1") == "COM1_"
+    assert safe_path_component("LPT9") == "LPT9_"
+    # Reserved-name handling applies to the stem only.
+    assert safe_path_component("CON.flac") == "CON_.flac"
+    # Non-reserved names that merely start with a reserved prefix are fine.
+    assert safe_path_component("Console") == "Console"
+
+
+def test_safe_path_component_returns_unknown_for_empty_input():
+    assert safe_path_component("") == "Unknown"
+    assert safe_path_component(" . . ") == "Unknown"
 
 
 def test_rip_request_reuses_detected_disc_toc(tmp_path):
