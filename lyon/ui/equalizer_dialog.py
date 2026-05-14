@@ -184,7 +184,6 @@ class EqualizerDialog(QDialog):
         self.settings_saved.emit(self.result_settings)
 
     def closeEvent(self, event) -> None:
-        self.save_settings()
         super().closeEvent(event)
 
     def _populate_curve_combo(

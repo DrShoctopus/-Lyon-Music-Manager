@@ -202,7 +202,9 @@ def _build_libcdio_track_command(
     duration = end - start
     seek = _sector_seconds(start)
     length = _sector_seconds(duration)
-    cmd = [ffmpeg, "-y", "-loglevel", "error", "-stats"]
+    # Use info level so ffmpeg's -stats output (printed at info level) reaches
+    # the progress parser. -hide_banner suppresses the version/build preamble.
+    cmd = [ffmpeg, "-y", "-hide_banner", "-loglevel", "info", "-stats"]
     if input_seek:
         cmd += ["-f", "libcdio", "-ss", seek, "-i", drive]
     else:
