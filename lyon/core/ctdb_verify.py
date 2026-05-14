@@ -13,7 +13,7 @@ AccurateRip v1 CRC algorithm:
 """
 from __future__ import annotations
 
-import struct
+import array
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -77,8 +77,11 @@ def compute_accuraterip_v1_crc(
         return None
 
     num_samples = len(data) // 4
-    # Interpret raw bytes as uint32 little-endian values (left|right channel pair).
-    samples = struct.unpack(f"<{num_samples}I", data)
+    # array.array stores raw C uint32 values (~4 bytes each vs ~28 bytes per int
+    # in a Python tuple), cutting peak memory use by ~85% on a 42 MB PCM buffer.
+    samples = array.array('I', data)
+    if sys.byteorder == 'big':
+        samples.byteswap()
 
     skip_start = _SKIP_SAMPLES if is_first_track else 0
     skip_end = num_samples - _SKIP_SAMPLES if is_last_track and num_samples > _SKIP_SAMPLES else num_samples

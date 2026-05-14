@@ -128,7 +128,8 @@ class YtDownloadWorker(QThread):
 
     def _on_progress(self, d: dict) -> None:
         if self._cancelled:
-            raise Exception("Download cancelled by user")  # noqa: TRY002
+            from yt_dlp.utils import DownloadCancelled
+            raise DownloadCancelled()
         status = d.get("status", "")
         if status == "downloading":
             pct = d.get("_percent_str", "").strip()

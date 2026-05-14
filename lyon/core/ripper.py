@@ -980,6 +980,8 @@ class Ripper(QObject):
         self.finished.emit(ok, msg)
         if self._thread:
             self._thread.quit()
-            self._thread.wait()
+            if not self._thread.wait(5000):
+                self._thread.terminate()
+                self._thread.wait(2000)
         self._thread = None
         self._worker = None

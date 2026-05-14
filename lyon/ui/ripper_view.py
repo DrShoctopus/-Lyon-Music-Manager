@@ -557,7 +557,7 @@ class RipperView(QWidget):
         self._set_track_progress(n, 100)
         self.progress.setValue(self.progress.value() + 1)
         self.library.add_file(path)
-        self.library.conn.commit()
+        self.library.commit()
 
     def _on_rip_finished(self, ok: bool, msg: str) -> None:
         self.status_label.setText(msg)

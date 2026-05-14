@@ -10,7 +10,9 @@ from PySide6.QtWidgets import (
 )
 
 from .. import __app_name__, __version__
+from ..core import metadata
 from ..core.library import Library
+from ..core.playback_backend import close_dll_handles
 from ..core.player import Player
 from ..core.settings import Settings
 from .diagnostics_dialog import DiagnosticsDialog
@@ -401,4 +403,12 @@ class MainWindow(QMainWindow):
         self.ripper_view.shutdown()
         self.settings.last_volume = self.player.volume()
         self.settings.save()
+        # Release native resources in dependency order: video VLC → audio VLC
+        # → library SQLite connection → metadata HTTP session/log handler →
+        # Windows DLL directory handles.
+        self.video_player_view.cleanup()
+        self.player.cleanup()
+        self.library.close()
+        metadata.shutdown()
+        close_dll_handles()
         super().closeEvent(ev)
