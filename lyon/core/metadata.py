@@ -252,7 +252,7 @@ def lookup_cuetools_db_layout(ctdb_toc: str | None, *, fuzzy: bool = False) -> O
         )
         return None
 
-    candidates = [_ctdb_meta_to_album(meta) for meta in root.findall(".//metadata")]
+    candidates = [_ctdb_meta_to_album(meta) for meta in _xml_descendants(root, "metadata")]
     candidates = [info for info in candidates if info is not None]
     if not candidates:
         _log_metadata_diagnostic(
@@ -540,16 +540,18 @@ def _ctdb_meta_to_album(meta: ET.Element) -> Optional[AlbumInfo]:
     if not (artist or album):
         return None
 
+    source = (meta.get("source") or "unknown").strip()
     info = AlbumInfo(
         artist=artist,
         album=album,
         date=_ctdb_date(meta),
+        musicbrainz_albumid=_ctdb_musicbrainz_album_id(meta),
         genre=(meta.get("genre") or "").strip(),
-        metadata_source=f"cuetools_db:{(meta.get('source') or 'unknown').strip()}",
+        metadata_source=f"cuetools_db:{source}",
     )
 
     disc_number = _safe_int(meta.get("discnumber"), 1)
-    for number, track in enumerate(meta.findall("track"), start=1):
+    for number, track in enumerate(_xml_children(meta, "track"), start=1):
         title = (track.get("name") or "").strip() or f"Track {number:02d}"
         info.tracks.append(
             TrackInfo(
@@ -560,30 +562,53 @@ def _ctdb_meta_to_album(meta: ET.Element) -> Optional[AlbumInfo]:
             )
         )
 
-    info.artwork_url = _select_ctdb_cover(meta.findall("coverart"))
+    info.artwork_url = _select_ctdb_cover(_xml_children(meta, "coverart"))
     return info
 
 
 def _ctdb_date(meta: ET.Element) -> str:
     date = (meta.get("year") or "").strip()
-    for release in meta.findall("release"):
+    for release in _xml_children(meta, "release"):
         release_date = (release.get("date") or "").strip()
         if release_date:
             return release_date
     return date
 
 
+def _ctdb_musicbrainz_album_id(meta: ET.Element) -> str:
+    source = (meta.get("source") or "").strip().casefold()
+    release_id = (meta.get("id") or "").strip()
+    return release_id if source == "musicbrainz" else ""
+
+
 def _select_ctdb_cover(covers: list[ET.Element]) -> str:
     if not covers:
         return ""
     ordered = sorted(
-        covers, key=lambda c: c.get("primary", "").lower() == "true", reverse=True
+        covers, key=lambda c: _is_truthy_xml_value(c.get("primary", "")), reverse=True
     )
     for cover in ordered:
         uri = (cover.get("uri") or cover.get("uri150") or "").strip()
         if uri:
             return urljoin(CTDB_BASE_URL, uri)
     return ""
+
+
+def _xml_descendants(element: ET.Element, local_name: str) -> list[ET.Element]:
+    return [item for item in element.iter() if _xml_local_name(item.tag) == local_name]
+
+
+def _xml_children(element: ET.Element, local_name: str) -> list[ET.Element]:
+    return [item for item in element if _xml_local_name(item.tag) == local_name]
+
+
+def _xml_local_name(tag: Any) -> str:
+    text = str(tag)
+    return text.rsplit("}", 1)[-1] if "}" in text else text
+
+
+def _is_truthy_xml_value(value: Any) -> bool:
+    return _text(value).casefold() in {"1", "true", "yes"}
 
 
 def _theaudiodb_album_to_info(data: dict[str, Any], artist: str, album: str) -> AlbumInfo:
