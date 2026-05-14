@@ -28,6 +28,7 @@ CDROM_TOC_SIZE = 804
 CDROM_TOC_HEADER_SIZE = 4
 CDROM_TOC_TRACK_DATA_SIZE = 8
 CDROM_LEADOUT_TRACK = 0xAA
+MAX_CD_TRACKS = 100  # CD-DA spec: up to 99 audio tracks + leadout
 
 
 def _bind_winapi() -> None:
@@ -70,6 +71,9 @@ def _bind_winapi() -> None:
 
 
 _bind_winapi()
+
+# Guard against repeated PATH mutation across successive read_disc calls.
+_bin_dir_on_path = False
 
 
 @dataclass
@@ -126,6 +130,24 @@ def has_audio_cd(drive: str) -> bool:
     return False
 
 
+def _ensure_bin_dir_on_path() -> None:
+    """Prepend the bundled bin dir to PATH once per process lifetime."""
+    global _bin_dir_on_path
+    if _bin_dir_on_path:
+        return
+    bin_dir = bundled_bin_dir()
+    if bin_dir.exists():
+        path_str = str(bin_dir)
+        current = os.environ.get("PATH", "")
+        if path_str not in current.split(os.pathsep):
+            os.environ["PATH"] = path_str + (os.pathsep + current if current else "")
+        try:
+            os.add_dll_directory(path_str)  # type: ignore[attr-defined]
+        except (AttributeError, OSError):
+            pass
+    _bin_dir_on_path = True
+
+
 def read_disc(drive: str | None = None) -> DiscToc | None:
     """Read the best available CD TOC identity for a drive."""
     if sys.platform != "win32":
@@ -140,19 +162,13 @@ def read_disc(drive: str | None = None) -> DiscToc | None:
     ctdb_toc = _ctdb_toc_from_track_data(ctdb_entries)
     ctdb_fallback = _disc_toc_from_ctdb_entries(drive, ctdb_entries)
 
-    bin_dir = bundled_bin_dir()
-    if bin_dir.exists():
-        os.environ["PATH"] = str(bin_dir) + os.pathsep + os.environ.get("PATH", "")
-        try:
-            os.add_dll_directory(str(bin_dir))  # type: ignore[attr-defined]
-        except (AttributeError, OSError):
-            pass
+    _ensure_bin_dir_on_path()
 
     discid = _load_discid()
     if discid is None:
         return ctdb_fallback
 
-    device = drive.rstrip("\\:") + ":"
+    device = drive[:2]  # keep exactly "X:" — no trailing slashes
     try:
         d = discid.read(device, features=["mcn", "isrc"])
     except discid.DiscError:
@@ -200,10 +216,10 @@ def _read_windows_ctdb_entries(drive: str) -> list[_CtdbTocEntry]:
     if drive.startswith("\\\\.\\"):
         device_path = drive.rstrip("\\/")
     else:
-        drive_letter = drive.rstrip("\\:")[:1]
-        if not drive_letter:
+        drive_letter = drive[:1]  # take the first character only to avoid rstrip surprises
+        if not drive_letter or not drive_letter.isalpha():
             return []
-        device_path = f"\\\\.\\{drive_letter}:"
+        device_path = f"\\\\.\\{drive_letter.upper()}:"
 
     k32 = ctypes.windll.kernel32
     handle = k32.CreateFileW(
@@ -265,7 +281,7 @@ def _ctdb_entries_from_windows_toc(raw: bytes) -> list[_CtdbTocEntry]:
 
     toc_length = int.from_bytes(raw[:2], "big", signed=False)
     track_data_length = min(len(raw) - CDROM_TOC_HEADER_SIZE, max(0, toc_length - 2))
-    track_count = min(100, track_data_length // CDROM_TOC_TRACK_DATA_SIZE)
+    track_count = min(MAX_CD_TRACKS, track_data_length // CDROM_TOC_TRACK_DATA_SIZE)
     entries: list[_CtdbTocEntry] = []
     for index in range(track_count):
         start = CDROM_TOC_HEADER_SIZE + (index * CDROM_TOC_TRACK_DATA_SIZE)
@@ -343,8 +359,11 @@ def _disc_toc_from_ctdb_entries(drive: str, entries: list[_CtdbTocEntry]) -> Dis
 def eject(drive: str) -> None:
     if sys.platform != "win32":
         return
+    # Validate that drive is a single letter to prevent MCI command injection.
+    drive_letter = drive.strip()[:1].upper()
+    if not drive_letter or not drive_letter.isalpha():
+        return
     mci = ctypes.windll.winmm.mciSendStringW
-    drive_letter = drive.rstrip(":")
     mci("close lyon_cd", None, 0, None)
     if mci(f'open {drive_letter}: type cdaudio alias lyon_cd', None, 0, None) == 0:
         mci("set lyon_cd door open", None, 0, None)

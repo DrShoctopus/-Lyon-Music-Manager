@@ -106,9 +106,9 @@ class PlaybackBackend(QObject):
 class QMediaPlaybackBackend(PlaybackBackend):
     """Qt Multimedia fallback backend.
 
-    Qt does not expose per-band equalizer controls, so EQ state is accepted but
-    intentionally not applied. The high-level Player still owns normalized EQ
-    state, allowing the app to fall back safely if libVLC is unavailable.
+    Qt does not expose per-band equalizer controls, so ``apply_equalizer`` is a
+    documented no-op on this backend. The high-level Player retains normalised
+    EQ state so the app can switch to VLC later without losing the curve.
     """
 
     def __init__(self, parent: Optional[QObject] = None):
@@ -164,7 +164,8 @@ class QMediaPlaybackBackend(PlaybackBackend):
         return self._player.playbackState() == self._qmedia_player_cls.PlayingState
 
     def apply_equalizer(self, enabled: bool, bands: list[int]) -> None:
-        _ = (enabled, bands)
+        # Qt Multimedia has no per-band EQ API; intentional no-op on this backend.
+        pass
 
     def _emit_position(self, pos: int) -> None:
         self.position_changed.emit(pos, self._player.duration())
@@ -264,7 +265,7 @@ class VlcPlaybackBackend(PlaybackBackend):
             self._equalizer = None
             try:
                 self._player.set_equalizer(None)
-            except Exception as exc:
+            except (AttributeError, OSError, RuntimeError) as exc:
                 LOG.warning("Could not clear VLC equalizer: %s", exc)
             return
 
@@ -280,11 +281,11 @@ class VlcPlaybackBackend(PlaybackBackend):
                 equalizer.set_amp_at_index(float(ui_band), vlc_index)
             self._player.set_equalizer(equalizer)
             self._equalizer = equalizer
-        except Exception as exc:
+        except (AttributeError, OSError, RuntimeError) as exc:
             self._equalizer = None
             try:
                 self._player.set_equalizer(None)
-            except Exception:
+            except (AttributeError, OSError, RuntimeError):
                 pass
             LOG.warning("Could not apply VLC equalizer; continuing with flat playback: %s", exc)
 

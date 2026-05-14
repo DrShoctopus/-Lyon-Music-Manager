@@ -40,6 +40,8 @@ CREATE INDEX IF NOT EXISTS idx_tracks_album  ON tracks(album);
 CREATE INDEX IF NOT EXISTS idx_tracks_title  ON tracks(title);
 """
 
+_PAGE_SIZE = 500  # rows per page in streaming queries
+
 
 @dataclass
 class Track:
@@ -72,6 +74,16 @@ class Library:
         with self._lock:
             self.conn.executescript(SCHEMA)
             self.conn.commit()
+
+    def close(self) -> None:
+        with self._lock:
+            self.conn.close()
+
+    def __enter__(self) -> "Library":
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
 
     # ------------------------------------------------------------------ scan
     def scan_paths(
@@ -110,8 +122,7 @@ class Library:
     def add_file(self, path: str | os.PathLike) -> bool:
         path = str(path)
         with self._lock:
-            cur = self.conn.execute("SELECT 1 FROM tracks WHERE path = ?", (path,))
-            if cur.fetchone():
+            if self.conn.execute("SELECT 1 FROM tracks WHERE path = ?", (path,)).fetchone():
                 return False
         meta = _read_tags(path)
         if meta is None:
@@ -119,31 +130,28 @@ class Library:
         # Look for adjacent cover art
         art = _find_local_artwork(Path(path).parent)
         with self._lock:
-            try:
-                self.conn.execute(
-                    """INSERT INTO tracks
-                       (path, title, artist, album_artist, album, track_no, disc_no,
-                        year, genre, duration, bitrate, samplerate, artwork_path)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                    (
-                        path,
-                        meta["title"],
-                        meta["artist"],
-                        meta["album_artist"],
-                        meta["album"],
-                        meta["track_no"],
-                        meta["disc_no"],
-                        meta["year"],
-                        meta["genre"],
-                        meta["duration"],
-                        meta["bitrate"],
-                        meta["samplerate"],
-                        str(art) if art else None,
-                    ),
-                )
-            except sqlite3.IntegrityError:
-                return False
-        return True
+            cur = self.conn.execute(
+                """INSERT OR IGNORE INTO tracks
+                   (path, title, artist, album_artist, album, track_no, disc_no,
+                    year, genre, duration, bitrate, samplerate, artwork_path)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    path,
+                    meta["title"],
+                    meta["artist"],
+                    meta["album_artist"],
+                    meta["album"],
+                    meta["track_no"],
+                    meta["disc_no"],
+                    meta["year"],
+                    meta["genre"],
+                    meta["duration"],
+                    meta["bitrate"],
+                    meta["samplerate"],
+                    str(art) if art else None,
+                ),
+            )
+            return cur.rowcount > 0
 
     # ------------------------------------------------------------------ queries
     def all_artists(self) -> list[str]:
@@ -206,21 +214,35 @@ class Library:
         return [_row_to_track(r) for r in rows]
 
     def all_tracks(self) -> Iterator[Track]:
-        with self._lock:
-            rows = self.conn.execute("SELECT * FROM tracks ORDER BY id").fetchall()
-        for r in rows:
-            yield _row_to_track(r)
+        """Yield every track in id order, paging to avoid loading the full table at once."""
+        offset = 0
+        while True:
+            with self._lock:
+                rows = self.conn.execute(
+                    "SELECT * FROM tracks ORDER BY id LIMIT ? OFFSET ?",
+                    (_PAGE_SIZE, offset),
+                ).fetchall()
+            if not rows:
+                break
+            for r in rows:
+                yield _row_to_track(r)
+            if len(rows) < _PAGE_SIZE:
+                break
+            offset += len(rows)
 
     def remove_missing(self) -> int:
-        n = 0
         with self._lock:
             rows = self.conn.execute("SELECT id, path FROM tracks").fetchall()
-            for r in rows:
-                if not Path(r["path"]).exists():
-                    self.conn.execute("DELETE FROM tracks WHERE id = ?", (r["id"],))
-                    n += 1
+        # Path existence checks run outside the lock to avoid blocking queries.
+        missing_ids = [r["id"] for r in rows if not Path(r["path"]).exists()]
+        if not missing_ids:
+            return 0
+        with self._lock:
+            self.conn.executemany(
+                "DELETE FROM tracks WHERE id = ?", [(id_,) for id_ in missing_ids]
+            )
             self.conn.commit()
-        return n
+        return len(missing_ids)
 
 
 def _row_to_track(r: sqlite3.Row) -> Track:
