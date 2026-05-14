@@ -393,6 +393,7 @@ class RipRequest:
     target_dir: Path
     track_offsets: tuple[int, ...] = ()
     leadout_sector: int = 0
+    ctdb_toc: str = ""
 
 
 @dataclass
@@ -606,6 +607,7 @@ class RipWorker(QObject):
 
         total = len(album.tracks) or 1
         success = True
+        ripped_files: dict[int, Path] = {}
         for tr in album.tracks:
             if self._cancel:
                 self.finished.emit(False, "Cancelled")
@@ -628,11 +630,27 @@ class RipWorker(QObject):
                 failures.append(RipFailure(tr.number, tr.title, out, reason))
                 self.log.emit(f"Track {tr.number} {reason.lower()}")
             self.track_finished.emit(tr.number, str(out))
+            ripped_files[tr.number] = out
+
+        if self.settings.ctdb_verify_rips and ripped_files and self.request.ctdb_toc:
+            self._verify_rips(ff, ripped_files)
 
         message = "Rip complete." if success else "Rip finished with errors."
         if not success:
             self._emit_failure_log(folder, ff, failures, message)
         self.finished.emit(success, message)
+
+    def _verify_rips(self, ffmpeg: str, ripped_files: dict[int, Path]) -> None:
+        from .ctdb_verify import verify_rips
+        self.log.emit("Verifying rips against CUETools DB...")
+        results = verify_rips(
+            ripped_files,
+            self.request.ctdb_toc,
+            ffmpeg,
+            len(ripped_files),
+        )
+        for r in results:
+            self.log.emit(r.message)
 
     def _emit_failure_log(
         self,

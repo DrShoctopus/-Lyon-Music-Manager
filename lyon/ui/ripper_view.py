@@ -154,6 +154,7 @@ def _rip_request_from_toc(
         target_dir=folder,
         track_offsets=tuple(toc.track_offsets),
         leadout_sector=toc.sectors,
+        ctdb_toc=toc.ctdb_toc_string,
     )
 
 
