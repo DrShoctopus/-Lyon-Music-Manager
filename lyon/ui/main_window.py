@@ -22,6 +22,7 @@ from .queue_dialog import QueueDialog
 from .ripper_view import RipperView
 from .styles import WMP_QSS
 from .video_player_view import VideoPlayerView
+from .yt_download_dialog import YtDownloadDialog
 from .youtube_view import YouTubeView
 
 
@@ -55,6 +56,11 @@ class MainWindow(QMainWindow):
         self._scan_thread: _LibraryScanThread | None = None
         self._equalizer_dialog: EqualizerDialog | None = None
         self._queue_dialog: QueueDialog | None = None
+        # Debounce rapid library_updated signals (e.g. playlist downloads).
+        # timeout is connected after library_view is constructed below.
+        self._library_refresh_timer = QTimer(self)
+        self._library_refresh_timer.setSingleShot(True)
+        self._library_refresh_timer.setInterval(300)
 
         self.setWindowTitle(__app_name__)
         self.resize(1100, 720)
@@ -113,6 +119,7 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
         self.now_playing = NowPlayingView(self.player)
         self.library_view = LibraryView(self.library)
+        self._library_refresh_timer.timeout.connect(self.library_view.refresh)
         self.ripper_view = RipperView(self.settings, self.library)
         self.youtube_view = YouTubeView()
         self.video_player_view = VideoPlayerView()
@@ -163,6 +170,7 @@ class MainWindow(QMainWindow):
         self.library_view.request_youtube_search.connect(self._search_youtube_for_track)
         self.ripper_view.rip_completed.connect(self.library_view.refresh)
         self.ripper_view.log.connect(lambda m: sb.showMessage(m, 4000))
+        self.youtube_view.download_requested.connect(self._on_yt_download)
 
         # Initial scan of saved roots. First-run setup owns this scan until the
         # user confirms or skips setup, avoiding duplicate startup scans after
@@ -257,6 +265,11 @@ class MainWindow(QMainWindow):
 
     def rescan(self) -> None:
         self._start_scan(self.settings.library_paths or [self.settings.music_root], "Rescanned")
+
+    def _on_yt_download(self, url: str) -> None:
+        dlg = YtDownloadDialog(url, self.settings, self.library, self)
+        dlg.library_updated.connect(self._library_refresh_timer.start)
+        dlg.exec()
 
     def _search_youtube_for_track(self, query: str) -> None:
         if not query:
