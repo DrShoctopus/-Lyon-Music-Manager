@@ -39,12 +39,14 @@ CREATE TABLE IF NOT EXISTS tracks (
     samplerate INTEGER,
     added_at REAL DEFAULT (strftime('%s','now')),
     artwork_path TEXT,
-    media_type TEXT NOT NULL DEFAULT 'audio'
+    media_type TEXT NOT NULL DEFAULT 'audio',
+    disc_id TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_tracks_artist ON tracks(album_artist, artist);
-CREATE INDEX IF NOT EXISTS idx_tracks_album  ON tracks(album);
-CREATE INDEX IF NOT EXISTS idx_tracks_title  ON tracks(title);
+CREATE INDEX IF NOT EXISTS idx_tracks_artist  ON tracks(album_artist, artist);
+CREATE INDEX IF NOT EXISTS idx_tracks_album   ON tracks(album);
+CREATE INDEX IF NOT EXISTS idx_tracks_title   ON tracks(title);
 CREATE INDEX IF NOT EXISTS idx_tracks_media_type ON tracks(media_type);
+CREATE INDEX IF NOT EXISTS idx_tracks_disc_id ON tracks(disc_id);
 """
 
 _PAGE_SIZE = 500  # rows per page in streaming queries
@@ -96,6 +98,13 @@ class Library:
             )
         except sqlite3.OperationalError:
             pass  # column already exists
+        try:
+            self.conn.execute("ALTER TABLE tracks ADD COLUMN disc_id TEXT")
+        except sqlite3.OperationalError:
+            pass  # column already exists
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tracks_disc_id ON tracks(disc_id)"
+        )
 
     def commit(self) -> None:
         with self._lock:
@@ -145,7 +154,7 @@ class Library:
             self.conn.commit()
         return added
 
-    def add_file(self, path: str | os.PathLike) -> bool:
+    def add_file(self, path: str | os.PathLike, disc_id: str | None = None) -> bool:
         path = str(path)
         ext = Path(path).suffix.lower()
         media_type = "video" if ext in SUPPORTED_VIDEO_EXTS else "audio"
@@ -170,8 +179,9 @@ class Library:
             cur = self.conn.execute(
                 """INSERT OR IGNORE INTO tracks
                    (path, title, artist, album_artist, album, track_no, disc_no,
-                    year, genre, duration, bitrate, samplerate, artwork_path, media_type)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    year, genre, duration, bitrate, samplerate, artwork_path, media_type,
+                    disc_id)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     path,
                     meta["title"],
@@ -187,6 +197,7 @@ class Library:
                     meta["samplerate"],
                     str(art) if art else None,
                     media_type,
+                    disc_id or None,
                 ),
             )
             return cur.rowcount > 0
@@ -287,6 +298,26 @@ class Library:
             if len(rows) < _PAGE_SIZE:
                 break
             offset += len(rows)
+
+    def has_disc(self, disc_id: str, min_tracks: int = 1) -> bool:
+        """Return True if at least *min_tracks* library tracks carry this disc ID."""
+        if not disc_id:
+            return False
+        with self._lock:
+            count = self.conn.execute(
+                "SELECT COUNT(*) FROM tracks WHERE disc_id = ?", (disc_id,)
+            ).fetchone()[0]
+        return count >= min_tracks
+
+    def album_for_disc(self, disc_id: str) -> tuple[str, str] | None:
+        """Return (display_artist, album) for the first track carrying this disc ID, or None."""
+        with self._lock:
+            row = self.conn.execute(
+                f"SELECT {DISPLAY_ARTIST_SQL} AS a, {DISPLAY_ALBUM_SQL} AS b"
+                " FROM tracks WHERE disc_id = ? LIMIT 1",
+                (disc_id,),
+            ).fetchone()
+        return (row["a"], row["b"]) if row else None
 
     def remove_missing(self) -> int:
         with self._lock:

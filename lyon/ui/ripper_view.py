@@ -335,6 +335,19 @@ class RipperView(QWidget):
             )
             self.status_label.setText("No audio disc detected.")
             return
+
+        if toc.discid and self.library.has_disc(toc.discid, toc.track_count):
+            album_info = self.library.album_for_disc(toc.discid)
+            label = f"{album_info[0]} – {album_info[1]}" if album_info else "this disc"
+            self.status_label.setText("Already in library — disc ejected.")
+            cd_detect.eject(toc.drive)
+            QMessageBox.information(
+                self,
+                "Already in Library",
+                f"“{label}” is already in your library.\nThe disc has been ejected.",
+            )
+            return
+
         self._toc = toc
         self.status_label.setText(
             f"Disc found in {toc.drive} ({toc.track_count} tracks). Looking up metadata..."
@@ -560,7 +573,7 @@ class RipperView(QWidget):
     def _on_track_finished(self, n: int, path: str) -> None:
         self._set_track_progress(n, 100)
         self.progress.setValue(self.progress.value() + 1)
-        self.library.add_file(path)
+        self.library.add_file(path, disc_id=self._toc.discid if self._toc else None)
         self.library.commit()
 
     def _on_rip_finished(self, ok: bool, msg: str) -> None:
