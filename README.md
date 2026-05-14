@@ -222,10 +222,6 @@ scripts\build-windows.ps1 -SkipBinaries
 scripts\build-windows.ps1 -SkipZip
 ```
 
-Current note: the local PowerShell helper looks for Python 3.14, while the
-manual commands and GitHub Actions workflow use Python 3.11. Use the manual
-build path if your machine does not have Python 3.14 installed.
-
 ### Manual PyInstaller Build
 
 For a manual build on Windows:
