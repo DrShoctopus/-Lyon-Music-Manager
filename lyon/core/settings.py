@@ -97,7 +97,6 @@ class Settings:
     yt_audio_format: str = "flac"        # flac | mp3
     yt_video_format: str = "mp4"         # mp4 | mkv | webm
     yt_output_dir: str = ""              # defaults to music_root/YouTube at runtime
-    yt_video_output_dir: str = ""        # defaults to music_root/Videos at runtime
     yt_auto_add: bool = True             # add downloaded files to library automatically
 
     def __post_init__(self) -> None:
