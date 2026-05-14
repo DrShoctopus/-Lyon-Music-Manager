@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 from typing import Any, Optional
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, QUrl, Signal
 
 from .equalizer import EQ_BAND_COUNT, normalize_equalizer_bands
 from .settings import bundled_bin_dir
@@ -54,6 +54,16 @@ def _configure_vlc_runtime_path() -> None:
     if plugins_dir.exists():
         os.environ.setdefault("VLC_PLUGIN_PATH", str(plugins_dir))
     _CONFIGURED_VLC_DIRS.add(vlc_dir)
+
+
+def close_dll_handles() -> None:
+    """Release Windows DLL directory handles acquired by _configure_vlc_runtime_path."""
+    for handle in _DLL_DIRECTORY_HANDLES:
+        try:
+            handle.close()
+        except Exception as exc:
+            LOG.debug("Could not close DLL directory handle: %s", exc)
+    _DLL_DIRECTORY_HANDLES.clear()
 
 
 class PlaybackBackend(QObject):
@@ -102,13 +112,16 @@ class PlaybackBackend(QObject):
     def apply_equalizer(self, enabled: bool, bands: list[int]) -> None:
         raise NotImplementedError
 
+    def cleanup(self) -> None:
+        """Release any native resources held by the backend. Safe to call on all backends."""
+
 
 class QMediaPlaybackBackend(PlaybackBackend):
     """Qt Multimedia fallback backend.
 
-    Qt does not expose per-band equalizer controls, so EQ state is accepted but
-    intentionally not applied. The high-level Player still owns normalized EQ
-    state, allowing the app to fall back safely if libVLC is unavailable.
+    Qt does not expose per-band equalizer controls, so ``apply_equalizer`` is a
+    documented no-op on this backend. The high-level Player retains normalised
+    EQ state so the app can switch to VLC later without losing the curve.
     """
 
     def __init__(self, parent: Optional[QObject] = None):
@@ -126,8 +139,6 @@ class QMediaPlaybackBackend(PlaybackBackend):
         self._player.mediaStatusChanged.connect(self._on_media_status)
 
     def set_source(self, path: str) -> None:
-        from PySide6.QtCore import QUrl
-
         self._player.setSource(QUrl.fromLocalFile(path))
 
     def play(self) -> None:
@@ -164,7 +175,8 @@ class QMediaPlaybackBackend(PlaybackBackend):
         return self._player.playbackState() == self._qmedia_player_cls.PlayingState
 
     def apply_equalizer(self, enabled: bool, bands: list[int]) -> None:
-        _ = (enabled, bands)
+        # Qt Multimedia has no per-band EQ API; intentional no-op on this backend.
+        pass
 
     def _emit_position(self, pos: int) -> None:
         self.position_changed.emit(pos, self._player.duration())
@@ -203,12 +215,13 @@ class VlcPlaybackBackend(PlaybackBackend):
         self._equalizer = None
 
         self._timer = QTimer(self)
-        self._timer.setInterval(500)
+        self._timer.setInterval(200)
         self._timer.timeout.connect(self._poll)
 
     def set_source(self, path: str) -> None:
         media = self._instance.media_new_path(str(Path(path)))
         self._player.set_media(media)
+        media.release()  # drop our reference; VLC holds its own via set_media
         self._ended = False
         self._last_position = (-1, -1)
         self._player.audio_set_volume(self._volume)
@@ -264,7 +277,7 @@ class VlcPlaybackBackend(PlaybackBackend):
             self._equalizer = None
             try:
                 self._player.set_equalizer(None)
-            except Exception as exc:
+            except (AttributeError, OSError, RuntimeError) as exc:
                 LOG.warning("Could not clear VLC equalizer: %s", exc)
             return
 
@@ -273,18 +286,16 @@ class VlcPlaybackBackend(PlaybackBackend):
             if equalizer is None:
                 raise RuntimeError("VLC did not create an AudioEqualizer instance")
             normalized_bands = normalize_equalizer_bands(bands)
-            # Keep boosted curves clean by lowering libVLC preamp for headroom
-            # instead of clipping hot masters when several bands are raised.
-            equalizer.set_preamp(float(-max(0, max(normalized_bands))))
+            equalizer.set_preamp(0.0)
             for ui_band, vlc_index in zip(normalized_bands, VLC_EQ_BAND_INDEXES, strict=True):
                 equalizer.set_amp_at_index(float(ui_band), vlc_index)
             self._player.set_equalizer(equalizer)
             self._equalizer = equalizer
-        except Exception as exc:
+        except (AttributeError, OSError, RuntimeError) as exc:
             self._equalizer = None
             try:
                 self._player.set_equalizer(None)
-            except Exception:
+            except (AttributeError, OSError, RuntimeError):
                 pass
             LOG.warning("Could not apply VLC equalizer; continuing with flat playback: %s", exc)
 
@@ -293,8 +304,28 @@ class VlcPlaybackBackend(PlaybackBackend):
             self._last_state = state
             self.state_changed.emit(state)
 
+    def cleanup(self) -> None:
+        """Release native libVLC resources. Must be called before the app exits."""
+        self._timer.stop()
+        try:
+            self._player.stop()
+            self._player.release()
+        except Exception as exc:
+            LOG.debug("Error releasing VLC player: %s", exc)
+        try:
+            self._instance.release()
+        except Exception as exc:
+            LOG.debug("Error releasing VLC instance: %s", exc)
+        self._player = None  # type: ignore[assignment]
+        self._instance = None  # type: ignore[assignment]
+
     def _poll(self) -> None:
-        state = self._player.get_state()
+        try:
+            state = self._player.get_state()
+        except Exception as exc:
+            LOG.debug("VLC get_state failed (backend may be shutting down): %s", exc)
+            self._timer.stop()
+            return
         if state == self._vlc.State.Ended:
             if not self._ended:
                 self._ended = True

@@ -7,6 +7,7 @@ import shutil
 import sys
 from dataclasses import dataclass
 from enum import Enum
+from functools import lru_cache
 from pathlib import Path
 
 from .settings import bundled_bin_dir
@@ -32,6 +33,7 @@ class DependencyCheck:
         return self.status is not DiagnosticStatus.OK
 
 
+@lru_cache(maxsize=None)
 def _has_module(module: str) -> bool:
     return importlib.util.find_spec(module) is not None
 

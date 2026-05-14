@@ -1,6 +1,7 @@
 """SQLite-backed music library."""
 from __future__ import annotations
 
+import logging
 import os
 import sqlite3
 import threading
@@ -12,7 +13,11 @@ from mutagen import File as MutagenFile
 
 from .settings import app_data_dir
 
-SUPPORTED_EXTS = {".flac", ".mp3", ".m4a", ".aac", ".ogg", ".opus", ".wav", ".wma"}
+LOG = logging.getLogger(__name__)
+
+SUPPORTED_AUDIO_EXTS = {".flac", ".mp3", ".m4a", ".aac", ".ogg", ".opus", ".wav", ".wma"}
+SUPPORTED_VIDEO_EXTS = {".mp4", ".mkv", ".webm", ".avi", ".mov"}
+SUPPORTED_EXTS = SUPPORTED_AUDIO_EXTS | SUPPORTED_VIDEO_EXTS
 
 DISPLAY_ARTIST_SQL = "COALESCE(NULLIF(album_artist,''), NULLIF(artist,''), 'Unknown Artist')"
 DISPLAY_ALBUM_SQL = "COALESCE(NULLIF(album,''), 'Unknown Album')"
@@ -33,12 +38,16 @@ CREATE TABLE IF NOT EXISTS tracks (
     bitrate INTEGER,
     samplerate INTEGER,
     added_at REAL DEFAULT (strftime('%s','now')),
-    artwork_path TEXT
+    artwork_path TEXT,
+    media_type TEXT NOT NULL DEFAULT 'audio'
 );
 CREATE INDEX IF NOT EXISTS idx_tracks_artist ON tracks(album_artist, artist);
 CREATE INDEX IF NOT EXISTS idx_tracks_album  ON tracks(album);
 CREATE INDEX IF NOT EXISTS idx_tracks_title  ON tracks(title);
+CREATE INDEX IF NOT EXISTS idx_tracks_media_type ON tracks(media_type);
 """
+
+_PAGE_SIZE = 500  # rows per page in streaming queries
 
 
 @dataclass
@@ -57,10 +66,15 @@ class Track:
     bitrate: int = 0
     samplerate: int = 0
     artwork_path: str | None = None
+    media_type: str = "audio"
 
     @property
     def display_artist(self) -> str:
         return self.album_artist or self.artist or "Unknown Artist"
+
+    @property
+    def is_video(self) -> bool:
+        return self.media_type == "video"
 
 
 class Library:
@@ -71,7 +85,31 @@ class Library:
         self.conn.row_factory = sqlite3.Row
         with self._lock:
             self.conn.executescript(SCHEMA)
+            self._migrate()
             self.conn.commit()
+
+    def _migrate(self) -> None:
+        """Add columns that were introduced after initial release."""
+        try:
+            self.conn.execute(
+                "ALTER TABLE tracks ADD COLUMN media_type TEXT NOT NULL DEFAULT 'audio'"
+            )
+        except sqlite3.OperationalError:
+            pass  # column already exists
+
+    def commit(self) -> None:
+        with self._lock:
+            self.conn.commit()
+
+    def close(self) -> None:
+        with self._lock:
+            self.conn.close()
+
+    def __enter__(self) -> "Library":
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
 
     # ------------------------------------------------------------------ scan
     def scan_paths(
@@ -79,7 +117,7 @@ class Library:
         roots: Iterable[str | os.PathLike],
         should_cancel: "Callable[[], bool] | None" = None,
     ) -> int:
-        """Walk the given roots and add new audio files. Returns count added.
+        """Walk the given roots and add new audio/video files. Returns count added.
 
         ``should_cancel`` is checked inside the directory walk; when it
         returns True the scan commits whatever has been added so far and
@@ -109,61 +147,77 @@ class Library:
 
     def add_file(self, path: str | os.PathLike) -> bool:
         path = str(path)
+        ext = Path(path).suffix.lower()
+        media_type = "video" if ext in SUPPORTED_VIDEO_EXTS else "audio"
+
         with self._lock:
-            cur = self.conn.execute("SELECT 1 FROM tracks WHERE path = ?", (path,))
-            if cur.fetchone():
+            if self.conn.execute("SELECT 1 FROM tracks WHERE path = ?", (path,)).fetchone():
                 return False
         meta = _read_tags(path)
         if meta is None:
-            return False
+            if media_type == "video":
+                meta = {
+                    "title": Path(path).stem,
+                    "artist": "", "album_artist": "", "album": "",
+                    "track_no": 0, "disc_no": 1, "year": 0, "genre": "",
+                    "duration": 0.0, "bitrate": 0, "samplerate": 0,
+                }
+            else:
+                return False
         # Look for adjacent cover art
         art = _find_local_artwork(Path(path).parent)
         with self._lock:
-            try:
-                self.conn.execute(
-                    """INSERT INTO tracks
-                       (path, title, artist, album_artist, album, track_no, disc_no,
-                        year, genre, duration, bitrate, samplerate, artwork_path)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                    (
-                        path,
-                        meta["title"],
-                        meta["artist"],
-                        meta["album_artist"],
-                        meta["album"],
-                        meta["track_no"],
-                        meta["disc_no"],
-                        meta["year"],
-                        meta["genre"],
-                        meta["duration"],
-                        meta["bitrate"],
-                        meta["samplerate"],
-                        str(art) if art else None,
-                    ),
-                )
-            except sqlite3.IntegrityError:
-                return False
-        return True
+            cur = self.conn.execute(
+                """INSERT OR IGNORE INTO tracks
+                   (path, title, artist, album_artist, album, track_no, disc_no,
+                    year, genre, duration, bitrate, samplerate, artwork_path, media_type)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    path,
+                    meta["title"],
+                    meta["artist"],
+                    meta["album_artist"],
+                    meta["album"],
+                    meta["track_no"],
+                    meta["disc_no"],
+                    meta["year"],
+                    meta["genre"],
+                    meta["duration"],
+                    meta["bitrate"],
+                    meta["samplerate"],
+                    str(art) if art else None,
+                    media_type,
+                ),
+            )
+            return cur.rowcount > 0
 
     # ------------------------------------------------------------------ queries
-    def all_artists(self) -> list[str]:
+    def all_artists(self, media_type: str | None = None) -> list[str]:
+        filter_sql = "" if media_type is None else "AND media_type = ?"
+        params = () if media_type is None else (media_type,)
         with self._lock:
             rows = self.conn.execute(
                 f"""SELECT DISTINCT {DISPLAY_ARTIST_SQL} AS a
                     FROM tracks
-                    ORDER BY a COLLATE NOCASE"""
+                    WHERE 1=1 {filter_sql}
+                    ORDER BY a COLLATE NOCASE""",
+                params,
             ).fetchall()
         return [r["a"] for r in rows]
 
-    def albums_for_artist(self, artist: str) -> list[tuple[str, str | None]]:
+    def albums_for_artist(
+        self, artist: str, media_type: str | None = None
+    ) -> list[tuple[str, str | None]]:
+        filter_sql = "" if media_type is None else "AND media_type = ?"
+        params = (artist, media_type) if media_type is not None else (artist,)
         with self._lock:
             rows = self.conn.execute(
                 f"""SELECT {DISPLAY_ALBUM_SQL} AS display_album, MAX(artwork_path) AS art
                     FROM tracks
-                    WHERE {DISPLAY_ARTIST_SQL} = ?
+                    WHERE {DISPLAY_ARTIST_SQL} = ? {filter_sql}
                     GROUP BY display_album
                     ORDER BY MIN(year), display_album COLLATE NOCASE""",
-                (artist,),
+                params,
             ).fetchall()
         return [(r["display_album"], r["art"]) for r in rows]
 
@@ -178,49 +232,75 @@ class Library:
             ).fetchall()
         return [(r["a"], r["display_album"], r["art"]) for r in rows]
 
-    def tracks_for_album(self, artist: str, album: str) -> list[Track]:
+    def tracks_for_album(
+        self, artist: str, album: str, media_type: str | None = None
+    ) -> list[Track]:
+        filter_sql = "" if media_type is None else "AND media_type = ?"
+        params = (artist, album, media_type) if media_type is not None else (artist, album)
         with self._lock:
             rows = self.conn.execute(
                 f"""SELECT * FROM tracks
-                    WHERE {DISPLAY_ARTIST_SQL} = ? AND {DISPLAY_ALBUM_SQL} = ?
+                    WHERE {DISPLAY_ARTIST_SQL} = ? AND {DISPLAY_ALBUM_SQL} = ? {filter_sql}
                     ORDER BY disc_no, track_no, title COLLATE NOCASE""",
-                (artist, album),
+                params,
             ).fetchall()
         return [_row_to_track(r) for r in rows]
 
-    def search(self, query: str) -> list[Track]:
-        like = f"%{query}%"
+    def search(self, query: str, media_type: str | None = None) -> list[Track]:
+        escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        like = f"%{escaped}%"
+        filter_sql = "" if media_type is None else "AND media_type = ?"
+        base_params = (like, like, like, like, like, like)
+        params = base_params + (media_type,) if media_type is not None else base_params
         with self._lock:
             rows = self.conn.execute(
                 f"""SELECT * FROM tracks
-                   WHERE title LIKE ?
-                      OR artist LIKE ?
-                      OR album_artist LIKE ?
-                      OR album LIKE ?
-                      OR {DISPLAY_ARTIST_SQL} LIKE ?
-                      OR {DISPLAY_ALBUM_SQL} LIKE ?
+                   WHERE (title LIKE ? ESCAPE '\\'
+                      OR artist LIKE ? ESCAPE '\\'
+                      OR album_artist LIKE ? ESCAPE '\\'
+                      OR album LIKE ? ESCAPE '\\'
+                      OR {DISPLAY_ARTIST_SQL} LIKE ? ESCAPE '\\'
+                      OR {DISPLAY_ALBUM_SQL} LIKE ? ESCAPE '\\')
+                   {filter_sql}
                    ORDER BY {DISPLAY_ARTIST_SQL}, {DISPLAY_ALBUM_SQL}, disc_no, track_no
                    LIMIT 500""",
-                (like, like, like, like, like, like),
+                params,
             ).fetchall()
         return [_row_to_track(r) for r in rows]
 
-    def all_tracks(self) -> Iterator[Track]:
-        with self._lock:
-            rows = self.conn.execute("SELECT * FROM tracks ORDER BY id").fetchall()
-        for r in rows:
-            yield _row_to_track(r)
+    def all_tracks(self, media_type: str | None = None) -> Iterator[Track]:
+        """Yield every track in id order, paging to avoid loading the full table at once."""
+        filter_sql = "" if media_type is None else "AND media_type = ?"
+        params_base = (media_type,) if media_type is not None else ()
+        offset = 0
+        while True:
+            params = params_base + (_PAGE_SIZE, offset)
+            with self._lock:
+                rows = self.conn.execute(
+                    f"SELECT * FROM tracks WHERE 1=1 {filter_sql} ORDER BY id LIMIT ? OFFSET ?",
+                    params,
+                ).fetchall()
+            if not rows:
+                break
+            for r in rows:
+                yield _row_to_track(r)
+            if len(rows) < _PAGE_SIZE:
+                break
+            offset += len(rows)
 
     def remove_missing(self) -> int:
-        n = 0
         with self._lock:
             rows = self.conn.execute("SELECT id, path FROM tracks").fetchall()
-            for r in rows:
-                if not Path(r["path"]).exists():
-                    self.conn.execute("DELETE FROM tracks WHERE id = ?", (r["id"],))
-                    n += 1
+        # Path existence checks run outside the lock to avoid blocking queries.
+        missing_ids = [r["id"] for r in rows if not Path(r["path"]).exists()]
+        if not missing_ids:
+            return 0
+        with self._lock:
+            self.conn.executemany(
+                "DELETE FROM tracks WHERE id = ?", [(id_,) for id_ in missing_ids]
+            )
             self.conn.commit()
-        return n
+        return len(missing_ids)
 
 
 def _row_to_track(r: sqlite3.Row) -> Track:
@@ -239,13 +319,15 @@ def _row_to_track(r: sqlite3.Row) -> Track:
         bitrate=r["bitrate"] or 0,
         samplerate=r["samplerate"] or 0,
         artwork_path=r["artwork_path"],
+        media_type=r["media_type"] if r["media_type"] else "audio",
     )
 
 
 def _read_tags(path: str) -> dict | None:
     try:
         f = MutagenFile(path, easy=True)
-    except Exception:
+    except Exception as exc:
+        LOG.warning("Failed to read tags from %s: %s", path, exc)
         return None
     if f is None:
         return None

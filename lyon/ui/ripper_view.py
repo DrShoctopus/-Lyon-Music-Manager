@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QPixmap, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
     QAbstractItemView, QComboBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
@@ -154,6 +154,7 @@ def _rip_request_from_toc(
         target_dir=folder,
         track_offsets=tuple(toc.track_offsets),
         leadout_sector=toc.sectors,
+        ctdb_toc=toc.ctdb_toc_string,
     )
 
 
@@ -271,9 +272,13 @@ class RipperView(QWidget):
         self.ripper.log.connect(self.log)
         self.ripper.log.connect(self.status_label.setText)
 
-        self.album_edit.textChanged.connect(self._update_dest)
-        self.artist_edit.textChanged.connect(self._update_dest)
-        self.year_edit.textChanged.connect(self._update_dest)
+        self._dest_timer = QTimer(self)
+        self._dest_timer.setSingleShot(True)
+        self._dest_timer.setInterval(200)
+        self._dest_timer.timeout.connect(self._update_dest)
+        self.album_edit.textChanged.connect(self._dest_timer.start)
+        self.artist_edit.textChanged.connect(self._dest_timer.start)
+        self.year_edit.textChanged.connect(self._dest_timer.start)
 
         self.refresh_drives()
         self._update_dest()
@@ -556,7 +561,7 @@ class RipperView(QWidget):
         self._set_track_progress(n, 100)
         self.progress.setValue(self.progress.value() + 1)
         self.library.add_file(path)
-        self.library.conn.commit()
+        self.library.commit()
 
     def _on_rip_finished(self, ok: bool, msg: str) -> None:
         self.status_label.setText(msg)

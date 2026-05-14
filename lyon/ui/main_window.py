@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
     QAbstractSpinBox, QButtonGroup, QFileDialog, QFrame, QHBoxLayout, QLabel,
     QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QPushButton,
@@ -10,7 +10,9 @@ from PySide6.QtWidgets import (
 )
 
 from .. import __app_name__, __version__
+from ..core import metadata
 from ..core.library import Library
+from ..core.playback_backend import close_dll_handles
 from ..core.player import Player
 from ..core.settings import Settings
 from .diagnostics_dialog import DiagnosticsDialog
@@ -21,6 +23,8 @@ from .now_playing import NowPlayingView, TransportBar
 from .queue_dialog import QueueDialog
 from .ripper_view import RipperView
 from .styles import WMP_QSS
+from .video_player_view import VideoPlayerView
+from .yt_download_dialog import YtDownloadDialog
 from .youtube_view import YouTubeView
 
 
@@ -54,6 +58,11 @@ class MainWindow(QMainWindow):
         self._scan_thread: _LibraryScanThread | None = None
         self._equalizer_dialog: EqualizerDialog | None = None
         self._queue_dialog: QueueDialog | None = None
+        # Debounce rapid library_updated signals (e.g. playlist downloads).
+        # timeout is connected after library_view is constructed below.
+        self._library_refresh_timer = QTimer(self)
+        self._library_refresh_timer.setSingleShot(True)
+        self._library_refresh_timer.setInterval(300)
 
         self.setWindowTitle(__app_name__)
         self.resize(1100, 720)
@@ -85,7 +94,7 @@ class MainWindow(QMainWindow):
         self.tab_group = QButtonGroup(self)
         self.tab_group.setExclusive(True)
         self._tab_buttons: dict[str, QPushButton] = {}
-        for name in ("Now Playing", "Library", "Rip", "YouTube"):
+        for name in ("Now Playing", "Library", "Rip", "YouTube", "Video"):
             btn = QPushButton(name)
             btn.setObjectName("navTab")
             btn.setCheckable(True)
@@ -112,13 +121,17 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
         self.now_playing = NowPlayingView(self.player)
         self.library_view = LibraryView(self.library)
+        self._library_refresh_timer.timeout.connect(self.library_view.refresh)
         self.ripper_view = RipperView(self.settings, self.library)
         self.youtube_view = YouTubeView()
+        self.video_player_view = VideoPlayerView(library=self.library)
+        self._library_refresh_timer.timeout.connect(self.video_player_view.refresh_catalog)
 
         self.stack.addWidget(self.now_playing)
         self.stack.addWidget(self.library_view)
         self.stack.addWidget(self.ripper_view)
         self.stack.addWidget(self.youtube_view)
+        self.stack.addWidget(self.video_player_view)
 
         self._tab_buttons["Now Playing"].toggled.connect(
             lambda c: c and self.stack.setCurrentWidget(self.now_playing))
@@ -128,6 +141,8 @@ class MainWindow(QMainWindow):
             lambda c: c and self.stack.setCurrentWidget(self.ripper_view))
         self._tab_buttons["YouTube"].toggled.connect(
             lambda c: c and self.stack.setCurrentWidget(self.youtube_view))
+        self._tab_buttons["Video"].toggled.connect(
+            lambda c: c and self.stack.setCurrentWidget(self.video_player_view))
         self._tab_buttons["Library"].setChecked(True)
 
         layout.addWidget(self.stack, 1)
@@ -158,6 +173,9 @@ class MainWindow(QMainWindow):
         self.library_view.request_youtube_search.connect(self._search_youtube_for_track)
         self.ripper_view.rip_completed.connect(self.library_view.refresh)
         self.ripper_view.log.connect(lambda m: sb.showMessage(m, 4000))
+        self.youtube_view.download_requested.connect(self._on_yt_download)
+
+        self.setAcceptDrops(True)
 
         # Initial scan of saved roots. First-run setup owns this scan until the
         # user confirms or skips setup, avoiding duplicate startup scans after
@@ -168,6 +186,17 @@ class MainWindow(QMainWindow):
         # Menu
         self._build_menu()
         QTimer.singleShot(0, self._maybe_show_first_run)
+        backup_path = getattr(self.settings, "_corrupt_backup_path", None)
+        if backup_path:
+            QTimer.singleShot(
+                200,
+                lambda: QMessageBox.warning(
+                    self,
+                    "Settings Reset",
+                    "Your settings file was corrupted and has been reset to defaults.\n"
+                    f"The bad file was saved to:\n{backup_path}",
+                ),
+            )
 
     # ------------------------------------------------------------------ menu
     def _build_menu(self) -> None:
@@ -230,12 +259,15 @@ class MainWindow(QMainWindow):
         current = self.stack.currentWidget()
         is_youtube = current is self.youtube_view
         is_rip = current is self.ripper_view
-        hide_transport = is_youtube or is_rip
+        is_video = current is self.video_player_view
+        hide_transport = is_youtube or is_rip or is_video
         self.transport.setVisible(not hide_transport)
-        if hide_transport:
+        if is_youtube or is_rip:
             self.player.stop()
         if not is_youtube:
             self.youtube_view.pause_all_videos()
+        if not is_video:
+            self.video_player_view.pause_playback()
 
     # ------------------------------------------------------------------ actions
     def add_folder(self) -> None:
@@ -249,6 +281,11 @@ class MainWindow(QMainWindow):
 
     def rescan(self) -> None:
         self._start_scan(self.settings.library_paths or [self.settings.music_root], "Rescanned")
+
+    def _on_yt_download(self, url: str) -> None:
+        dlg = YtDownloadDialog(url, self.settings, self.library, self)
+        dlg.library_updated.connect(self._library_refresh_timer.start)
+        dlg.exec()
 
     def _search_youtube_for_track(self, query: str) -> None:
         if not query:
@@ -282,6 +319,7 @@ class MainWindow(QMainWindow):
     def _on_scan_finished(self, n: int, label: str) -> None:
         self.statusBar().showMessage(f"{label}: {n} new tracks", 5000)
         self.library_view.refresh()
+        self.video_player_view.refresh_catalog()
         self._scan_thread = None
 
     def remove_missing(self) -> None:
@@ -364,6 +402,44 @@ class MainWindow(QMainWindow):
             "<p>Uses MusicBrainz, Cover Art Archive, ffmpeg, and Qt WebEngine.</p>",
         )
 
+    # ------------------------------------------------------------------ drag-and-drop
+    _AUDIO_EXTENSIONS = frozenset(
+        ".flac .mp3 .ogg .wav .aac .m4a .wma .opus .ape .aiff .alac .mka .mp4 .mkv .webm".split()
+    )
+
+    def dragEnterEvent(self, ev: QDragEnterEvent) -> None:
+        if ev.mimeData().hasUrls():
+            ev.acceptProposedAction()
+        else:
+            ev.ignore()
+
+    def dropEvent(self, ev: QDropEvent) -> None:
+        folders: list[str] = []
+        files: list[str] = []
+        for url in ev.mimeData().urls():
+            if not url.isLocalFile():
+                continue
+            path = url.toLocalFile()
+            from pathlib import Path as _Path
+            p = _Path(path)
+            if p.is_dir():
+                folders.append(path)
+            elif p.suffix.lower() in self._AUDIO_EXTENSIONS:
+                files.append(path)
+        if folders:
+            for folder in folders:
+                if folder not in self.settings.library_paths:
+                    self.settings.library_paths.append(folder)
+            self.settings.save()
+            self._start_scan(folders, f"Added {len(folders)} folder(s)")
+        if files:
+            for f in files:
+                self.library.add_file(f)
+            self.library.commit()
+            self.library_view.refresh()
+            self.statusBar().showMessage(f"Added {len(files)} file(s) to library.", 4000)
+        ev.acceptProposedAction()
+
     def closeEvent(self, ev) -> None:
         # Stop audio first so it doesn't bleed past the visible window.
         self.player.stop()
@@ -378,4 +454,12 @@ class MainWindow(QMainWindow):
         self.ripper_view.shutdown()
         self.settings.last_volume = self.player.volume()
         self.settings.save()
+        # Release native resources in dependency order: video VLC → audio VLC
+        # → library SQLite connection → metadata HTTP session/log handler →
+        # Windows DLL directory handles.
+        self.video_player_view.cleanup()
+        self.player.cleanup()
+        self.library.close()
+        metadata.shutdown()
+        close_dll_handles()
         super().closeEvent(ev)

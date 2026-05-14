@@ -4,5 +4,7 @@ mutagen>=1.47
 musicbrainzngs>=0.7.1
 discid>=1.2; sys_platform == "win32"
 requests>=2.31
+defusedxml>=0.7
 Pillow>=10.0
 python-vlc>=3.0.20
+yt-dlp>=2024.1.1

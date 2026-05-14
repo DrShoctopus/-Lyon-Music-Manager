@@ -6,7 +6,7 @@
     From a clean checkout, produces dist\LyonMusicManager\ and a
     distributable zip at dist\LyonMusicManager-windows.zip.
 
-    Steps: create Python 3.14 venv, install dependencies, download
+    Steps: create Python 3.11 venv, install dependencies, download
     ffmpeg.exe, libdiscid.dll, and the VLC runtime into bin\, run
     PyInstaller, zip output.
 
@@ -19,7 +19,7 @@
         -Clean         Wipe .venv, build\, dist\ before building.
 
 .NOTES
-    Requires Python 3.14 64-bit on PATH (or the py launcher: py -3.14 ...).
+    Requires Python 3.11 64-bit on PATH (or the py launcher: py -3.11 ...).
 #>
 [CmdletBinding()]
 param(
@@ -35,7 +35,7 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Root      = Resolve-Path (Join-Path $ScriptDir '..')
 Set-Location $Root
 
-Write-Host "==> Lyon Music Manager (WMP / main branch) - Windows build" -ForegroundColor Green
+Write-Host "==> Lyon Music Manager - Windows build" -ForegroundColor Green
 Write-Host "    Project root: $Root"
 
 # 0. Optional clean -----------------------------------------------------------
@@ -50,21 +50,21 @@ if ($Clean) {
     }
 }
 
-# 1. Locate Python 3.14 -------------------------------------------------------
-Write-Host "==> Locating Python 3.14" -ForegroundColor Cyan
+# 1. Locate Python 3.11 -------------------------------------------------------
+Write-Host "==> Locating Python 3.11" -ForegroundColor Cyan
 $python = $null
 try {
-    & py -3.14 -c "import sys; print(sys.version)" | Out-Null
-    if ($LASTEXITCODE -eq 0) { $python = 'py -3.14' }
+    & py -3.11 -c "import sys; print(sys.version)" | Out-Null
+    if ($LASTEXITCODE -eq 0) { $python = 'py -3.11' }
 } catch { }
 if (-not $python) {
     try {
         $ver = & python --version 2>&1
-        if ($ver -match '3\.14') { $python = 'python' }
+        if ($ver -match '3\.11') { $python = 'python' }
     } catch { }
 }
 if (-not $python) {
-    throw "Python 3.14 not found. Install from https://www.python.org/downloads/ and tick 'Add Python to PATH'."
+    throw "Python 3.11 not found. Install from https://www.python.org/downloads/ and tick 'Add Python to PATH'."
 }
 Write-Host "    Using: $python"
 

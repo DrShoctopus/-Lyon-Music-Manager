@@ -19,7 +19,12 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName(__app_name__)
     app.setOrganizationName("Lyon")
-    app.setFont(QFont("Segoe UI", 9))
+    if sys.platform == "win32":
+        app.setFont(QFont("Segoe UI", 9))
+    elif sys.platform == "darwin":
+        app.setFont(QFont("SF Pro Text", 13))
+    else:
+        app.setFont(QFont("Ubuntu", 10))
 
     icon = app_icon()
     app.setWindowIcon(icon)

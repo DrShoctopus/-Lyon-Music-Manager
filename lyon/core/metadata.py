@@ -2,11 +2,17 @@
 from __future__ import annotations
 
 import logging
-import xml.etree.ElementTree as ET
+import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Optional
 from urllib.parse import urljoin
+
+try:
+    import defusedxml.ElementTree as ET
+except ImportError:  # defusedxml is an optional hardening layer
+    import xml.etree.ElementTree as ET  # type: ignore[no-redef]
 
 import musicbrainzngs
 import requests
@@ -14,8 +20,8 @@ import requests
 from . import settings as _settings
 
 
-CTDB_LOOKUP_URL = "http://db.cuetools.net/lookup2.php"
-CTDB_BASE_URL = "http://db.cuetools.net/"
+CTDB_LOOKUP_URL = "https://db.cuetools.net/lookup2.php"
+CTDB_BASE_URL = "https://db.cuetools.net/"
 CTDB_TIMEOUT_SECONDS = 20
 THEAUDIODB_API_BASE = "https://www.theaudiodb.com/api/v1/json"
 THEAUDIODB_DEFAULT_API_KEY = "123"
@@ -28,6 +34,18 @@ METADATA_DIAGNOSTICS_LOG_NAME = "metadata-diagnostics.log"
 
 LOG = logging.getLogger(__name__)
 _metadata_file_handler: logging.Handler | None = None
+
+# Shared HTTP session — reuses TCP connections and avoids repeated TLS handshakes.
+_http_session: requests.Session | None = None
+_http_session_lock = threading.Lock()
+
+# Guards the one-time musicbrainzngs useragent initialisation.
+_init_lock = threading.Lock()
+_initialised = False
+
+# MusicBrainz API ToS requires ≤1 request per second.
+_mb_rate_limit_lock = threading.Lock()
+_mb_last_request_time: float = 0.0
 
 
 @dataclass
@@ -58,16 +76,54 @@ class AlbumInfo:
         return 0
 
 
-_initialised = False
+def _get_http_session() -> requests.Session:
+    global _http_session
+    if _http_session is None:
+        with _http_session_lock:
+            if _http_session is None:
+                _http_session = requests.Session()
+    return _http_session
 
 
 def _init() -> None:
     global _initialised
     if _initialised:
         return
-    s = _settings.Settings.load()
-    musicbrainzngs.set_useragent(s.musicbrainz_app, s.musicbrainz_version, s.musicbrainz_contact)
-    _initialised = True
+    with _init_lock:
+        if _initialised:
+            return
+        s = _settings.get_cached_settings()
+        musicbrainzngs.set_useragent(s.musicbrainz_app, s.musicbrainz_version, s.musicbrainz_contact)
+        _initialised = True
+
+
+def _mb_rate_limit() -> None:
+    """Throttle to ≤1 MusicBrainz request per second as required by their ToS."""
+    global _mb_last_request_time
+    with _mb_rate_limit_lock:
+        now = time.monotonic()
+        wait = 1.0 - (now - _mb_last_request_time)
+        if wait > 0:
+            time.sleep(wait)
+        _mb_last_request_time = time.monotonic()
+
+
+def shutdown() -> None:
+    """Close the shared HTTP session and diagnostics log handler."""
+    global _http_session, _metadata_file_handler
+    if _http_session is not None:
+        try:
+            _http_session.close()
+        except Exception:
+            pass
+        _http_session = None
+    if _metadata_file_handler is not None:
+        try:
+            LOG.removeHandler(_metadata_file_handler)
+            _metadata_file_handler.close()
+        except Exception:
+            pass
+        _metadata_file_handler = None
 
 
 def lookup_disc(
@@ -127,6 +183,7 @@ def lookup_musicbrainz_disc(discid_str: str, toc: str | None = None) -> Optional
     if not discid_str:
         return None
     _init()
+    _mb_rate_limit()
     try:
         result = musicbrainzngs.get_releases_by_discid(
             discid_str, includes=["recordings", "artists"], toc=toc, cdstubs=True
@@ -163,7 +220,7 @@ def lookup_cuetools_db_disc(
 ) -> Optional[AlbumInfo]:
     """Look up album metadata through the CUETools Database metadata endpoint."""
     layouts = _unique_non_empty(
-        [_sanitize_ctdb_layout(ctdb_toc), _musicbrainz_toc_to_ctdb_toc(toc)]
+        [sanitize_ctdb_layout(ctdb_toc), _musicbrainz_toc_to_ctdb_toc(toc)]
     )
     if not layouts:
         _log_metadata_diagnostic(
@@ -194,7 +251,7 @@ def lookup_ctdb_disc(toc: str | None, *, fuzzy: bool = False) -> Optional[AlbumI
 
 def lookup_cuetools_db_layout(ctdb_toc: str | None, *, fuzzy: bool = False) -> Optional[AlbumInfo]:
     """Look up album metadata from a CUETools-style CTDB TOC layout."""
-    layout = _sanitize_ctdb_layout(ctdb_toc)
+    layout = sanitize_ctdb_layout(ctdb_toc)
     if not layout:
         _log_metadata_diagnostic(
             "CUETools DB %s lookup skipped because CTDB TOC layout was empty or invalid: %s",
@@ -204,7 +261,7 @@ def lookup_cuetools_db_layout(ctdb_toc: str | None, *, fuzzy: bool = False) -> O
         return None
 
     try:
-        response = requests.get(
+        response = _get_http_session().get(
             CTDB_LOOKUP_URL,
             params={
                 "version": "3",
@@ -302,6 +359,7 @@ def fetch_artwork(album: AlbumInfo) -> bytes | None:
 def search_musicbrainz_album(artist: str, album: str) -> Optional[AlbumInfo]:
     """Search MusicBrainz release metadata by artist and album title."""
     _init()
+    _mb_rate_limit()
     try:
         result = musicbrainzngs.search_releases(artist=artist, release=album, limit=1)
     except (musicbrainzngs.ResponseError, musicbrainzngs.NetworkError) as exc:
@@ -321,6 +379,7 @@ def search_musicbrainz_album(artist: str, album: str) -> Optional[AlbumInfo]:
         )
         return None
     rid = rels[0]["id"]
+    _mb_rate_limit()
     try:
         full = musicbrainzngs.get_release_by_id(
             rid, includes=["recordings", "artists"]
@@ -379,7 +438,7 @@ def metadata_diagnostics_log_path() -> str:
 
 
 def _metadata_diagnostics_enabled() -> bool:
-    settings = _settings.Settings.load()
+    settings = _settings.get_cached_settings()
     enabled = bool(getattr(settings, "metadata_diagnostics_enabled", False))
     if enabled:
         _ensure_metadata_diagnostics_logging()
@@ -691,7 +750,7 @@ def _merge_album_info(primary: AlbumInfo, fallback: AlbumInfo) -> AlbumInfo:
 
 def _fetch_artwork_url(url: str) -> bytes | None:
     try:
-        response = requests.get(url, timeout=HTTP_TIMEOUT_SECONDS)
+        response = _get_http_session().get(url, timeout=HTTP_TIMEOUT_SECONDS)
         if response.status_code == 200 and response.content:
             return response.content
         _log_metadata_diagnostic(
@@ -713,7 +772,7 @@ def _get_json(
     headers: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     try:
-        response = requests.get(
+        response = _get_http_session().get(
             url, params=params, headers=headers, timeout=HTTP_TIMEOUT_SECONDS
         )
         if response.status_code != 200:
@@ -786,7 +845,8 @@ def _musicbrainz_toc_to_ctdb_toc(toc: str | None) -> str:
     return ":".join(str(offset - 150) for offset in ctdb_offsets)
 
 
-def _sanitize_ctdb_layout(ctdb_toc: str | None) -> str:
+def sanitize_ctdb_layout(ctdb_toc: str | None) -> str:
+    """Return a validated, normalised CTDB TOC layout string, or '' if invalid."""
     if not ctdb_toc:
         return ""
 
@@ -832,14 +892,14 @@ def _theaudiodb_url(endpoint: str) -> str:
 
 
 def _theaudiodb_api_key() -> str:
-    settings = _settings.Settings.load()
+    settings = _settings.get_cached_settings()
     return getattr(settings, "theaudiodb_api_key", "") or THEAUDIODB_DEFAULT_API_KEY
 
 
 def _use_cuetools_db(value: bool | None) -> bool:
     if value is not None:
         return value
-    settings = _settings.Settings.load()
+    settings = _settings.get_cached_settings()
     return bool(getattr(settings, "cuetools_db_metadata_enabled", True))
 
 
@@ -856,7 +916,7 @@ def _has_track_metadata(info: AlbumInfo | None) -> bool:
 
 
 def _user_agent() -> str:
-    s = _settings.Settings.load()
+    s = _settings.get_cached_settings()
     return f"{s.musicbrainz_app}/{s.musicbrainz_version} ({s.musicbrainz_contact})"
 
 
@@ -889,8 +949,7 @@ def _ensure_list(value: Any) -> list[Any]:
 def _text(value: Any) -> str:
     if value is None:
         return ""
-    text = str(value).strip()
-    return "" if text.lower() == "none" else text
+    return str(value).strip()
 
 
 def _theaudiodb_duration_ms(value: Any) -> int:

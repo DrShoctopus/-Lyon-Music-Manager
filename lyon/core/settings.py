@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
 from dataclasses import dataclass, asdict, field
@@ -14,6 +15,8 @@ from .equalizer import (
     flat_equalizer_bands,
     normalize_equalizer_bands,
 )
+
+LOG = logging.getLogger(__name__)
 
 
 def _default_music_root() -> Path:
@@ -72,7 +75,7 @@ def normalize_library_paths(paths: object) -> list[str]:
 class Settings:
     music_root: str = field(default_factory=lambda: str(_default_music_root()))
     rip_format: str = "flac"           # flac is the only supported output today
-    flac_compression: int = 8           # 0-8
+    flac_compression: int = 5           # 0-8
     cd_drive: str = ""                 # e.g. "D:" - blank means auto-pick first
     musicbrainz_app: str = "LyonMusicManager"
     musicbrainz_version: str = field(default_factory=_app_version)
@@ -83,6 +86,7 @@ class Settings:
     cuetools_db_metadata_enabled: bool = True
     download_artwork: bool = True
     metadata_diagnostics_enabled: bool = False
+    ctdb_verify_rips: bool = True
     last_volume: int = 80
     library_paths: list[str] = field(default_factory=list)
     equalizer_enabled: bool = False
@@ -90,6 +94,10 @@ class Settings:
     equalizer_curve_name: str = DEFAULT_EQ_CURVE_NAME
     equalizer_custom_curves: dict[str, list[int]] = field(default_factory=dict)
     first_run_completed: bool = False
+    yt_audio_format: str = "flac"        # flac | mp3
+    yt_video_format: str = "mp4"         # mp4 | mkv | webm
+    yt_output_dir: str = ""              # defaults to music_root/YouTube at runtime
+    yt_auto_add: bool = True             # add downloaded files to library automatically
 
     def __post_init__(self) -> None:
         self.library_paths = normalize_library_paths(self.library_paths)
@@ -119,9 +127,45 @@ class Settings:
                 data = {k: v for k, v in data.items() if k in known}
                 return cls(**data)
             except (json.JSONDecodeError, TypeError, ValueError):
-                pass
+                backup = path.with_suffix(".json.bad")
+                try:
+                    path.replace(backup)
+                except OSError:
+                    pass
+                LOG.warning(
+                    "settings.json was corrupt; reset to defaults. Bad file saved to %s",
+                    backup,
+                )
+                instance = cls()
+                instance._corrupt_backup_path = str(backup)
+                return instance
         return cls()
 
     def save(self) -> None:
         path = app_data_dir() / "settings.json"
-        path.write_text(json.dumps(asdict(self), indent=2), encoding="utf-8")
+        data = json.dumps(asdict(self), indent=2)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(data, encoding="utf-8")
+        os.replace(tmp, path)
+        invalidate_settings_cache()
+
+
+# ---------------------------------------------------------------------------
+# Module-level settings cache so repeated hot-path calls (metadata lookups,
+# diagnostics checks) avoid redundant file I/O on every invocation.
+# ---------------------------------------------------------------------------
+_settings_cache: "Settings | None" = None
+
+
+def get_cached_settings() -> "Settings":
+    """Return cached Settings, loading from disk on first call."""
+    global _settings_cache
+    if _settings_cache is None:
+        _settings_cache = Settings.load()
+    return _settings_cache
+
+
+def invalidate_settings_cache() -> None:
+    """Discard the cached Settings so the next call re-reads from disk."""
+    global _settings_cache
+    _settings_cache = None
