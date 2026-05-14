@@ -339,6 +339,7 @@ class RipperView(QWidget):
         if toc.discid and self.library.has_disc(toc.discid, toc.track_count):
             album_info = self.library.album_for_disc(toc.discid)
             label = f"{album_info[0]} – {album_info[1]}" if album_info else "this disc"
+            self._reset_disc_state()
             self.status_label.setText("Already in library — disc ejected.")
             cd_detect.eject(toc.drive)
             QMessageBox.information(
@@ -357,6 +358,17 @@ class RipperView(QWidget):
             self._start_lookup(toc)
         else:
             self.start_btn.setEnabled(True)
+
+    def _reset_disc_state(self) -> None:
+        """Clear cached TOC + album info and wipe the disc-specific UI fields."""
+        self._toc = None
+        self._album = None
+        self.tracks_model.removeRows(0, self.tracks_model.rowCount())
+        self.album_edit.clear()
+        self.artist_edit.clear()
+        self.year_edit.clear()
+        self.cover.setPixmap(cover_pixmap(None, 140, "CD"))
+        self.progress.setValue(0)
 
     def _start_lookup(self, toc: cd_detect.DiscToc) -> None:
         self._lookup = _LookupThread(toc, self.settings, self)
