@@ -61,6 +61,7 @@ class YtDownloadWorker(QThread):
         self._cancelled = False
         self._succeeded = 0
         self._failed = 0
+        self._emitted_paths: set[str] = set()
 
     def cancel(self) -> None:
         self._cancelled = True
@@ -91,7 +92,7 @@ class YtDownloadWorker(QThread):
             fmt_selector = "bestaudio/best"
         else:
             postprocessors = [
-                {"key": "FFmpegVideoRemuxer", "preferedformat": self.fmt},
+                {"key": "FFmpegVideoRemuxer", "preferredformat": self.fmt},
                 {"key": "EmbedThumbnail"},
                 {"key": "FFmpegMetadata", "add_metadata": True},
                 {"key": "FFmpegEmbedSubtitle"},
@@ -143,11 +144,17 @@ class YtDownloadWorker(QThread):
         for dl in info.get("requested_downloads", []):
             path = dl.get("filepath", "")
             if path and Path(path).exists():
-                self._succeeded += 1
-                self.track_ready.emit(path)
+                self._emit_track_ready(path)
                 return
         # Fallback: use filepath directly on the info_dict
         path = info.get("filepath", "")
         if path and Path(path).exists():
-            self._succeeded += 1
-            self.track_ready.emit(path)
+            self._emit_track_ready(path)
+
+    def _emit_track_ready(self, path: str) -> None:
+        """Emit track_ready exactly once per output file across all postprocessors."""
+        if path in self._emitted_paths:
+            return
+        self._emitted_paths.add(path)
+        self._succeeded += 1
+        self.track_ready.emit(path)

@@ -56,6 +56,11 @@ class MainWindow(QMainWindow):
         self._scan_thread: _LibraryScanThread | None = None
         self._equalizer_dialog: EqualizerDialog | None = None
         self._queue_dialog: QueueDialog | None = None
+        # Debounce rapid library_updated signals (e.g. playlist downloads).
+        # timeout is connected after library_view is constructed below.
+        self._library_refresh_timer = QTimer(self)
+        self._library_refresh_timer.setSingleShot(True)
+        self._library_refresh_timer.setInterval(300)
 
         self.setWindowTitle(__app_name__)
         self.resize(1100, 720)
@@ -114,6 +119,7 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
         self.now_playing = NowPlayingView(self.player)
         self.library_view = LibraryView(self.library)
+        self._library_refresh_timer.timeout.connect(self.library_view.refresh)
         self.ripper_view = RipperView(self.settings, self.library)
         self.youtube_view = YouTubeView()
         self.video_player_view = VideoPlayerView()
@@ -262,7 +268,7 @@ class MainWindow(QMainWindow):
 
     def _on_yt_download(self, url: str) -> None:
         dlg = YtDownloadDialog(url, self.settings, self.library, self)
-        dlg.library_updated.connect(self.library_view.refresh)
+        dlg.library_updated.connect(self._library_refresh_timer.start)
         dlg.exec()
 
     def _search_youtube_for_track(self, query: str) -> None:

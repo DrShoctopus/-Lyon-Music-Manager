@@ -91,9 +91,12 @@ class Library:
             self.conn.execute(
                 "ALTER TABLE tracks ADD COLUMN media_type TEXT NOT NULL DEFAULT 'audio'"
             )
-            self.conn.commit()
         except sqlite3.OperationalError:
             pass  # column already exists
+
+    def commit(self) -> None:
+        with self._lock:
+            self.conn.commit()
 
     def close(self) -> None:
         with self._lock:

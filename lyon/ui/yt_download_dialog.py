@@ -3,9 +3,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
-    QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
+    QButtonGroup, QCheckBox, QComboBox, QDialog,
     QFileDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit,
     QPushButton, QRadioButton, QVBoxLayout, QWidget,
 )
@@ -115,9 +115,8 @@ class YtDownloadDialog(QDialog):
         btn_row.addWidget(self._close_btn)
         layout.addLayout(btn_row)
 
-        # Wire type toggle
+        # One connection is enough: toggled fires for both select and deselect
         self.radio_audio.toggled.connect(self._on_type_changed)
-        self.radio_video.toggled.connect(self._on_type_changed)
 
     # ------------------------------------------------------------------ helpers
 
@@ -206,7 +205,7 @@ class YtDownloadDialog(QDialog):
         self._log(f"✓  {path}")
         if self.settings.yt_auto_add:
             if self.library.add_file(path):
-                self.library.conn.commit()
+                self.library.commit()
                 self.library_updated.emit()
 
     def _on_error(self, msg: str) -> None:

@@ -37,6 +37,7 @@ class LibraryView(QWidget):
             btn = QPushButton(label)
             btn.setCheckable(True)
             btn.setFixedHeight(24)
+            btn.setObjectName("filterBtn")
             btn.setProperty("filterValue", value)
             self._filter_group.addButton(btn)
             filter_row.addWidget(btn)
