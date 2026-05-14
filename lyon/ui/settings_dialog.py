@@ -103,12 +103,12 @@ class SettingsDialog(QDialog):
         self.yt_audio_fmt = QComboBox()
         self.yt_audio_fmt.addItems(["flac", "mp3"])
         self.yt_audio_fmt.setCurrentText(settings.yt_audio_format)
-        yt_form.addRow("Audio format:", self.yt_audio_fmt)
+        yt_form.addRow("Audio-only format:", self.yt_audio_fmt)
 
         self.yt_video_fmt = QComboBox()
         self.yt_video_fmt.addItems(["mp4", "mkv", "webm"])
         self.yt_video_fmt.setCurrentText(settings.yt_video_format)
-        yt_form.addRow("Video format:", self.yt_video_fmt)
+        yt_form.addRow("Video format (video + audio):", self.yt_video_fmt)
 
         save_dir_row = QHBoxLayout()
         default_save = settings.yt_output_dir or str(Path(settings.music_root) / "YouTube")
