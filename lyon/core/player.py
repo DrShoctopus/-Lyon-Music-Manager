@@ -1,6 +1,7 @@
 """High-level music player with queue and transport logic."""
 from __future__ import annotations
 
+import random
 from enum import Enum
 from typing import Optional
 
@@ -213,7 +214,6 @@ class Player(QObject):
     # --------------------------------------------------------------- internals
     def _next_index(self) -> Optional[int]:
         if self._shuffle:
-            import random
             candidates = [i for i in range(len(self._queue)) if i != self._index]
             if not candidates:
                 return self._index if self._repeat == RepeatMode.ALL else None

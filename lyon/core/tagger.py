@@ -3,10 +3,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import mutagen
 from mutagen.flac import FLAC, Picture
 from mutagen.id3 import PictureType
 
 from .metadata import AlbumInfo, TrackInfo
+
+_PNG_MAGIC = b"\x89PNG"
 
 
 def write_flac_tags(
@@ -17,7 +20,7 @@ def write_flac_tags(
 ) -> bool:
     try:
         f = FLAC(str(path))
-    except Exception:
+    except (mutagen.MutagenError, OSError):
         return False
 
     f["title"] = track.title
@@ -36,7 +39,7 @@ def write_flac_tags(
     if artwork:
         pic = Picture()
         pic.type = PictureType.COVER_FRONT
-        pic.mime = "image/jpeg" if artwork[:3] == b"\xff\xd8\xff" else "image/png"
+        pic.mime = "image/png" if artwork[:4] == _PNG_MAGIC else "image/jpeg"
         pic.desc = "Front Cover"
         pic.data = artwork
         f.clear_pictures()
@@ -44,6 +47,6 @@ def write_flac_tags(
 
     try:
         f.save()
-    except Exception:
+    except (mutagen.MutagenError, OSError):
         return False
     return True
