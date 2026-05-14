@@ -16,7 +16,7 @@ from __future__ import annotations
 import struct
 import subprocess
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 try:
