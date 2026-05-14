@@ -33,7 +33,7 @@ class LibraryView(QWidget):
         filter_row.setSpacing(2)
         self._filter_group = QButtonGroup(self)
         self._filter_group.setExclusive(True)
-        for label, value in (("All", None), ("Music", "audio"), ("Video", "video")):
+        for label, value in (("All", None), ("Music", "audio")):
             btn = QPushButton(label)
             btn.setCheckable(True)
             btn.setFixedHeight(24)
