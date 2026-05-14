@@ -23,7 +23,7 @@ MAX_EQ_GAIN_DB = 12
 DEFAULT_EQ_CURVE_NAME = "Flat"
 UNSAVED_EQ_CURVE_NAME = "Custom (unsaved)"
 
-# Five common listening curves. Flat is still available as the reset/default
+# Ten common listening curves. Flat is still available as the reset/default
 # curve, but these are the musical presets shown first in the picker.
 BUILTIN_EQ_CURVES: dict[str, list[int]] = {
     "Bass Boost": [5, 4, 3, 1, 0, 0, 0, 1, 1, 1],
@@ -31,6 +31,11 @@ BUILTIN_EQ_CURVES: dict[str, list[int]] = {
     "Vocal Clarity": [-2, -1, 0, 1, 2, 4, 3, 1, 0, 0],
     "Rock": [4, 3, 1, -1, 0, 2, 4, 3, 2, 2],
     "Classical": [2, 1, 0, 0, 0, 1, 2, 3, 3, 2],
+    "Pop": [1, 2, 1, -1, -1, 1, 2, 3, 3, 2],
+    "Electronic": [5, 4, 1, -2, -2, 0, 2, 4, 4, 4],
+    "Hip-Hop": [5, 4, 3, 1, -1, 0, 1, 2, 2, 3],
+    "Jazz": [2, 3, 2, 0, -1, 0, 1, 2, 2, 2],
+    "Acoustic": [2, 1, 0, 0, 1, 3, 3, 2, 2, 2],
 }
 RESERVED_EQ_CURVE_NAMES = frozenset(
     (DEFAULT_EQ_CURVE_NAME, UNSAVED_EQ_CURVE_NAME, *BUILTIN_EQ_CURVES)

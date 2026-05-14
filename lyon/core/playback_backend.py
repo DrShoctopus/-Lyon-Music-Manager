@@ -274,9 +274,7 @@ class VlcPlaybackBackend(PlaybackBackend):
             if equalizer is None:
                 raise RuntimeError("VLC did not create an AudioEqualizer instance")
             normalized_bands = normalize_equalizer_bands(bands)
-            # Keep boosted curves clean by lowering libVLC preamp for headroom
-            # instead of clipping hot masters when several bands are raised.
-            equalizer.set_preamp(float(-max(0, max(normalized_bands))))
+            equalizer.set_preamp(0.0)
             for ui_band, vlc_index in zip(normalized_bands, VLC_EQ_BAND_INDEXES, strict=True):
                 equalizer.set_amp_at_index(float(ui_band), vlc_index)
             self._player.set_equalizer(equalizer)

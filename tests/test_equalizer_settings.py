@@ -4,12 +4,12 @@ from lyon.core.equalizer import BUILTIN_EQ_CURVES, EQ_BAND_COUNT, normalize_equa
 from lyon.core.settings import Settings, normalize_library_paths
 
 
-def test_equalizer_defaults_to_ten_flat_bands_and_five_presets():
+def test_equalizer_defaults_to_ten_flat_bands_and_ten_presets():
     settings = Settings()
 
     assert len(settings.equalizer_bands) == EQ_BAND_COUNT == 10
     assert settings.equalizer_bands == [0] * 10
-    assert len(BUILTIN_EQ_CURVES) == 5
+    assert len(BUILTIN_EQ_CURVES) == 10
     assert all(len(curve) == 10 for curve in BUILTIN_EQ_CURVES.values())
 
 
