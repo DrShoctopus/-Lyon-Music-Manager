@@ -1,6 +1,7 @@
 """SQLite-backed music library."""
 from __future__ import annotations
 
+import logging
 import os
 import sqlite3
 import threading
@@ -11,6 +12,8 @@ from typing import Callable, Iterable, Iterator
 from mutagen import File as MutagenFile
 
 from .settings import app_data_dir
+
+LOG = logging.getLogger(__name__)
 
 SUPPORTED_AUDIO_EXTS = {".flac", ".mp3", ".m4a", ".aac", ".ogg", ".opus", ".wav", ".wma"}
 SUPPORTED_VIDEO_EXTS = {".mp4", ".mkv", ".webm", ".avi", ".mov"}
@@ -244,19 +247,20 @@ class Library:
         return [_row_to_track(r) for r in rows]
 
     def search(self, query: str, media_type: str | None = None) -> list[Track]:
-        like = f"%{query}%"
+        escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        like = f"%{escaped}%"
         filter_sql = "" if media_type is None else "AND media_type = ?"
         base_params = (like, like, like, like, like, like)
         params = base_params + (media_type,) if media_type is not None else base_params
         with self._lock:
             rows = self.conn.execute(
                 f"""SELECT * FROM tracks
-                   WHERE (title LIKE ?
-                      OR artist LIKE ?
-                      OR album_artist LIKE ?
-                      OR album LIKE ?
-                      OR {DISPLAY_ARTIST_SQL} LIKE ?
-                      OR {DISPLAY_ALBUM_SQL} LIKE ?)
+                   WHERE (title LIKE ? ESCAPE '\\'
+                      OR artist LIKE ? ESCAPE '\\'
+                      OR album_artist LIKE ? ESCAPE '\\'
+                      OR album LIKE ? ESCAPE '\\'
+                      OR {DISPLAY_ARTIST_SQL} LIKE ? ESCAPE '\\'
+                      OR {DISPLAY_ALBUM_SQL} LIKE ? ESCAPE '\\')
                    {filter_sql}
                    ORDER BY {DISPLAY_ARTIST_SQL}, {DISPLAY_ALBUM_SQL}, disc_no, track_no
                    LIMIT 500""",
@@ -322,7 +326,8 @@ def _row_to_track(r: sqlite3.Row) -> Track:
 def _read_tags(path: str) -> dict | None:
     try:
         f = MutagenFile(path, easy=True)
-    except Exception:
+    except Exception as exc:
+        LOG.warning("Failed to read tags from %s: %s", path, exc)
         return None
     if f is None:
         return None

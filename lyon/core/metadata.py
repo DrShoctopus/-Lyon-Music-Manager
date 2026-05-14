@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -41,6 +42,10 @@ _http_session_lock = threading.Lock()
 # Guards the one-time musicbrainzngs useragent initialisation.
 _init_lock = threading.Lock()
 _initialised = False
+
+# MusicBrainz API ToS requires ≤1 request per second.
+_mb_rate_limit_lock = threading.Lock()
+_mb_last_request_time: float = 0.0
 
 
 @dataclass
@@ -90,6 +95,35 @@ def _init() -> None:
         s = _settings.get_cached_settings()
         musicbrainzngs.set_useragent(s.musicbrainz_app, s.musicbrainz_version, s.musicbrainz_contact)
         _initialised = True
+
+
+def _mb_rate_limit() -> None:
+    """Throttle to ≤1 MusicBrainz request per second as required by their ToS."""
+    global _mb_last_request_time
+    with _mb_rate_limit_lock:
+        now = time.monotonic()
+        wait = 1.0 - (now - _mb_last_request_time)
+        if wait > 0:
+            time.sleep(wait)
+        _mb_last_request_time = time.monotonic()
+
+
+def shutdown() -> None:
+    """Close the shared HTTP session and diagnostics log handler."""
+    global _http_session, _metadata_file_handler
+    if _http_session is not None:
+        try:
+            _http_session.close()
+        except Exception:
+            pass
+        _http_session = None
+    if _metadata_file_handler is not None:
+        try:
+            LOG.removeHandler(_metadata_file_handler)
+            _metadata_file_handler.close()
+        except Exception:
+            pass
+        _metadata_file_handler = None
 
 
 def lookup_disc(
@@ -149,6 +183,7 @@ def lookup_musicbrainz_disc(discid_str: str, toc: str | None = None) -> Optional
     if not discid_str:
         return None
     _init()
+    _mb_rate_limit()
     try:
         result = musicbrainzngs.get_releases_by_discid(
             discid_str, includes=["recordings", "artists"], toc=toc, cdstubs=True
@@ -324,6 +359,7 @@ def fetch_artwork(album: AlbumInfo) -> bytes | None:
 def search_musicbrainz_album(artist: str, album: str) -> Optional[AlbumInfo]:
     """Search MusicBrainz release metadata by artist and album title."""
     _init()
+    _mb_rate_limit()
     try:
         result = musicbrainzngs.search_releases(artist=artist, release=album, limit=1)
     except (musicbrainzngs.ResponseError, musicbrainzngs.NetworkError) as exc:
@@ -343,6 +379,7 @@ def search_musicbrainz_album(artist: str, album: str) -> Optional[AlbumInfo]:
         )
         return None
     rid = rels[0]["id"]
+    _mb_rate_limit()
     try:
         full = musicbrainzngs.get_release_by_id(
             rid, includes=["recordings", "artists"]

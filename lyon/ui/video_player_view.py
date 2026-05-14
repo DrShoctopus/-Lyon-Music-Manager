@@ -648,6 +648,7 @@ class VideoPlayerView(QWidget):
         self._current_path = path
         media = self._instance.media_new_path(path)
         self._player.set_media(media)
+        media.release()  # drop our reference; VLC holds its own via set_media
         self._player.audio_set_volume(self._vol_slider.value())
         self._info_lbl.setText(Path(path).name)
         self._set_controls_enabled(True)
@@ -830,6 +831,28 @@ class VideoPlayerView(QWidget):
         self._seek.blockSignals(False)
 
     # ---------------------------------------------------------------- lifecycle
+
+    def cleanup(self) -> None:
+        """Release native libVLC resources. Called from MainWindow.closeEvent."""
+        if not self._available:
+            return
+        if hasattr(self, "_timer"):
+            self._timer.stop()
+        if self._fs_window is not None:
+            self._fs_window.close()
+            self._fs_window = None
+        try:
+            self._player.stop()
+            self._player.release()
+        except Exception as exc:
+            LOG.debug("Error releasing video VLC player: %s", exc)
+        try:
+            self._instance.release()
+        except Exception as exc:
+            LOG.debug("Error releasing video VLC instance: %s", exc)
+        self._player = None  # type: ignore[assignment]
+        self._instance = None  # type: ignore[assignment]
+        self._available = False
 
     def pause_playback(self) -> None:
         """Pause video when the user navigates away from this tab."""

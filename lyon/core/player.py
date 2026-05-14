@@ -150,6 +150,10 @@ class Player(QObject):
     def stop(self) -> None:
         self._backend.stop()
 
+    def cleanup(self) -> None:
+        """Release native backend resources. Call before the application exits."""
+        self._backend.cleanup()
+
     def next(self) -> None:
         if not self._queue:
             return
