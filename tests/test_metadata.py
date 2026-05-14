@@ -527,3 +527,72 @@ def test_search_album_logs_diagnostics_when_enabled_and_no_metadata(caplog, monk
     assert "album: Missing Album" in message
     assert "musicbrainz: returned no result" in message
     assert "theaudiodb: returned no result" in message
+
+
+def test_metadata_diagnostics_logs_cuetools_http_failure(monkeypatch, tmp_path):
+    class FakeSettings:
+        musicbrainz_app = "LyonTest"
+        musicbrainz_version = "1.0"
+        musicbrainz_contact = "test@example.invalid"
+        metadata_diagnostics_enabled = True
+        cuetools_db_metadata_enabled = True
+        theaudiodb_api_key = "123"
+
+    class FakeResponse:
+        status_code = 403
+        reason = "Forbidden"
+        content = b"Forbidden"
+
+    monkeypatch.setattr(metadata._settings.Settings, "load", lambda: FakeSettings())
+    monkeypatch.setattr(metadata._settings, "app_data_dir", lambda: tmp_path)
+    monkeypatch.setattr(metadata, "_metadata_file_handler", None)
+    monkeypatch.setattr(metadata.requests, "get", lambda *args, **kwargs: FakeResponse())
+
+    try:
+        assert metadata.lookup_cuetools_db_layout("0:15000:45000") is None
+
+        log_text = (tmp_path / metadata.METADATA_DIAGNOSTICS_LOG_NAME).read_text(
+            encoding="utf-8"
+        )
+        assert "CUETools DB exact lookup failed" in log_text
+        assert "HTTP 403 Forbidden" in log_text
+        assert "layout=0:15000:45000" in log_text
+    finally:
+        for handler in list(metadata.LOG.handlers):
+            if isinstance(handler, metadata.logging.FileHandler):
+                metadata.LOG.removeHandler(handler)
+                handler.close()
+        metadata._metadata_file_handler = None
+
+
+def test_metadata_diagnostics_logs_empty_disc_provider_summary(monkeypatch, tmp_path):
+    class FakeSettings:
+        musicbrainz_app = "LyonTest"
+        musicbrainz_version = "1.0"
+        musicbrainz_contact = "test@example.invalid"
+        metadata_diagnostics_enabled = True
+        cuetools_db_metadata_enabled = True
+        theaudiodb_api_key = "123"
+
+    monkeypatch.setattr(metadata._settings.Settings, "load", lambda: FakeSettings())
+    monkeypatch.setattr(metadata._settings, "app_data_dir", lambda: tmp_path)
+    monkeypatch.setattr(metadata, "_metadata_file_handler", None)
+    monkeypatch.setattr(metadata, "lookup_cuetools_db_disc", lambda *args, **kwargs: None)
+    monkeypatch.setattr(metadata, "lookup_musicbrainz_disc", lambda *args, **kwargs: None)
+
+    try:
+        assert metadata.lookup_disc("disc-id", "1 1 45150 150", ctdb_toc="0:45000") is None
+
+        log_text = (tmp_path / metadata.METADATA_DIAGNOSTICS_LOG_NAME).read_text(
+            encoding="utf-8"
+        )
+        assert "Album metadata lookup returned no usable metadata." in log_text
+        assert "discid: disc-id" in log_text
+        assert "cuetools_db: returned no result" in log_text
+        assert "musicbrainz: returned no result" in log_text
+    finally:
+        for handler in list(metadata.LOG.handlers):
+            if isinstance(handler, metadata.logging.FileHandler):
+                metadata.LOG.removeHandler(handler)
+                handler.close()
+        metadata._metadata_file_handler = None

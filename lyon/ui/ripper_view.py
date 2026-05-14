@@ -13,7 +13,14 @@ from PySide6.QtWidgets import (
 
 from ..core import cd_detect
 from ..core.library import Library
-from ..core.metadata import AlbumInfo, TrackInfo, fetch_artwork, lookup_disc, search_album
+from ..core.metadata import (
+    AlbumInfo,
+    TrackInfo,
+    fetch_artwork,
+    lookup_disc,
+    metadata_diagnostics_log_path,
+    search_album,
+)
 from ..core.ripper import RipRequest, Ripper, target_file, unique_target_folder
 from ..core.settings import Settings
 from .widgets import cover_pixmap
@@ -371,10 +378,13 @@ class RipperView(QWidget):
             return
         self._lookup = None
         if info is None:
-            self.status_label.setText(
+            message = (
                 "Disc not found in CUETools DB, MusicBrainz, or TheAudioDB. "
                 "Edit titles manually or click Search Online."
             )
+            if self.settings.metadata_diagnostics_enabled:
+                message += f" Detailed lookup log: {metadata_diagnostics_log_path()}"
+            self.status_label.setText(message)
             self.start_btn.setEnabled(True)
             return
         if art is not None:
@@ -422,7 +432,10 @@ class RipperView(QWidget):
         self._search = None
         self.relookup_btn.setEnabled(True)
         if not info:
-            self.status_label.setText("No matching release found.")
+            message = "No matching release found."
+            if self.settings.metadata_diagnostics_enabled:
+                message += f" Detailed lookup log: {metadata_diagnostics_log_path()}"
+            self.status_label.setText(message)
             return
         if art is not None:
             info.artwork = art

@@ -24,8 +24,10 @@ DISC_METADATA_PROVIDER_ORDER = ("cuetools_db", "musicbrainz", "theaudiodb")
 ALBUM_METADATA_PROVIDER_ORDER = ("musicbrainz", "theaudiodb")
 ARTWORK_PROVIDER_ORDER = ("cover_art_archive", "album_artwork_url", "theaudiodb")
 METADATA_PROVIDER_ORDER = ALBUM_METADATA_PROVIDER_ORDER
+METADATA_DIAGNOSTICS_LOG_NAME = "metadata-diagnostics.log"
 
 LOG = logging.getLogger(__name__)
+_metadata_file_handler: logging.Handler | None = None
 
 
 @dataclass
@@ -129,7 +131,13 @@ def lookup_musicbrainz_disc(discid_str: str, toc: str | None = None) -> Optional
         result = musicbrainzngs.get_releases_by_discid(
             discid_str, includes=["recordings", "artists"], toc=toc, cdstubs=True
         )
-    except (musicbrainzngs.ResponseError, musicbrainzngs.NetworkError):
+    except (musicbrainzngs.ResponseError, musicbrainzngs.NetworkError) as exc:
+        _log_metadata_diagnostic(
+            "MusicBrainz disc lookup failed for discid=%s toc=%s: %s",
+            _diagnostic_value(discid_str),
+            _diagnostic_value(toc),
+            exc,
+        )
         return None
 
     release = None
@@ -139,6 +147,11 @@ def lookup_musicbrainz_disc(discid_str: str, toc: str | None = None) -> Optional
         return _musicbrainz_cdstub_to_album(result["cdstub"])
 
     if not release:
+        _log_metadata_diagnostic(
+            "MusicBrainz disc lookup returned no release for discid=%s toc=%s",
+            _diagnostic_value(discid_str),
+            _diagnostic_value(toc),
+        )
         return None
     return _release_to_album(release, discid_str)
 
@@ -153,6 +166,12 @@ def lookup_cuetools_db_disc(
         [_sanitize_ctdb_layout(ctdb_toc), _musicbrainz_toc_to_ctdb_toc(toc)]
     )
     if not layouts:
+        _log_metadata_diagnostic(
+            "CUETools DB lookup skipped because no CTDB-compatible TOC layout was available "
+            "(musicbrainz_toc=%s, ctdb_toc=%s)",
+            _diagnostic_value(toc),
+            _diagnostic_value(ctdb_toc),
+        )
         return None
 
     for fuzzy in (False, True):
@@ -160,6 +179,10 @@ def lookup_cuetools_db_disc(
             info = lookup_cuetools_db_layout(layout, fuzzy=fuzzy)
             if _has_usable_metadata(info):
                 return info
+    _log_metadata_diagnostic(
+        "CUETools DB lookup returned no usable metadata for layouts=%s",
+        ", ".join(layouts),
+    )
     return None
 
 
@@ -173,6 +196,11 @@ def lookup_cuetools_db_layout(ctdb_toc: str | None, *, fuzzy: bool = False) -> O
     """Look up album metadata from a CUETools-style CTDB TOC layout."""
     layout = _sanitize_ctdb_layout(ctdb_toc)
     if not layout:
+        _log_metadata_diagnostic(
+            "CUETools DB %s lookup skipped because CTDB TOC layout was empty or invalid: %s",
+            "fuzzy" if fuzzy else "exact",
+            _diagnostic_value(ctdb_toc),
+        )
         return None
 
     try:
@@ -188,19 +216,50 @@ def lookup_cuetools_db_layout(ctdb_toc: str | None, *, fuzzy: bool = False) -> O
             headers={"User-Agent": _user_agent()},
             timeout=CTDB_TIMEOUT_SECONDS,
         )
-        if response.status_code != 200 or not response.content:
+        if response.status_code != 200:
+            _log_metadata_diagnostic(
+                "CUETools DB %s lookup failed for layout=%s: HTTP %s %s",
+                "fuzzy" if fuzzy else "exact",
+                layout,
+                response.status_code,
+                _text(getattr(response, "reason", "")),
+            )
             return None
-    except requests.RequestException:
+        if not response.content:
+            _log_metadata_diagnostic(
+                "CUETools DB %s lookup failed for layout=%s: empty HTTP response body",
+                "fuzzy" if fuzzy else "exact",
+                layout,
+            )
+            return None
+    except requests.RequestException as exc:
+        _log_metadata_diagnostic(
+            "CUETools DB %s lookup failed for layout=%s: %s",
+            "fuzzy" if fuzzy else "exact",
+            layout,
+            exc,
+        )
         return None
 
     try:
         root = ET.fromstring(response.content)
-    except ET.ParseError:
+    except ET.ParseError as exc:
+        _log_metadata_diagnostic(
+            "CUETools DB %s lookup returned invalid XML for layout=%s: %s",
+            "fuzzy" if fuzzy else "exact",
+            layout,
+            exc,
+        )
         return None
 
     candidates = [_ctdb_meta_to_album(meta) for meta in root.findall(".//metadata")]
     candidates = [info for info in candidates if info is not None]
     if not candidates:
+        _log_metadata_diagnostic(
+            "CUETools DB %s lookup returned XML with no usable <metadata> entries for layout=%s",
+            "fuzzy" if fuzzy else "exact",
+            layout,
+        )
         return None
 
     candidates.sort(key=_ctdb_album_score, reverse=True)
@@ -245,17 +304,35 @@ def search_musicbrainz_album(artist: str, album: str) -> Optional[AlbumInfo]:
     _init()
     try:
         result = musicbrainzngs.search_releases(artist=artist, release=album, limit=1)
-    except (musicbrainzngs.ResponseError, musicbrainzngs.NetworkError):
+    except (musicbrainzngs.ResponseError, musicbrainzngs.NetworkError) as exc:
+        _log_metadata_diagnostic(
+            "MusicBrainz album search failed for artist=%s album=%s: %s",
+            _diagnostic_value(artist),
+            _diagnostic_value(album),
+            exc,
+        )
         return None
     rels = result.get("release-list") or []
     if not rels:
+        _log_metadata_diagnostic(
+            "MusicBrainz album search returned no releases for artist=%s album=%s",
+            _diagnostic_value(artist),
+            _diagnostic_value(album),
+        )
         return None
     rid = rels[0]["id"]
     try:
         full = musicbrainzngs.get_release_by_id(
             rid, includes=["recordings", "artists"]
         )["release"]
-    except (musicbrainzngs.ResponseError, musicbrainzngs.NetworkError):
+    except (musicbrainzngs.ResponseError, musicbrainzngs.NetworkError) as exc:
+        _log_metadata_diagnostic(
+            "MusicBrainz album detail lookup failed for release=%s artist=%s album=%s: %s",
+            _diagnostic_value(rid),
+            _diagnostic_value(artist),
+            _diagnostic_value(album),
+            exc,
+        )
         return None
     return _release_to_album(full)
 
@@ -273,6 +350,11 @@ def search_theaudiodb_album(artist: str, album: str) -> Optional[AlbumInfo]:
     payload = _get_json(_theaudiodb_url("searchalbum.php"), params=params)
     albums = _ensure_list(payload.get("album") or payload.get("albums"))
     if not albums:
+        _log_metadata_diagnostic(
+            "TheAudioDB album search returned no albums for artist=%s album=%s",
+            _diagnostic_value(artist),
+            _diagnostic_value(album),
+        )
         return None
 
     match = next(
@@ -291,9 +373,36 @@ def _album_search_providers() -> tuple[Callable[[str, str], Optional[AlbumInfo]]
     return (search_musicbrainz_album, search_theaudiodb_album)
 
 
+def metadata_diagnostics_log_path() -> str:
+    """Return the file used for detailed metadata lookup diagnostics."""
+    return str(_settings.app_data_dir() / METADATA_DIAGNOSTICS_LOG_NAME)
+
+
 def _metadata_diagnostics_enabled() -> bool:
     settings = _settings.Settings.load()
-    return bool(getattr(settings, "metadata_diagnostics_enabled", False))
+    enabled = bool(getattr(settings, "metadata_diagnostics_enabled", False))
+    if enabled:
+        _ensure_metadata_diagnostics_logging()
+    return enabled
+
+
+def _ensure_metadata_diagnostics_logging() -> None:
+    global _metadata_file_handler
+    if _metadata_file_handler is not None:
+        return
+
+    path = _settings.app_data_dir() / METADATA_DIAGNOSTICS_LOG_NAME
+    handler = logging.FileHandler(path, encoding="utf-8")
+    handler.setLevel(logging.INFO)
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    LOG.addHandler(handler)
+    LOG.setLevel(logging.INFO)
+    _metadata_file_handler = handler
+
+
+def _log_metadata_diagnostic(message: str, *args: Any) -> None:
+    if _metadata_diagnostics_enabled():
+        LOG.warning(message, *args)
 
 
 def _log_empty_disc_lookup(
@@ -327,7 +436,7 @@ def _log_empty_disc_lookup(
             "  theaudiodb: not attempted; disc providers did not return artist/album "
             "identifiers for enrichment"
         )
-    LOG.warning("\n".join(diagnostics))
+    _log_metadata_diagnostic("%s", "\n".join(diagnostics))
 
 
 def _log_empty_album_search(
@@ -347,7 +456,7 @@ def _log_empty_album_search(
         f"  {_provider_attempt_summary(provider_name, info)}"
         for provider_name, info in provider_attempts
     )
-    LOG.warning("\n".join(diagnostics))
+    _log_metadata_diagnostic("%s", "\n".join(diagnostics))
 
 
 def _provider_attempt_summary(provider_name: str, info: AlbumInfo | None) -> str:
@@ -560,7 +669,15 @@ def _fetch_artwork_url(url: str) -> bytes | None:
         response = requests.get(url, timeout=HTTP_TIMEOUT_SECONDS)
         if response.status_code == 200 and response.content:
             return response.content
-    except requests.RequestException:
+        _log_metadata_diagnostic(
+            "Artwork request failed for %s: HTTP %s %s (bytes=%s)",
+            url,
+            response.status_code,
+            _text(getattr(response, "reason", "")),
+            len(response.content or b""),
+        )
+    except requests.RequestException as exc:
+        _log_metadata_diagnostic("Artwork request failed for %s: %s", url, exc)
         return None
     return None
 
@@ -575,9 +692,30 @@ def _get_json(
             url, params=params, headers=headers, timeout=HTTP_TIMEOUT_SECONDS
         )
         if response.status_code != 200:
+            _log_metadata_diagnostic(
+                "JSON metadata request failed for %s params=%s: HTTP %s %s",
+                url,
+                params or {},
+                response.status_code,
+                _text(getattr(response, "reason", "")),
+            )
             return {}
         payload = response.json()
-    except (ValueError, requests.RequestException):
+    except ValueError as exc:
+        _log_metadata_diagnostic(
+            "JSON metadata request returned invalid JSON for %s params=%s: %s",
+            url,
+            params or {},
+            exc,
+        )
+        return {}
+    except requests.RequestException as exc:
+        _log_metadata_diagnostic(
+            "JSON metadata request failed for %s params=%s: %s",
+            url,
+            params or {},
+            exc,
+        )
         return {}
     return payload if isinstance(payload, dict) else {}
 
