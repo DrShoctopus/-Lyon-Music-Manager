@@ -84,6 +84,10 @@ class SettingsDialog(QDialog):
         self.metadata_diagnostics.setChecked(settings.metadata_diagnostics_enabled)
         form.addRow("", self.metadata_diagnostics)
 
+        self.ctdb_verify = QCheckBox("Verify rips against CUETools DB (checks audio accuracy)")
+        self.ctdb_verify.setChecked(settings.ctdb_verify_rips)
+        form.addRow("", self.ctdb_verify)
+
         # Provider settings
         self.contact = QLineEdit(settings.musicbrainz_contact)
         form.addRow("MusicBrainz contact:", self.contact)
@@ -176,6 +180,7 @@ class SettingsDialog(QDialog):
         self.result_settings.cuetools_db_metadata_enabled = self.cuetools_db.isChecked()
         self.result_settings.download_artwork = self.artwork.isChecked()
         self.result_settings.metadata_diagnostics_enabled = self.metadata_diagnostics.isChecked()
+        self.result_settings.ctdb_verify_rips = self.ctdb_verify.isChecked()
         self.result_settings.musicbrainz_contact = self.contact.text().strip() or self.result_settings.musicbrainz_contact
         self.result_settings.theaudiodb_api_key = self.audiodb_key.text().strip() or "123"
         self.result_settings.yt_audio_format = self.yt_audio_fmt.currentText()

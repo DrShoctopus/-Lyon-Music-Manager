@@ -75,7 +75,7 @@ def normalize_library_paths(paths: object) -> list[str]:
 class Settings:
     music_root: str = field(default_factory=lambda: str(_default_music_root()))
     rip_format: str = "flac"           # flac is the only supported output today
-    flac_compression: int = 8           # 0-8
+    flac_compression: int = 5           # 0-8
     cd_drive: str = ""                 # e.g. "D:" - blank means auto-pick first
     musicbrainz_app: str = "LyonMusicManager"
     musicbrainz_version: str = field(default_factory=_app_version)
@@ -86,6 +86,7 @@ class Settings:
     cuetools_db_metadata_enabled: bool = True
     download_artwork: bool = True
     metadata_diagnostics_enabled: bool = False
+    ctdb_verify_rips: bool = True
     last_volume: int = 80
     library_paths: list[str] = field(default_factory=list)
     equalizer_enabled: bool = False
