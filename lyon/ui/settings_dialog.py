@@ -4,12 +4,14 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
-    QHBoxLayout, QLineEdit, QListWidget, QPushButton, QSpinBox,
+    QHBoxLayout, QLabel, QLineEdit, QListWidget, QPushButton, QSpinBox,
     QTabWidget, QVBoxLayout, QWidget,
 )
 
+from .. import __app_name__, __version__
 from ..core.settings import Settings, normalize_library_paths
 
 
@@ -26,6 +28,8 @@ class SettingsDialog(QDialog):
         tabs.addTab(self._build_ripping_tab(settings), "CD Ripping")
         tabs.addTab(self._build_metadata_tab(settings), "Metadata")
         tabs.addTab(self._build_youtube_tab(settings), "YouTube")
+        tabs.addTab(self._build_about_tab(), "About")
+        tabs.addTab(self._build_donate_tab(), "Donate")
 
         layout = QVBoxLayout(self)
         layout.addWidget(tabs)
@@ -158,6 +162,58 @@ class SettingsDialog(QDialog):
         self.yt_auto_add = QCheckBox("Automatically add downloads to library")
         self.yt_auto_add.setChecked(settings.yt_auto_add)
         form.addRow("", self.yt_auto_add)
+
+        return w
+
+    def _build_about_tab(self) -> QWidget:
+        w = QWidget()
+        layout = QVBoxLayout(w)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(6)
+
+        name_label = QLabel(__app_name__)
+        name_label.setStyleSheet("font-size:18px;font-weight:700;")
+        layout.addWidget(name_label)
+
+        version_label = QLabel(f"Version {__version__}")
+        version_label.setStyleSheet("font-size:12px;color:#888;")
+        layout.addWidget(version_label)
+
+        layout.addSpacing(12)
+
+        desc = QLabel(
+            "Lyon is a music library manager, CD ripper, and player\n"
+            "for Windows, macOS, and Linux."
+        )
+        desc.setWordWrap(True)
+        layout.addWidget(desc)
+
+        layout.addSpacing(12)
+
+        license_label = QLabel("Released under the MIT License.")
+        license_label.setStyleSheet("color:#888;")
+        layout.addWidget(license_label)
+
+        layout.addStretch(1)
+        return w
+
+    def _build_donate_tab(self) -> QWidget:
+        w = QWidget()
+        layout = QVBoxLayout(w)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        title = QLabel("Support Lyon")
+        title.setStyleSheet("font-size:16px;font-weight:700;")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(title)
+
+        layout.addSpacing(8)
+
+        msg = QLabel("Donation options coming soon.\nThank you for your support!")
+        msg.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        msg.setStyleSheet("color:#888;")
+        layout.addWidget(msg)
 
         return w
 
