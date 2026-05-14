@@ -74,8 +74,9 @@ def normalize_library_paths(paths: object) -> list[str]:
 @dataclass
 class Settings:
     music_root: str = field(default_factory=lambda: str(_default_music_root()))
-    rip_format: str = "flac"           # flac is the only supported output today
-    flac_compression: int = 5           # 0-8
+    rip_format: str = "flac"           # flac | mp3 | aac | opus | ogg | alac | wav | aiff | wma
+    flac_compression: int = 4           # 0-8
+    rip_audio_bitrate: int = 320        # kbps, used by lossy formats (mp3, aac, opus, ogg, wma)
     cd_drive: str = ""                 # e.g. "D:" - blank means auto-pick first
     musicbrainz_app: str = "LyonMusicManager"
     musicbrainz_version: str = field(default_factory=_app_version)
