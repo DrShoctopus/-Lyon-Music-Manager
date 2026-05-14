@@ -6,7 +6,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
-    QAbstractItemView, QButtonGroup, QDialog, QDialogButtonBox, QFormLayout,
+    QAbstractItemView, QDialog, QDialogButtonBox, QFormLayout,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListView, QMenu, QPushButton,
     QSplitter, QTableView, QVBoxLayout, QWidget,
 )
@@ -26,25 +26,6 @@ class LibraryView(QWidget):
     def __init__(self, library: Library, parent: QWidget | None = None):
         super().__init__(parent)
         self.library = library
-        self._media_filter: str | None = None  # None=all, 'audio', 'video'
-
-        # Filter strip: All | Music | Video
-        filter_row = QHBoxLayout()
-        filter_row.setSpacing(2)
-        self._filter_group = QButtonGroup(self)
-        self._filter_group.setExclusive(True)
-        for label, value in (("All", None), ("Music", "audio")):
-            btn = QPushButton(label)
-            btn.setCheckable(True)
-            btn.setFixedHeight(24)
-            btn.setObjectName("filterBtn")
-            btn.setProperty("filterValue", value)
-            self._filter_group.addButton(btn)
-            filter_row.addWidget(btn)
-            if value is None:
-                btn.setChecked(True)
-        filter_row.addStretch(1)
-        self._filter_group.buttonClicked.connect(self._on_filter_changed)
 
         # Top toolbar
         top = QHBoxLayout()
@@ -113,7 +94,6 @@ class LibraryView(QWidget):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
-        layout.addLayout(filter_row)
         layout.addLayout(top)
         layout.addWidget(splitter, 1)
 
@@ -124,16 +104,10 @@ class LibraryView(QWidget):
         self._current_tracks: list[Track] = []
         self.refresh()
 
-    # ------------------------------------------------------------------ filter
-
-    def _on_filter_changed(self, btn) -> None:
-        self._media_filter = btn.property("filterValue")
-        self.refresh()
-
     # ------------------------------------------------------------------ data
     def refresh(self) -> None:
         self.artists_model.clear()
-        for a in self.library.all_artists(self._media_filter):
+        for a in self.library.all_artists(None):
             self.artists_model.appendRow(QStandardItem(a))
         if self.artists_model.rowCount():
             self.artists.setCurrentIndex(self.artists_model.index(0, 0))
@@ -150,7 +124,7 @@ class LibraryView(QWidget):
             self.tracks_model.removeRows(0, self.tracks_model.rowCount())
             return
         artist = idx.data(Qt.DisplayRole)
-        for album, _art in self.library.albums_for_artist(artist, self._media_filter):
+        for album, _art in self.library.albums_for_artist(artist, None):
             it = QStandardItem(album)
             it.setData(album, Qt.UserRole)
             self.albums_model.appendRow(it)
@@ -170,7 +144,7 @@ class LibraryView(QWidget):
         artist = ai.data(Qt.DisplayRole)
         album = bi.data(Qt.DisplayRole)
         self._current_tracks = self.library.tracks_for_album(
-            artist, album, self._media_filter
+            artist, album, None
         )
         self._populate_tracks(self._current_tracks)
 
@@ -299,7 +273,7 @@ class LibraryView(QWidget):
         if not q:
             self._refresh_tracks()
             return
-        self._current_tracks = self.library.search(q, self._media_filter)
+        self._current_tracks = self.library.search(q, None)
         self._populate_tracks(self._current_tracks)
 
     # ------------------------------------------------------------------ playback

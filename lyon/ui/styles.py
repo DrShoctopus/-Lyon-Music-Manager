@@ -115,19 +115,6 @@ QPushButton#accent:hover {
         stop:0 #ffffff, stop:0.43 #8df5ff, stop:0.44 #2b8fff, stop:1 #1853a2);
 }
 
-/* Library media-type filter strip (All / Music / Video) */
-QPushButton#filterBtn {
-    min-width: 44px;
-    padding: 2px 10px;
-    border-radius: 4px;
-}
-QPushButton#filterBtn:checked {
-    color: #72f4ff;
-    border: 1px solid #43e7ff;
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-        stop:0 rgba(92,213,255,0.22), stop:1 rgba(49,112,224,0.10));
-}
-
 /* Inputs */
 QLineEdit, QComboBox, QSpinBox {
     background: #070a0f;
