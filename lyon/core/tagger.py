@@ -82,27 +82,35 @@ def _write_id3_tags(
     track: TrackInfo,
     artwork: bytes | None,
 ) -> bool:
-    try:
-        from mutagen.id3 import ID3, ID3NoHeaderError, APIC, TALB, TDRC, TIT2, TCON, TRCK, TPE1, TPE2
-        try:
-            audio = ID3(str(path))
-        except ID3NoHeaderError:
-            audio = ID3()
+    """Write ID3v2 tags into an MP3, WAV, or AIFF container.
 
-        audio["TIT2"] = TIT2(encoding=3, text=track.title)
-        audio["TPE1"] = TPE1(encoding=3, text=track.artist or album.artist)
-        audio["TPE2"] = TPE2(encoding=3, text=album.artist)
-        audio["TALB"] = TALB(encoding=3, text=album.album)
+    Uses ``mutagen.File`` so the correct container wrapper
+    (MP3 / WAVE / AIFF) handles chunk placement -- calling
+    ``ID3.save(path)`` directly would corrupt WAV/AIFF files.
+    """
+    try:
+        from mutagen.id3 import APIC, TALB, TDRC, TIT2, TCON, TRCK, TPE1, TPE2
+        audio = mutagen.File(str(path))
+        if audio is None:
+            return False
+        if audio.tags is None:
+            audio.add_tags()
+        tags = audio.tags
+
+        tags["TIT2"] = TIT2(encoding=3, text=track.title)
+        tags["TPE1"] = TPE1(encoding=3, text=track.artist or album.artist)
+        tags["TPE2"] = TPE2(encoding=3, text=album.artist)
+        tags["TALB"] = TALB(encoding=3, text=album.album)
         if album.date:
-            audio["TDRC"] = TDRC(encoding=3, text=album.date)
-        audio["TRCK"] = TRCK(encoding=3, text=f"{track.number}/{len(album.tracks)}")
+            tags["TDRC"] = TDRC(encoding=3, text=album.date)
+        tags["TRCK"] = TRCK(encoding=3, text=f"{track.number}/{len(album.tracks)}")
         if album.genre:
-            audio["TCON"] = TCON(encoding=3, text=album.genre)
+            tags["TCON"] = TCON(encoding=3, text=album.genre)
         if artwork:
             mime = "image/png" if artwork[:4] == _PNG_MAGIC else "image/jpeg"
-            audio["APIC"] = APIC(encoding=3, mime=mime, type=3, desc="Cover", data=artwork)
+            tags["APIC"] = APIC(encoding=3, mime=mime, type=3, desc="Cover", data=artwork)
 
-        audio.save(str(path))
+        audio.save()
         return True
     except (mutagen.MutagenError, OSError):
         return False

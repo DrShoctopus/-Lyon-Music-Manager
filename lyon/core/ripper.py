@@ -85,10 +85,10 @@ def _format_ext(fmt: str) -> str:
     return _FORMAT_INFO.get(fmt.lower(), _FORMAT_INFO["flac"])[0]
 
 
-def _codec_args(settings: "Settings") -> list[str]:
+def _codec_args(settings: Settings) -> list[str]:
     """Return the ffmpeg codec + options args for the configured rip format."""
     fmt = (settings.rip_format or "flac").lower()
-    ext, codec, kind = _FORMAT_INFO.get(fmt, _FORMAT_INFO["flac"])
+    _ext, codec, kind = _FORMAT_INFO.get(fmt, _FORMAT_INFO["flac"])
     args = ["-c:a", codec]
     if kind == "lossless_compressed":
         try:
