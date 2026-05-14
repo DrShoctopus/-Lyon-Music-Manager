@@ -9,6 +9,7 @@ Exposes every useful libVLC capability that makes sense in a desktop UI:
 - Subtitle track selection + external subtitle/closed-caption file loading
 - One-click screenshot (PNG/JPEG) via libVLC's native snapshot API
 - Fullscreen mode via a dedicated overlay window (avoids Qt reparenting issues)
+- Collapsible video catalog sidebar with thumbnail cards (toggle with ◀/▶ Library button)
 
 Falls back to a friendly error screen when libVLC is not available.
 """
@@ -19,14 +20,16 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QTimer, Qt
+from PySide6.QtCore import QTimer, Qt, Signal
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
-    QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel,
-    QPushButton, QSizePolicy, QSlider, QToolButton, QVBoxLayout, QWidget,
+    QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
+    QPushButton, QScrollArea, QSizePolicy, QSlider, QToolButton,
+    QVBoxLayout, QWidget,
 )
 
 from ..core.playback_backend import _configure_vlc_runtime_path
-from .widgets import format_ms
+from .widgets import ElidedLabel, format_duration, format_ms, placeholder_cover
 
 LOG = logging.getLogger(__name__)
 
@@ -46,6 +49,8 @@ _RATE_OPTIONS: list[tuple[str, float]] = [
 ]
 _DEFAULT_RATE_INDEX = 3  # 1×
 
+_SIDEBAR_WIDTH = 234
+
 
 def _track_id_and_name(desc: Any) -> tuple[int, str]:
     """Extract (id, name) from a libVLC TrackDescription object."""
@@ -57,6 +62,99 @@ def _track_id_and_name(desc: Any) -> tuple[int, str]:
     name = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
     return tid, name
 
+
+def _scale_to_fill(pm: QPixmap, w: int, h: int) -> QPixmap:
+    """Scale pixmap to exactly w×h, cropping to centre."""
+    pm = pm.scaled(w, h, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+    if pm.width() > w or pm.height() > h:
+        x = (pm.width() - w) // 2
+        y = (pm.height() - h) // 2
+        pm = pm.copy(x, y, w, h)
+    return pm
+
+
+def _thumb_pixmap(artwork_path: str | None, file_path: str = "",
+                  w: int = 96, h: int = 54) -> QPixmap:
+    """Return a w×h thumbnail, also checking for yt-dlp side-car images."""
+    sources: list[str] = []
+    if artwork_path:
+        sources.append(artwork_path)
+    # yt-dlp saves thumbnails as <stem>.jpg / .webp next to the video file
+    if file_path:
+        stem = Path(file_path).stem
+        parent = Path(file_path).parent
+        for ext in (".jpg", ".jpeg", ".webp", ".png"):
+            p = parent / (stem + ext)
+            if p.exists():
+                sources.append(str(p))
+                break
+    for src in sources:
+        pm = QPixmap(src)
+        if not pm.isNull():
+            return _scale_to_fill(pm, w, h)
+    pm = placeholder_cover(max(w, h), "▶")
+    return pm.scaled(w, h, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+
+
+# ---------------------------------------------------------------------------
+# Catalog sidebar card
+# ---------------------------------------------------------------------------
+
+class _VideoCard(QFrame):
+    """Clickable thumbnail card representing one catalogued video."""
+
+    load_requested = Signal(str)
+
+    def __init__(self, track: Any, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._path = track.path
+        self._search_key = (track.title or Path(track.path).stem).lower()
+        self.setObjectName("videoCard")
+        self.setCursor(Qt.PointingHandCursor)
+
+        title = track.title or Path(track.path).stem
+        dur = format_duration(track.duration) if track.duration else ""
+        self.setToolTip(f"{title}\n{dur}" if dur else title)
+
+        row = QHBoxLayout(self)
+        row.setContentsMargins(6, 4, 6, 4)
+        row.setSpacing(8)
+
+        thumb = QLabel()
+        thumb.setFixedSize(96, 54)
+        thumb.setAlignment(Qt.AlignCenter)
+        thumb.setStyleSheet("background:#0a1520;")
+        thumb.setPixmap(_thumb_pixmap(track.artwork_path, track.path, 96, 54))
+        row.addWidget(thumb)
+
+        info = QVBoxLayout()
+        info.setContentsMargins(0, 0, 0, 0)
+        info.setSpacing(1)
+
+        title_lbl = ElidedLabel(title)
+        title_lbl.setStyleSheet("color:#dde3ea; font-size:11px; font-weight:600;")
+
+        dur_lbl = QLabel(dur or "—")
+        dur_lbl.setStyleSheet("color:#7a8a9a; font-size:10px;")
+
+        info.addStretch()
+        info.addWidget(title_lbl)
+        info.addWidget(dur_lbl)
+        info.addStretch()
+        row.addLayout(info, 1)
+
+    def matches(self, query: str) -> bool:
+        return not query or query in self._search_key
+
+    def mousePressEvent(self, ev) -> None:
+        if ev.button() == Qt.LeftButton:
+            self.load_requested.emit(self._path)
+        super().mousePressEvent(ev)
+
+
+# ---------------------------------------------------------------------------
+# VLC surface widgets
+# ---------------------------------------------------------------------------
 
 class _VideoSurface(QWidget):
     """Native-windowed widget used as the libVLC rendering surface."""
@@ -101,11 +199,16 @@ class _FullscreenWindow(QWidget):
         super().mouseDoubleClickEvent(ev)
 
 
-class VideoPlayerView(QWidget):
-    """Full-featured libVLC video player tab."""
+# ---------------------------------------------------------------------------
+# Main view
+# ---------------------------------------------------------------------------
 
-    def __init__(self, parent: QWidget | None = None):
+class VideoPlayerView(QWidget):
+    """Full-featured libVLC video player tab with collapsible catalog sidebar."""
+
+    def __init__(self, library: Any = None, parent: QWidget | None = None):
         super().__init__(parent)
+        self._library = library
         _configure_vlc_runtime_path()
 
         self._vlc: Any = None
@@ -182,10 +285,17 @@ class VideoPlayerView(QWidget):
         self._fullscreen_btn.setToolTip("Enter fullscreen (double-click video to exit)")
         self._fullscreen_btn.clicked.connect(self._enter_fullscreen)
 
+        self._sidebar_btn = QPushButton("◀ Library")
+        self._sidebar_btn.setCheckable(True)
+        self._sidebar_btn.setChecked(True)
+        self._sidebar_btn.setToolTip("Show / hide video catalog  [Ctrl+B]")
+        self._sidebar_btn.clicked.connect(self._toggle_sidebar)
+
         toolbar.addWidget(self._open_btn)
         toolbar.addWidget(self._info_lbl, 1)
         toolbar.addWidget(self._screenshot_btn)
         toolbar.addWidget(self._fullscreen_btn)
+        toolbar.addWidget(self._sidebar_btn)
 
         # ---- Video surface -------------------------------------------------
         self._surface = _VideoSurface(self)
@@ -297,12 +407,28 @@ class VideoPlayerView(QWidget):
         cl.addLayout(seek_row)
         cl.addLayout(btn_row)
 
+        # ---- Sidebar + video surface (side by side) -------------------------
+        self._sidebar = self._build_sidebar()
+
+        self._sidebar_sep = QFrame()
+        self._sidebar_sep.setFrameShape(QFrame.VLine)
+        self._sidebar_sep.setFixedWidth(1)
+        self._sidebar_sep.setStyleSheet("QFrame { background: #2a3848; }")
+
+        content = QWidget()
+        content_row = QHBoxLayout(content)
+        content_row.setContentsMargins(0, 0, 0, 0)
+        content_row.setSpacing(0)
+        content_row.addWidget(self._sidebar)
+        content_row.addWidget(self._sidebar_sep)
+        content_row.addWidget(self._surface, 1)
+
         # ---- Main layout ---------------------------------------------------
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.addLayout(toolbar)
-        layout.addWidget(self._surface, 1)
+        layout.addWidget(content, 1)
         layout.addWidget(controls)
 
         # Poll timer – 150 ms keeps seek bar smooth without hammering the CPU
@@ -311,6 +437,121 @@ class VideoPlayerView(QWidget):
         self._timer.timeout.connect(self._poll)
 
         self._set_controls_enabled(False)
+
+        if self._library is not None:
+            QTimer.singleShot(0, self.refresh_catalog)
+
+    def _build_sidebar(self) -> QFrame:
+        sidebar = QFrame()
+        sidebar.setObjectName("videoCatalogSidebar")
+        sidebar.setFixedWidth(_SIDEBAR_WIDTH)
+        sidebar.setStyleSheet("""
+            QFrame#videoCatalogSidebar { background: #0d1520; }
+            QFrame#videoCard { background: #131e2c; border-radius: 3px; }
+            QFrame#videoCard:hover { background: #1e2d40; }
+        """)
+
+        sl = QVBoxLayout(sidebar)
+        sl.setContentsMargins(0, 0, 0, 0)
+        sl.setSpacing(0)
+
+        # Header
+        header = QFrame()
+        header.setStyleSheet("background: #0a1520;")
+        hl = QHBoxLayout(header)
+        hl.setContentsMargins(10, 8, 10, 6)
+        hl.setSpacing(4)
+        lib_lbl = QLabel("Video Library")
+        lib_lbl.setStyleSheet("color:#72f4ff; font-weight:600; font-size:12px;")
+        self._catalog_count_lbl = QLabel("")
+        self._catalog_count_lbl.setStyleSheet("color:#7a8a9a; font-size:10px;")
+        hl.addWidget(lib_lbl)
+        hl.addStretch()
+        hl.addWidget(self._catalog_count_lbl)
+
+        # Search bar
+        search_row = QFrame()
+        search_row.setStyleSheet("background: #0d1520;")
+        swl = QHBoxLayout(search_row)
+        swl.setContentsMargins(8, 5, 8, 4)
+        self._catalog_search = QLineEdit()
+        self._catalog_search.setPlaceholderText("Search videos…")
+        self._catalog_search.textChanged.connect(self._filter_catalog)
+        swl.addWidget(self._catalog_search)
+
+        # Scrollable card list
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setStyleSheet("background: #0d1520;")
+
+        self._catalog_container = QWidget()
+        self._catalog_container.setStyleSheet("background: #0d1520;")
+        self._catalog_layout = QVBoxLayout(self._catalog_container)
+        self._catalog_layout.setContentsMargins(6, 6, 6, 6)
+        self._catalog_layout.setSpacing(3)
+        self._catalog_layout.addStretch()
+
+        self._catalog_cards: list[_VideoCard] = []
+
+        scroll.setWidget(self._catalog_container)
+
+        sl.addWidget(header)
+        sl.addWidget(search_row)
+        sl.addWidget(scroll, 1)
+
+        return sidebar
+
+    # ---------------------------------------------------------------- catalog
+
+    def refresh_catalog(self) -> None:
+        """Reload video catalog from the library database."""
+        if self._library is None or not hasattr(self, "_catalog_layout"):
+            return
+
+        for card in self._catalog_cards:
+            self._catalog_layout.removeWidget(card)
+            card.deleteLater()
+        self._catalog_cards.clear()
+
+        videos = list(self._library.all_tracks(media_type="video"))
+        query = self._catalog_search.text().strip().lower()
+
+        for track in videos:
+            card = _VideoCard(track)
+            card.load_requested.connect(self._load_path)
+            # Insert before the trailing stretch
+            self._catalog_layout.insertWidget(self._catalog_layout.count() - 1, card)
+            self._catalog_cards.append(card)
+            if query and not card.matches(query):
+                card.hide()
+
+        total = len(videos)
+        shown = sum(1 for c in self._catalog_cards if not c.isHidden())
+        if query:
+            self._catalog_count_lbl.setText(f"{shown}/{total}")
+        else:
+            self._catalog_count_lbl.setText(f"{total} video{'s' if total != 1 else ''}")
+
+    def _filter_catalog(self, text: str) -> None:
+        query = text.strip().lower()
+        visible = 0
+        for card in self._catalog_cards:
+            show = card.matches(query)
+            card.setVisible(show)
+            if show:
+                visible += 1
+        total = len(self._catalog_cards)
+        if query:
+            self._catalog_count_lbl.setText(f"{visible}/{total}")
+        else:
+            self._catalog_count_lbl.setText(f"{total} video{'s' if total != 1 else ''}")
+
+    def _toggle_sidebar(self, checked: bool) -> None:
+        self._sidebar.setVisible(checked)
+        self._sidebar_sep.setVisible(checked)
+        self._sidebar_btn.setText("◀ Library" if checked else "▶ Library")
 
     # ---------------------------------------------------------------- helpers
 
@@ -609,6 +850,11 @@ class VideoPlayerView(QWidget):
                 self._exit_fullscreen()
             else:
                 self._enter_fullscreen()
+            ev.accept()
+        elif ev.key() == Qt.Key_B and ev.modifiers() & Qt.ControlModifier:
+            checked = not self._sidebar_btn.isChecked()
+            self._sidebar_btn.setChecked(checked)
+            self._toggle_sidebar(checked)
             ev.accept()
         else:
             super().keyPressEvent(ev)

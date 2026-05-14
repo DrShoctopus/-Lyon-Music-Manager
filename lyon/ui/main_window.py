@@ -122,7 +122,8 @@ class MainWindow(QMainWindow):
         self._library_refresh_timer.timeout.connect(self.library_view.refresh)
         self.ripper_view = RipperView(self.settings, self.library)
         self.youtube_view = YouTubeView()
-        self.video_player_view = VideoPlayerView()
+        self.video_player_view = VideoPlayerView(library=self.library)
+        self._library_refresh_timer.timeout.connect(self.video_player_view.refresh_catalog)
 
         self.stack.addWidget(self.now_playing)
         self.stack.addWidget(self.library_view)
@@ -303,6 +304,7 @@ class MainWindow(QMainWindow):
     def _on_scan_finished(self, n: int, label: str) -> None:
         self.statusBar().showMessage(f"{label}: {n} new tracks", 5000)
         self.library_view.refresh()
+        self.video_player_view.refresh_catalog()
         self._scan_thread = None
 
     def remove_missing(self) -> None:
