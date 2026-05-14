@@ -1,12 +1,12 @@
-"""CD -> FLAC ripping using bundled ffmpeg.
+"""CD audio ripping using bundled ffmpeg.
 
 FFmpeg's libcdio input exposes an audio CD as one audio stream with chapter
 metadata, not as one stream per CD track. We use the libdiscid TOC offsets read
-by ``cd_detect`` to seek and trim that one stream for each FLAC output file.
+by ``cd_detect`` to seek and trim that one stream for each output file.
 
 Most Windows ffmpeg builds do not include the libcdio input device. When that
 happens we read CD-DA sectors directly from Windows and pipe the raw stereo PCM
-into ffmpeg, using ffmpeg only as the FLAC encoder.
+into ffmpeg for encoding.
 """
 from __future__ import annotations
 
@@ -51,6 +51,20 @@ FAILURE_LOG_OUTPUT_LINES = 40
 MAX_UNKNOWN_ALBUM_VARIANTS = 1000  # upper bound on de-duplicated "Unknown Album" folders
 MAX_CAPTURED_STDOUT_BYTES = 64 * 1024  # cap in-memory ffmpeg output to 64 KB
 
+# Maps rip_format setting value → (file extension, ffmpeg codec, kind)
+# kind: "lossless_compressed" | "lossless" | "lossy"
+_FORMAT_INFO: dict[str, tuple[str, str, str]] = {
+    "flac": (".flac", "flac",        "lossless_compressed"),
+    "mp3":  (".mp3",  "libmp3lame",  "lossy"),
+    "aac":  (".m4a",  "aac",         "lossy"),
+    "opus": (".opus", "libopus",     "lossy"),
+    "ogg":  (".ogg",  "libvorbis",   "lossy"),
+    "alac": (".m4a",  "alac",        "lossless"),
+    "wav":  (".wav",  "pcm_s16le",   "lossless"),
+    "aiff": (".aiff", "pcm_s16be",   "lossless"),
+    "wma":  (".wma",  "wmav2",       "lossy"),
+}
+
 # Suppress the console window ffmpeg would otherwise pop up per track on Windows.
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
@@ -65,6 +79,30 @@ class _RawReadInfo(ctypes.Structure):
 
 class _WindowsCddaReadError(OSError):
     """Raised when Windows cannot return raw CD-DA sectors."""
+
+
+def _format_ext(fmt: str) -> str:
+    return _FORMAT_INFO.get(fmt.lower(), _FORMAT_INFO["flac"])[0]
+
+
+def _codec_args(settings: Settings) -> list[str]:
+    """Return the ffmpeg codec + options args for the configured rip format."""
+    fmt = (settings.rip_format or "flac").lower()
+    _ext, codec, kind = _FORMAT_INFO.get(fmt, _FORMAT_INFO["flac"])
+    args = ["-c:a", codec]
+    if kind == "lossless_compressed":
+        try:
+            level = max(0, min(8, int(settings.flac_compression)))
+        except (TypeError, ValueError):
+            level = 4
+        args += ["-compression_level", str(level)]
+    elif kind == "lossy":
+        try:
+            br = max(32, min(1411, int(settings.rip_audio_bitrate)))
+        except (TypeError, ValueError):
+            br = 320
+        args += ["-b:a", f"{br}k"]
+    return args
 
 
 def safe_path_component(name: str) -> str:
@@ -153,9 +191,9 @@ def _unknown_album_folder_has_rip_content(folder: Path) -> bool:
         return True
 
 
-def target_file(folder: Path, track: TrackInfo, total: int) -> Path:
+def target_file(folder: Path, track: TrackInfo, total: int, ext: str = ".flac") -> Path:
     width = max(2, len(str(total)))
-    base = f"{track.number:0{width}d} - {safe_path_component(track.title)}.flac"
+    base = f"{track.number:0{width}d} - {safe_path_component(track.title)}{ext}"
     return folder / base
 
 
@@ -193,7 +231,7 @@ def _build_libcdio_track_command(
     ffmpeg: str,
     drive: str,
     out: Path,
-    compression: int,
+    codec_args: list[str],
     sector_span: tuple[int, int],
     *,
     input_seek: bool,
@@ -209,21 +247,14 @@ def _build_libcdio_track_command(
         cmd += ["-f", "libcdio", "-ss", seek, "-i", drive]
     else:
         cmd += ["-f", "libcdio", "-i", drive, "-ss", seek]
-    cmd += [
-        "-t", length,
-        "-map", "0:a:0",
-        "-vn",
-        "-c:a", "flac",
-        "-compression_level", str(compression),
-        str(out),
-    ]
+    cmd += ["-t", length, "-map", "0:a:0", "-vn"] + codec_args + [str(out)]
     return cmd
 
 
 def _build_raw_cdda_ffmpeg_command(
     ffmpeg: str,
     out: Path,
-    compression: int,
+    codec_args: list[str],
 ) -> list[str]:
     return [
         ffmpeg,
@@ -236,10 +267,7 @@ def _build_raw_cdda_ffmpeg_command(
         "-ac", str(CDDA_CHANNELS),
         "-i", "pipe:0",
         "-vn",
-        "-c:a", "flac",
-        "-compression_level", str(compression),
-        str(out),
-    ]
+    ] + codec_args + [str(out)]
 
 
 def _ffmpeg_format_listing_has_demuxer(format_listing: str, name: str) -> bool:
@@ -608,6 +636,7 @@ class RipWorker(QObject):
             return
 
         total = len(album.tracks) or 1
+        ext = _format_ext(self.settings.rip_format)
         success = True
         ripped_files: dict[int, Path] = {}
         for tr in album.tracks:
@@ -616,7 +645,7 @@ class RipWorker(QObject):
                 return
 
             self.track_started.emit(tr.number, tr.title)
-            out = target_file(folder, tr, total)
+            out = target_file(folder, tr, total, ext)
             self.log.emit(f"Ripping track {tr.number}: {tr.title}")
             failure = self._rip_track(ff, tr.number, tr.title, out)
             if failure is not None:
@@ -625,16 +654,21 @@ class RipWorker(QObject):
                 self.log.emit(f"Track {tr.number} failed: {failure.reason}")
                 continue
 
-            from .tagger import write_flac_tags
-            if not write_flac_tags(out, album, tr, art_bytes):
+            from .tagger import write_tags
+            if not write_tags(out, album, tr, art_bytes):
                 success = False
-                reason = "Track ripped but FLAC tags could not be written."
+                reason = "Track ripped but audio tags could not be written."
                 failures.append(RipFailure(tr.number, tr.title, out, reason))
                 self.log.emit(f"Track {tr.number} {reason.lower()}")
             self.track_finished.emit(tr.number, str(out))
             ripped_files[tr.number] = out
 
-        if self.settings.ctdb_verify_rips and ripped_files and self.request.ctdb_toc:
+        if (
+            self.settings.ctdb_verify_rips
+            and ripped_files
+            and self.request.ctdb_toc
+            and (self.settings.rip_format or "flac").lower() == "flac"
+        ):
             self._verify_rips(ff, ripped_files)
 
         message = "Rip complete." if success else "Rip finished with errors."
@@ -681,11 +715,7 @@ class RipWorker(QObject):
         out: Path,
     ) -> Optional[RipFailure]:
         drive = self.request.drive
-        try:
-            compression = int(self.settings.flac_compression)
-        except (TypeError, ValueError):
-            compression = 8
-        compression = max(0, min(8, compression))
+        codec_args = _codec_args(self.settings)
         span = _track_sector_span(track_no, self._track_offsets, self._leadout_sector)
         if span is None:
             reason = "Disc TOC offsets are unavailable or invalid for this track."
@@ -699,8 +729,8 @@ class RipWorker(QObject):
 
         if has_libcdio:
             attempts = [
-                _build_libcdio_track_command(ffmpeg, drive, out, compression, span, input_seek=True),
-                _build_libcdio_track_command(ffmpeg, drive, out, compression, span, input_seek=False),
+                _build_libcdio_track_command(ffmpeg, drive, out, codec_args, span, input_seek=True),
+                _build_libcdio_track_command(ffmpeg, drive, out, codec_args, span, input_seek=False),
             ]
             failures: list[FfmpegAttemptFailure] = []
             total_seconds = (span[1] - span[0]) / CD_SECTORS_PER_SECOND
@@ -723,7 +753,7 @@ class RipWorker(QObject):
             ffmpeg,
             track_no,
             out,
-            compression,
+            codec_args,
             span,
         )
         if attempt_failure is None:
@@ -735,12 +765,12 @@ class RipWorker(QObject):
         ffmpeg: str,
         track_no: int,
         out: Path,
-        compression: int,
+        codec_args: list[str],
         sector_span: tuple[int, int],
     ) -> Optional[FfmpegAttemptFailure]:
         start, end = sector_span
         total_sectors = end - start
-        cmd = _build_raw_cdda_ffmpeg_command(ffmpeg, out, compression)
+        cmd = _build_raw_cdda_ffmpeg_command(ffmpeg, out, codec_args)
         try:
             proc = subprocess.Popen(
                 cmd,

@@ -14,6 +14,21 @@ from PySide6.QtWidgets import (
 from .. import __app_name__, __version__
 from ..core.settings import Settings, normalize_library_paths
 
+# (display label, settings key) pairs — order matches the combo box
+_RIP_FORMATS = [
+    ("FLAC (Lossless)",          "flac"),
+    ("MP3",                      "mp3"),
+    ("AAC / M4A",                "aac"),
+    ("Opus",                     "opus"),
+    ("OGG Vorbis",               "ogg"),
+    ("ALAC (Apple Lossless)",    "alac"),
+    ("WAV (Uncompressed)",       "wav"),
+    ("AIFF",                     "aiff"),
+    ("WMA",                      "wma"),
+]
+_LOSSY_FORMATS = {"mp3", "aac", "opus", "ogg", "wma"}
+_FLAC_FORMAT = "flac"
+
 
 class SettingsDialog(QDialog):
     def __init__(self, settings: Settings, parent: QWidget | None = None):
@@ -84,11 +99,29 @@ class SettingsDialog(QDialog):
         self.drive.setPlaceholderText("e.g. D:  (leave blank for auto)")
         form.addRow("CD drive:", self.drive)
 
+        self.rip_fmt = QComboBox()
+        for label, key in _RIP_FORMATS:
+            self.rip_fmt.addItem(label, key)
+        current_fmt = settings.rip_format or "flac"
+        for i in range(self.rip_fmt.count()):
+            if self.rip_fmt.itemData(i) == current_fmt:
+                self.rip_fmt.setCurrentIndex(i)
+                break
+        form.addRow("Output format:", self.rip_fmt)
+
         self.compression = QSpinBox()
         self.compression.setRange(0, 8)
         self.compression.setValue(settings.flac_compression)
         self.compression.setToolTip("0 = fastest encode, 8 = smallest file size")
-        form.addRow("FLAC compression:", self.compression)
+        self._compression_label = QLabel("FLAC compression:")
+        form.addRow(self._compression_label, self.compression)
+
+        self.bitrate_combo = QComboBox()
+        self.bitrate_combo.addItems(["128", "192", "256", "320", "512"])
+        self.bitrate_combo.setCurrentText(str(settings.rip_audio_bitrate))
+        self.bitrate_combo.setToolTip("Audio bitrate in kilobits per second")
+        self._bitrate_label = QLabel("Bitrate (kbps):")
+        form.addRow(self._bitrate_label, self.bitrate_combo)
 
         self.eject = QCheckBox("Eject disc after rip")
         self.eject.setChecked(settings.eject_after_rip)
@@ -96,9 +129,21 @@ class SettingsDialog(QDialog):
 
         self.ctdb_verify = QCheckBox("Verify rip accuracy against CUETools DB")
         self.ctdb_verify.setChecked(settings.ctdb_verify_rips)
+        self.ctdb_verify.setToolTip("Only applies when ripping to FLAC")
         form.addRow("", self.ctdb_verify)
 
+        self.rip_fmt.currentIndexChanged.connect(self._on_rip_format_changed)
+        self._on_rip_format_changed()
         return w
+
+    def _on_rip_format_changed(self) -> None:
+        fmt = self.rip_fmt.currentData() or "flac"
+        is_flac = fmt == _FLAC_FORMAT
+        is_lossy = fmt in _LOSSY_FORMATS
+        self._compression_label.setVisible(is_flac)
+        self.compression.setVisible(is_flac)
+        self._bitrate_label.setVisible(is_lossy)
+        self.bitrate_combo.setVisible(is_lossy)
 
     def _build_metadata_tab(self, settings: Settings) -> QWidget:
         w = QWidget()
@@ -225,7 +270,12 @@ class SettingsDialog(QDialog):
 
     def _accept(self) -> None:
         self.result_settings.music_root = self.root_edit.text().strip() or self.result_settings.music_root
+        self.result_settings.rip_format = self.rip_fmt.currentData() or "flac"
         self.result_settings.flac_compression = self.compression.value()
+        try:
+            self.result_settings.rip_audio_bitrate = int(self.bitrate_combo.currentText())
+        except ValueError:
+            self.result_settings.rip_audio_bitrate = 320
         self.result_settings.cd_drive = self.drive.text().strip()
         self.result_settings.library_paths = normalize_library_paths([
             self.library_paths.item(row).text()
