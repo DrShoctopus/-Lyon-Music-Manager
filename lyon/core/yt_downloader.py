@@ -90,14 +90,15 @@ class YtDownloadWorker(QThread):
                 {"key": "FFmpegMetadata", "add_metadata": True},
             ]
             fmt_selector = "bestaudio/best"
+            merge_fmt = None
         else:
             postprocessors = [
-                {"key": "FFmpegVideoRemuxer", "preferredformat": self.fmt},
                 {"key": "EmbedThumbnail"},
                 {"key": "FFmpegMetadata", "add_metadata": True},
                 {"key": "FFmpegEmbedSubtitle"},
             ]
             fmt_selector = "bestvideo+bestaudio/best"
+            merge_fmt = self.fmt
 
         ydl_opts: dict = {
             "format": fmt_selector,
@@ -111,6 +112,8 @@ class YtDownloadWorker(QThread):
             # Keep going through playlist errors rather than aborting.
             "ignoreerrors": self.playlist,
         }
+        if merge_fmt:
+            ydl_opts["merge_output_format"] = merge_fmt
 
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
