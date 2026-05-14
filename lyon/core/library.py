@@ -200,7 +200,16 @@ class Library:
                     disc_id or None,
                 ),
             )
-            return cur.rowcount > 0
+            inserted = cur.rowcount > 0
+            if not inserted and disc_id:
+                # Row already existed (scanned earlier, or pre-feature rip).
+                # Backfill disc_id so duplicate-CD detection works next time.
+                self.conn.execute(
+                    "UPDATE tracks SET disc_id = ?"
+                    " WHERE path = ? AND (disc_id IS NULL OR disc_id = '')",
+                    (disc_id, path),
+                )
+            return inserted
 
     # ------------------------------------------------------------------ queries
     def all_artists(self, media_type: str | None = None) -> list[str]:
@@ -303,6 +312,7 @@ class Library:
         """Return True if at least *min_tracks* library tracks carry this disc ID."""
         if not disc_id:
             return False
+        min_tracks = max(1, min_tracks)  # never let a 0-track TOC false-positive
         with self._lock:
             count = self.conn.execute(
                 "SELECT COUNT(*) FROM tracks WHERE disc_id = ?", (disc_id,)
