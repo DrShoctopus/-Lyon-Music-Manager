@@ -3,12 +3,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QUrl, Signal
+from PySide6.QtCore import Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
     QAbstractItemView, QDialog, QDialogButtonBox, QFormLayout,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListView, QMenu, QPushButton,
-    QSplitter, QTableView, QVBoxLayout, QWidget,
+    QSplitter, QStackedWidget, QTableView, QVBoxLayout, QWidget,
 )
 
 from ..core.library import Library, Track
@@ -31,6 +31,10 @@ class LibraryView(QWidget):
         top = QHBoxLayout()
         self.search = QLineEdit()
         self.search.setPlaceholderText("Search artist, album, or track...")
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(150)
+        self._search_timer.timeout.connect(self._do_search)
         self.search.textChanged.connect(self._on_search)
         self.play_btn = QPushButton("Play")
         self.play_btn.clicked.connect(self._play_selected)
@@ -92,10 +96,26 @@ class LibraryView(QWidget):
         splitter.addWidget(right)
         splitter.setSizes([180, 220, 600])
 
+        # Empty-state overlay shown when no tracks are present
+        self._empty_label = QLabel(
+            "No music found.\nClick Add Folder or use File → Add Folder to Library."
+        )
+        self._empty_label.setAlignment(Qt.AlignCenter)
+        self._empty_label.setStyleSheet("color:#8a93a0;font-size:13px;")
+
+        self._browser_stack = QStackedWidget()
+        self._browser_stack.addWidget(self._empty_label)  # index 0: empty state
+        self._browser_stack.addWidget(splitter)            # index 1: browser
+
+        # Track count / duration footer
+        self._footer_label = QLabel("")
+        self._footer_label.setStyleSheet("color:#8a93a0;font-size:11px;padding:2px 4px;")
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.addLayout(top)
-        layout.addWidget(splitter, 1)
+        layout.addWidget(self._browser_stack, 1)
+        layout.addWidget(self._footer_label)
 
         self.artists.selectionModel().currentChanged.connect(lambda *_: self._refresh_albums())
         self.albums.selectionModel().currentChanged.connect(lambda *_: self._refresh_tracks())
@@ -110,11 +130,14 @@ class LibraryView(QWidget):
         for a in self.library.all_artists(None):
             self.artists_model.appendRow(QStandardItem(a))
         if self.artists_model.rowCount():
+            self._browser_stack.setCurrentIndex(1)
             self.artists.setCurrentIndex(self.artists_model.index(0, 0))
         else:
+            self._browser_stack.setCurrentIndex(0)
             self.albums_model.clear()
             self.tracks_model.removeRows(0, self.tracks_model.rowCount())
             self._current_tracks = []
+            self._update_footer()
 
     def _refresh_albums(self) -> None:
         self.albums_model.clear()
@@ -140,6 +163,7 @@ class LibraryView(QWidget):
         bi = self.albums.currentIndex()
         if not ai.isValid() or not bi.isValid():
             self._current_tracks = []
+            self._update_footer()
             return
         artist = ai.data(Qt.DisplayRole)
         album = bi.data(Qt.DisplayRole)
@@ -163,6 +187,22 @@ class LibraryView(QWidget):
                 it.setEditable(False)
                 it.setToolTip(tooltip)
             self.tracks_model.appendRow(row)
+        self._update_footer()
+
+    def _update_footer(self) -> None:
+        count = len(self._current_tracks)
+        if count == 0:
+            self._footer_label.setText("")
+            return
+        total_s = sum(int(t.duration) for t in self._current_tracks)
+        h, remainder = divmod(total_s, 3600)
+        m, s = divmod(remainder, 60)
+        if h:
+            duration_str = f"{h} hr {m} min"
+        else:
+            duration_str = f"{m} min {s} sec"
+        plural = "track" if count == 1 else "tracks"
+        self._footer_label.setText(f"{count} {plural} — {duration_str}")
 
     @staticmethod
     def _track_details(track: Track, duration: str) -> list[tuple[str, str]]:
@@ -267,14 +307,18 @@ class LibraryView(QWidget):
         )
 
     # ------------------------------------------------------------------ search
-    def _on_search(self, q: str) -> None:
-        q = q.strip()
+    def _on_search(self, _text: str) -> None:
+        self._search_timer.start()
+
+    def _do_search(self) -> None:
+        q = self.search.text().strip()
         self.tracks_model.removeRows(0, self.tracks_model.rowCount())
         if not q:
             self._refresh_tracks()
             return
         self._current_tracks = self.library.search(q, None)
         self._populate_tracks(self._current_tracks)
+        self._browser_stack.setCurrentIndex(1)
 
     # ------------------------------------------------------------------ playback
     def _selected_rows(self) -> list[int]:

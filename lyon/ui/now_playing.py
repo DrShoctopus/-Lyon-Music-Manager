@@ -242,12 +242,17 @@ class TransportBar(QWidget):
         self.vol.setMinimumWidth(100)
         self.vol.setMaximumWidth(150)
         self.vol.valueChanged.connect(player.set_volume)
-        vol_icon = QLabel("♬")
-        vol_icon.setObjectName("volumeIcon")
+
+        self.mute_btn = self._make_btn("🔊")
+        self.mute_btn.setToolTip("Mute/Unmute")
+        self.mute_btn.setCheckable(True)
+        self.mute_btn.setChecked(player.is_muted())
+        self.mute_btn.toggled.connect(self._on_mute_toggled)
+
         vol_row = QHBoxLayout()
         vol_row.setContentsMargins(0, 0, 0, 0)
-        vol_row.setSpacing(8)
-        vol_row.addWidget(vol_icon)
+        vol_row.setSpacing(4)
+        vol_row.addWidget(self.mute_btn)
         vol_row.addWidget(self.vol)
 
         bar_layout = QHBoxLayout(self.bar)
@@ -301,8 +306,17 @@ class TransportBar(QWidget):
         self.elapsed_lbl.setText(format_ms(pos_ms))
         self.total_lbl.setText(format_ms(dur_ms))
 
+    def _on_mute_toggled(self, muted: bool) -> None:
+        self.player.set_muted(muted)
+        self.mute_btn.setText("🔇" if muted else "🔊")
+
     def _on_state(self, state: str) -> None:
         self.play_btn.set_playing(state == "playing")
+        muted = self.player.is_muted()
+        self.mute_btn.blockSignals(True)
+        self.mute_btn.setChecked(muted)
+        self.mute_btn.setText("🔇" if muted else "🔊")
+        self.mute_btn.blockSignals(False)
 
     def _on_seek_release(self) -> None:
         self.player.seek(self.seek.value())

@@ -136,6 +136,9 @@ class Settings:
                     "settings.json was corrupt; reset to defaults. Bad file saved to %s",
                     backup,
                 )
+                instance = cls()
+                instance._corrupt_backup_path = str(backup)
+                return instance
         return cls()
 
     def save(self) -> None:

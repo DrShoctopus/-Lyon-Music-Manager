@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
     QAbstractSpinBox, QButtonGroup, QFileDialog, QFrame, QHBoxLayout, QLabel,
     QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QPushButton,
@@ -175,6 +175,8 @@ class MainWindow(QMainWindow):
         self.ripper_view.log.connect(lambda m: sb.showMessage(m, 4000))
         self.youtube_view.download_requested.connect(self._on_yt_download)
 
+        self.setAcceptDrops(True)
+
         # Initial scan of saved roots. First-run setup owns this scan until the
         # user confirms or skips setup, avoiding duplicate startup scans after
         # upgrading older settings files that do not have first_run_completed.
@@ -184,6 +186,17 @@ class MainWindow(QMainWindow):
         # Menu
         self._build_menu()
         QTimer.singleShot(0, self._maybe_show_first_run)
+        backup_path = getattr(self.settings, "_corrupt_backup_path", None)
+        if backup_path:
+            QTimer.singleShot(
+                200,
+                lambda: QMessageBox.warning(
+                    self,
+                    "Settings Reset",
+                    "Your settings file was corrupted and has been reset to defaults.\n"
+                    f"The bad file was saved to:\n{backup_path}",
+                ),
+            )
 
     # ------------------------------------------------------------------ menu
     def _build_menu(self) -> None:
@@ -388,6 +401,44 @@ class MainWindow(QMainWindow):
             "and play music with a familiar Windows Media Player look.</p>"
             "<p>Uses MusicBrainz, Cover Art Archive, ffmpeg, and Qt WebEngine.</p>",
         )
+
+    # ------------------------------------------------------------------ drag-and-drop
+    _AUDIO_EXTENSIONS = frozenset(
+        ".flac .mp3 .ogg .wav .aac .m4a .wma .opus .ape .aiff .alac .mka .mp4 .mkv .webm".split()
+    )
+
+    def dragEnterEvent(self, ev: QDragEnterEvent) -> None:
+        if ev.mimeData().hasUrls():
+            ev.acceptProposedAction()
+        else:
+            ev.ignore()
+
+    def dropEvent(self, ev: QDropEvent) -> None:
+        folders: list[str] = []
+        files: list[str] = []
+        for url in ev.mimeData().urls():
+            if not url.isLocalFile():
+                continue
+            path = url.toLocalFile()
+            from pathlib import Path as _Path
+            p = _Path(path)
+            if p.is_dir():
+                folders.append(path)
+            elif p.suffix.lower() in self._AUDIO_EXTENSIONS:
+                files.append(path)
+        if folders:
+            for folder in folders:
+                if folder not in self.settings.library_paths:
+                    self.settings.library_paths.append(folder)
+            self.settings.save()
+            self._start_scan(folders, f"Added {len(folders)} folder(s)")
+        if files:
+            for f in files:
+                self.library.add_file(f)
+            self.library.commit()
+            self.library_view.refresh()
+            self.statusBar().showMessage(f"Added {len(files)} file(s) to library.", 4000)
+        ev.acceptProposedAction()
 
     def closeEvent(self, ev) -> None:
         # Stop audio first so it doesn't bleed past the visible window.

@@ -215,7 +215,7 @@ class VlcPlaybackBackend(PlaybackBackend):
         self._equalizer = None
 
         self._timer = QTimer(self)
-        self._timer.setInterval(500)
+        self._timer.setInterval(200)
         self._timer.timeout.connect(self._poll)
 
     def set_source(self, path: str) -> None:
