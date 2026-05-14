@@ -2,9 +2,13 @@
 from __future__ import annotations
 
 from .metadata import (
-    _sanitize_ctdb_layout,
+    sanitize_ctdb_layout,
     lookup_cuetools_db_layout,
 )
+
+# Expose the previously-private sanitizer under its old name so existing
+# call sites (including tests) continue to work during the transition period.
+_sanitize_ctdb_layout = sanitize_ctdb_layout
 
 
 def lookup_ctdb_layout(ctdb_toc: str | None, *, fuzzy: bool = False):

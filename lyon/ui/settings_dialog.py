@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from pathlib import Path
 
 from PySide6.QtWidgets import (
-    QCheckBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QHBoxLayout,
-    QLineEdit, QListWidget, QPushButton, QSpinBox, QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
+    QGroupBox, QHBoxLayout, QLineEdit, QListWidget, QPushButton, QSpinBox,
+    QVBoxLayout, QWidget,
 )
 
 from ..core.settings import Settings, normalize_library_paths
@@ -90,8 +92,49 @@ class SettingsDialog(QDialog):
         self.audiodb_key.setPlaceholderText("123")
         form.addRow("TheAudioDB API key:", self.audiodb_key)
 
+        # YouTube Downloads group
+        yt_group = QGroupBox("YouTube Downloads")
+        yt_form = QFormLayout(yt_group)
+
+        self.yt_audio_fmt = QComboBox()
+        self.yt_audio_fmt.addItems(["flac", "mp3"])
+        self.yt_audio_fmt.setCurrentText(settings.yt_audio_format)
+        yt_form.addRow("Audio format:", self.yt_audio_fmt)
+
+        self.yt_video_fmt = QComboBox()
+        self.yt_video_fmt.addItems(["mp4", "mkv", "webm"])
+        self.yt_video_fmt.setCurrentText(settings.yt_video_format)
+        yt_form.addRow("Video format:", self.yt_video_fmt)
+
+        audio_dir_row = QHBoxLayout()
+        default_audio = settings.yt_output_dir or str(Path(settings.music_root) / "YouTube")
+        self.yt_audio_dir = QLineEdit(settings.yt_output_dir)
+        self.yt_audio_dir.setPlaceholderText(default_audio)
+        browse_audio = QPushButton("Browse…")
+        browse_audio.clicked.connect(lambda: self._browse_yt_dir(self.yt_audio_dir))
+        audio_dir_row.addWidget(self.yt_audio_dir, 1)
+        audio_dir_row.addWidget(browse_audio)
+        audio_dir_w = QWidget(); audio_dir_w.setLayout(audio_dir_row)
+        yt_form.addRow("Audio save folder:", audio_dir_w)
+
+        video_dir_row = QHBoxLayout()
+        default_video = settings.yt_video_output_dir or str(Path(settings.music_root) / "Videos")
+        self.yt_video_dir = QLineEdit(settings.yt_video_output_dir)
+        self.yt_video_dir.setPlaceholderText(default_video)
+        browse_video = QPushButton("Browse…")
+        browse_video.clicked.connect(lambda: self._browse_yt_dir(self.yt_video_dir))
+        video_dir_row.addWidget(self.yt_video_dir, 1)
+        video_dir_row.addWidget(browse_video)
+        video_dir_w = QWidget(); video_dir_w.setLayout(video_dir_row)
+        yt_form.addRow("Video save folder:", video_dir_w)
+
+        self.yt_auto_add = QCheckBox("Automatically add downloads to library")
+        self.yt_auto_add.setChecked(settings.yt_auto_add)
+        yt_form.addRow("", self.yt_auto_add)
+
         layout = QVBoxLayout(self)
         layout.addLayout(form)
+        layout.addWidget(yt_group)
         bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         bb.accepted.connect(self._accept)
         bb.rejected.connect(self.reject)
@@ -101,6 +144,12 @@ class SettingsDialog(QDialog):
         d = QFileDialog.getExistingDirectory(self, "Choose music folder", self.root_edit.text())
         if d:
             self.root_edit.setText(d)
+
+    def _browse_yt_dir(self, line_edit: QLineEdit) -> None:
+        start = line_edit.text() or self.root_edit.text()
+        d = QFileDialog.getExistingDirectory(self, "Choose folder", start)
+        if d:
+            line_edit.setText(d)
 
     def _add_library_folder(self) -> None:
         d = QFileDialog.getExistingDirectory(self, "Add library folder", self.root_edit.text())
@@ -129,4 +178,9 @@ class SettingsDialog(QDialog):
         self.result_settings.metadata_diagnostics_enabled = self.metadata_diagnostics.isChecked()
         self.result_settings.musicbrainz_contact = self.contact.text().strip() or self.result_settings.musicbrainz_contact
         self.result_settings.theaudiodb_api_key = self.audiodb_key.text().strip() or "123"
+        self.result_settings.yt_audio_format = self.yt_audio_fmt.currentText()
+        self.result_settings.yt_video_format = self.yt_video_fmt.currentText()
+        self.result_settings.yt_output_dir = self.yt_audio_dir.text().strip()
+        self.result_settings.yt_video_output_dir = self.yt_video_dir.text().strip()
+        self.result_settings.yt_auto_add = self.yt_auto_add.isChecked()
         self.accept()

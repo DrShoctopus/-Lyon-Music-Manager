@@ -115,6 +115,19 @@ QPushButton#accent:hover {
         stop:0 #ffffff, stop:0.43 #8df5ff, stop:0.44 #2b8fff, stop:1 #1853a2);
 }
 
+/* Library media-type filter strip (All / Music / Video) */
+QPushButton#filterBtn {
+    min-width: 44px;
+    padding: 2px 10px;
+    border-radius: 4px;
+}
+QPushButton#filterBtn:checked {
+    color: #72f4ff;
+    border: 1px solid #43e7ff;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 rgba(92,213,255,0.22), stop:1 rgba(49,112,224,0.10));
+}
+
 /* Inputs */
 QLineEdit, QComboBox, QSpinBox {
     background: #070a0f;
@@ -252,6 +265,17 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 QSplitter::handle { background: #161c23; }
 QMenu { background: #111820; border: 1px solid #27313b; }
 QMenu::item:selected { background: #1466c7; }
+
+/* Video player */
+QWidget#videoSurface {
+    background: #000000;
+}
+QFrame#videoControls {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #1a2030, stop:1 #07090d);
+    border-top: 1px solid #000000;
+    min-height: 80px;
+}
 
 QFrame#equalizerPanel {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,

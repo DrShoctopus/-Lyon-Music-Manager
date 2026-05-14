@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from importlib.util import find_spec
 
-from PySide6.QtCore import QUrl, Qt, QUrlQuery
+from PySide6.QtCore import QUrl, Qt, QUrlQuery, Signal
 from PySide6.QtWidgets import (
     QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout, QWidget,
 )
@@ -31,6 +31,8 @@ class YouTubeView(QWidget):
     Top bar mirrors WMP's row of accent buttons: back / forward / reload, a
     URL/search field, and a Home shortcut. Videos play full size below.
     """
+
+    download_requested = Signal(str)  # emits current page URL
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -56,11 +58,19 @@ class YouTubeView(QWidget):
         self.home_btn.setObjectName("accent")
         self.home_btn.clicked.connect(lambda: self.web.load(QUrl(YT_HOME)))
 
+        self.download_btn = QPushButton("⬇ Download")
+        self.download_btn.setObjectName("accent")
+        self.download_btn.setToolTip("Download this video or playlist to your library")
+        self.download_btn.clicked.connect(
+            lambda: self.download_requested.emit(self.web.url().toString())
+        )
+
         nav.addWidget(self.back_btn)
         nav.addWidget(self.fwd_btn)
         nav.addWidget(self.reload_btn)
         nav.addWidget(self.search, 1)
         nav.addWidget(self.home_btn)
+        nav.addWidget(self.download_btn)
 
         # Web view
         profile = QWebEngineProfile.defaultProfile()

@@ -48,6 +48,8 @@ IOCTL_CDROM_RAW_READ = 0x0002403E
 TRACK_MODE_CDDA = 2
 FFMPEG_ERROR_LINES = 8
 FAILURE_LOG_OUTPUT_LINES = 40
+MAX_UNKNOWN_ALBUM_VARIANTS = 1000  # upper bound on de-duplicated "Unknown Album" folders
+MAX_CAPTURED_STDOUT_BYTES = 64 * 1024  # cap in-memory ffmpeg output to 64 KB
 
 # Suppress the console window ffmpeg would otherwise pop up per track on Windows.
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
@@ -133,7 +135,7 @@ def _first_available_unknown_album_folder(base: Path) -> Path:
     if not _unknown_album_folder_has_rip_content(base):
         return base
 
-    for number in range(2, 1000):
+    for number in range(2, MAX_UNKNOWN_ALBUM_VARIANTS + 1):
         candidate = base.with_name(f"{base.name} ({number})")
         if not _unknown_album_folder_has_rip_content(candidate):
             return candidate
@@ -732,11 +734,8 @@ class RipWorker(QObject):
             self.log.emit(reason)
             return FfmpegAttemptFailure(cmd, None, reason)
 
-        # Drain ffmpeg's stdout in a background thread. Without this, a long
-        # rip can produce more diagnostic output than the OS pipe buffer holds
-        # (~64KB on Windows); ffmpeg then blocks on its own write, stops
-        # consuming stdin, and our writer below deadlocks. The drained bytes
-        # are decoded once the process has exited.
+        # Drain ffmpeg's stdout in a background thread to prevent pipe-buffer
+        # deadlock on long rips. The buffer is capped to avoid unbounded growth.
         stdout_buffer = bytearray()
         stdout_lock = threading.Lock()
 
@@ -747,6 +746,8 @@ class RipWorker(QObject):
                 for chunk in iter(lambda: proc.stdout.read(4096), b""):
                     with stdout_lock:
                         stdout_buffer.extend(chunk)
+                        if len(stdout_buffer) > MAX_CAPTURED_STDOUT_BYTES:
+                            del stdout_buffer[:-MAX_CAPTURED_STDOUT_BYTES]
             except OSError:
                 pass
 
@@ -921,6 +922,8 @@ class Ripper(QObject):
         self._worker = RipWorker(self.settings, request)
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
+        # Schedule QThread cleanup when the thread's event loop exits.
+        self._thread.finished.connect(self._thread.deleteLater)
         self._worker.track_started.connect(self.track_started)
         self._worker.track_progress.connect(self.track_progress)
         self._worker.track_finished.connect(self.track_finished)
@@ -946,6 +949,10 @@ class Ripper(QObject):
         self.cancel()
         self._thread.quit()
         if not self._thread.wait(timeout_ms):
+            self.log.emit(
+                "Warning: rip worker did not exit cleanly; forcing termination. "
+                "Any partially written track file has been removed."
+            )
             self._thread.terminate()
             self._thread.wait(2000)
         self._thread = None
