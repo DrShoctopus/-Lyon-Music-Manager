@@ -79,7 +79,7 @@ def check_ffmpeg() -> DependencyCheck:
     return DependencyCheck(
         "ffmpeg",
         DiagnosticStatus.MISSING,
-        "CD ripping cannot run because ffmpeg was not found.",
+        "ffmpeg was not found. CD ripping is disabled and YouTube video downloads are limited to ~720p pre-merged streams.",
         "Place ffmpeg.exe in the app bin folder or install ffmpeg on PATH.",
     )
 

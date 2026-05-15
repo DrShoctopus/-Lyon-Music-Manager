@@ -1,9 +1,20 @@
 """yt-dlp download worker thread."""
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 from PySide6.QtCore import QThread, Signal
+
+from .settings import bundled_bin_dir
+
+
+def _ffmpeg_available() -> bool:
+    """Return True if ffmpeg is discoverable on PATH or in the bundled bin dir."""
+    if shutil.which("ffmpeg") or shutil.which("ffmpeg.exe"):
+        return True
+    bin_dir = bundled_bin_dir()
+    return (bin_dir / "ffmpeg.exe").exists() or (bin_dir / "ffmpeg").exists()
 
 
 class _YtLogger:
@@ -79,7 +90,16 @@ class YtDownloadWorker(QThread):
             Path(self.output_dir) / "%(uploader)s" / "%(title)s.%(ext)s"
         )
 
+        has_ffmpeg = _ffmpeg_available()
+
         if self.mode == "audio":
+            if not has_ffmpeg:
+                self.error.emit(
+                    "ffmpeg is required for audio conversion but was not found. "
+                    "Install ffmpeg and place it on PATH (or in the app bin folder), then retry."
+                )
+                self.finished.emit(0, 1)
+                return
             postprocessors = [
                 {
                     "key": "FFmpegExtractAudio",
@@ -92,13 +112,23 @@ class YtDownloadWorker(QThread):
             fmt_selector = "bestaudio/best"
             merge_fmt = None
         else:
-            postprocessors = [
-                {"key": "EmbedThumbnail"},
-                {"key": "FFmpegMetadata", "add_metadata": True},
-                {"key": "FFmpegEmbedSubtitle"},
-            ]
-            fmt_selector = "bestvideo+bestaudio/best"
-            merge_fmt = self.fmt
+            if has_ffmpeg:
+                postprocessors = [
+                    {"key": "EmbedThumbnail"},
+                    {"key": "FFmpegMetadata", "add_metadata": True},
+                    {"key": "FFmpegEmbedSubtitle"},
+                ]
+                fmt_selector = "bestvideo+bestaudio/best"
+                merge_fmt = self.fmt
+            else:
+                self.progress.emit(
+                    "WARNING: ffmpeg not found — downloading best available pre-merged stream "
+                    "(quality capped at ~720p). Install ffmpeg for full quality and metadata embedding."
+                )
+                postprocessors = []
+                # Request a pre-merged mp4 stream; fall back to any best single stream.
+                fmt_selector = f"best[ext={self.fmt}]/best[ext=mp4]/best"
+                merge_fmt = None
 
         ydl_opts: dict = {
             "format": fmt_selector,
