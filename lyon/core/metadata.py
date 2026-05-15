@@ -20,8 +20,8 @@ import requests
 from . import settings as _settings
 
 
-CTDB_LOOKUP_URL = "https://db.cuetools.net/lookup2.php"
-CTDB_BASE_URL = "https://db.cuetools.net/"
+CTDB_LOOKUP_URL = "http://db.cuetools.net/lookup2.php"
+CTDB_BASE_URL = "http://db.cuetools.net/"
 CTDB_TIMEOUT_SECONDS = 20
 THEAUDIODB_API_BASE = "https://www.theaudiodb.com/api/v1/json"
 THEAUDIODB_DEFAULT_API_KEY = "123"
