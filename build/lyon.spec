@@ -81,7 +81,6 @@ a = Analysis(
         "certifi",
         "yt_dlp",
         "PySide6.QtMultimedia",
-        "PySide6.QtWebEngineWidgets",
     ],
     hookspath=[],
     runtime_hooks=[],

@@ -3,6 +3,11 @@ name: Windows build
 on:
   workflow_dispatch:
 
+env:
+  FFMPEG_VERSION: "7.1.1"
+  LIBDISCID_VERSION: "0.6.4"
+  VLC_VERSION: "3.0.21"
+
 jobs:
   build:
     runs-on: windows-latest
@@ -15,18 +20,24 @@ jobs:
         with:
           python-version: "3.11"
           cache: "pip"
+          cache-dependency-path: requirements.txt
 
       - name: Install Python dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
-          python -m pip install pyinstaller
+        run: python -m pip install -r requirements.txt pyinstaller
+
+      - name: Cache binary runtimes
+        id: cache-bins
+        uses: actions/cache@v4
+        with:
+          path: bin
+          key: windows-bins-ffmpeg-${{ env.FFMPEG_VERSION }}-discid-${{ env.LIBDISCID_VERSION }}-vlc-${{ env.VLC_VERSION }}
 
       - name: Fetch ffmpeg.exe
+        if: steps.cache-bins.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path bin | Out-Null
-          $url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+          $url = "https://github.com/GyanD/codexffmpeg/releases/download/${{ env.FFMPEG_VERSION }}/ffmpeg-${{ env.FFMPEG_VERSION }}-essentials_build.zip"
           Invoke-WebRequest -Uri $url -OutFile ffmpeg.zip
           Expand-Archive ffmpeg.zip -DestinationPath ffmpeg-extract
           $exe = Get-ChildItem -Path ffmpeg-extract -Recurse -Filter ffmpeg.exe | Select-Object -First 1
@@ -36,13 +47,12 @@ jobs:
           Remove-Item -Recurse -Force ffmpeg-extract
 
       - name: Fetch libdiscid.dll
+        if: steps.cache-bins.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path bin | Out-Null
           $urls = @(
-            'https://ftp.musicbrainz.org/pub/musicbrainz/libdiscid/libdiscid-0.6.4-win.zip',
-            'https://ftp.osuosl.org/pub/musicbrainz/libdiscid/libdiscid-0.6.4-win.zip',
-            'https://ftp.musicbrainz.org/pub/musicbrainz/libdiscid/libdiscid-0.6.2-win.zip'
+            "https://ftp.musicbrainz.org/pub/musicbrainz/libdiscid/libdiscid-${{ env.LIBDISCID_VERSION }}-win.zip",
+            "https://ftp.osuosl.org/pub/musicbrainz/libdiscid/libdiscid-${{ env.LIBDISCID_VERSION }}-win.zip"
           )
           $zip = "libdiscid.zip"
           $ok = $false
@@ -56,12 +66,8 @@ jobs:
               Write-Host "  -> $($_.Exception.Message)"
             }
           }
-          if (-not $ok) {
-            throw "Could not fetch libdiscid Windows binary from any known source."
-          }
+          if (-not $ok) { throw "Could not fetch libdiscid from any source." }
           Expand-Archive $zip -DestinationPath libdiscid-extract -Force
-          # The official MetaBrainz zip ships both x86 and x64 DLLs in subfolders;
-          # prefer the 64-bit one to match the windows-latest runner.
           $dll = Get-ChildItem -Path libdiscid-extract -Recurse -Filter discid.dll |
                    Where-Object { $_.FullName -match '64' } | Select-Object -First 1
           if (-not $dll) {
@@ -76,17 +82,15 @@ jobs:
           Remove-Item -Recurse -Force libdiscid-extract
 
       - name: Fetch libVLC runtime
+        if: steps.cache-bins.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path bin | Out-Null
-          $vlcVersion = "3.0.21"
-          $url = "https://download.videolan.org/pub/videolan/vlc/$vlcVersion/win64/vlc-$vlcVersion-win64.zip"
+          $url = "https://download.videolan.org/pub/videolan/vlc/${{ env.VLC_VERSION }}/win64/vlc-${{ env.VLC_VERSION }}-win64.zip"
           Invoke-WebRequest -Uri $url -OutFile vlc.zip
           Expand-Archive vlc.zip -DestinationPath vlc-extract -Force
           $root = Get-ChildItem -Path vlc-extract -Directory | Select-Object -First 1
           if (-not $root) { throw "VLC archive did not contain an extracted root directory." }
           $vlcOut = "bin\vlc"
-          if (Test-Path $vlcOut) { Remove-Item $vlcOut -Recurse -Force }
           New-Item -ItemType Directory -Force -Path $vlcOut | Out-Null
           Copy-Item -Path (Join-Path $root.FullName 'libvlc.dll') -Destination $vlcOut -Force
           Copy-Item -Path (Join-Path $root.FullName 'libvlccore.dll') -Destination $vlcOut -Force
