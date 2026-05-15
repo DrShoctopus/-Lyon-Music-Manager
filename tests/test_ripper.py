@@ -301,7 +301,7 @@ def test_rip_failure_log_includes_track_reason_command_and_output(tmp_path):
 
     assert path is not None
     text = path.read_text(encoding="utf-8")
-    assert "Lyon Music Manager rip failure log" in text
+    assert "Sea Lyon Media Manager rip failure log" in text
     assert "Track 1: First Track" in text
     assert "Command:" in text
     assert "Unknown input format: 'libcdio'" in text

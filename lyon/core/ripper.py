@@ -486,7 +486,7 @@ def _write_failure_log(
     path = folder / f"rip-failed-{timestamp}.log"
     album = request.album
     lines = [
-        "Lyon Music Manager rip failure log",
+        "Sea Lyon Media Manager rip failure log",
         "Generated (UTC): "
         f"{_dt.datetime.now(_dt.timezone.utc).isoformat(timespec='seconds')}",
         f"Summary: {message}",
