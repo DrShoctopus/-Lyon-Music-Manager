@@ -28,11 +28,14 @@ from PySide6.QtWidgets import (
     QToolButton, QVBoxLayout, QWidget,
 )
 
-from ..core.equalizer import normalize_equalizer_bands
+from ..core.equalizer import EQ_BAND_COUNT, normalize_equalizer_bands
 from ..core.playback_backend import _configure_vlc_runtime_path
 from .widgets import ElidedLabel, format_duration, format_ms, placeholder_cover
 
 LOG = logging.getLogger(__name__)
+
+_EQ_FADE_STEPS = 16
+_EQ_FADE_INTERVAL_MS = 16  # total transition ≈ 256 ms
 
 VIDEO_EXTENSIONS = (
     ".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm",
@@ -260,6 +263,18 @@ class VideoPlayerView(QWidget):
         self._eq_bands: list[int] = []
         self._eq_preamp: int = 0
         self._equalizer: Any = None
+        self._eq_live_bands: list[float] = [0.0] * EQ_BAND_COUNT
+        self._eq_live_preamp: float = 0.0
+        self._eq_fade_start_bands: list[float] = [0.0] * EQ_BAND_COUNT
+        self._eq_fade_start_preamp: float = 0.0
+        self._eq_fade_target_bands: list[float] = [0.0] * EQ_BAND_COUNT
+        self._eq_fade_target_preamp: float = 0.0
+        self._eq_remove_after_fade: bool = False
+        self._eq_fade_steps_left: int = 0
+
+        self._eq_fade_timer = QTimer(self)
+        self._eq_fade_timer.setInterval(_EQ_FADE_INTERVAL_MS)
+        self._eq_fade_timer.timeout.connect(self._eq_fade_step)
 
         try:
             import importlib
@@ -774,23 +789,45 @@ class VideoPlayerView(QWidget):
         self._eq_preamp = int(preamp)
         if not self._available:
             return
+        self._eq_fade_timer.stop()
+
         if not enabled:
-            self._equalizer = None
-            try:
-                self._player.set_equalizer(None)
-            except (AttributeError, OSError, RuntimeError) as exc:
-                LOG.warning("Could not clear video VLC equalizer: %s", exc)
+            if self._equalizer is None:
+                return
+            self._eq_fade_start_bands = list(self._eq_live_bands)
+            self._eq_fade_start_preamp = self._eq_live_preamp
+            self._eq_fade_target_bands = [0.0] * EQ_BAND_COUNT
+            self._eq_fade_target_preamp = 0.0
+            self._eq_remove_after_fade = True
+            self._eq_fade_steps_left = _EQ_FADE_STEPS
+            self._eq_fade_timer.start()
             return
+
         try:
-            normalized = normalize_equalizer_bands(bands)
-            equalizer = self._vlc.AudioEqualizer()
-            if equalizer is None:
-                raise RuntimeError("VLC did not create an AudioEqualizer instance")
-            equalizer.set_preamp(float(preamp))
-            for band_index, band_gain in enumerate(normalized):
-                equalizer.set_amp_at_index(float(band_gain), band_index)
-            self._player.set_equalizer(equalizer)
-            self._equalizer = equalizer
+            normalized = [float(b) for b in normalize_equalizer_bands(bands)]
+            target_preamp = float(preamp)
+            if self._equalizer is None:
+                eq = self._vlc.AudioEqualizer()
+                if eq is None:
+                    raise RuntimeError("VLC did not create an AudioEqualizer instance")
+                eq.set_preamp(0.0)
+                for i in range(EQ_BAND_COUNT):
+                    eq.set_amp_at_index(0.0, i)
+                self._player.set_equalizer(eq)
+                self._equalizer = eq
+                self._eq_live_bands = [0.0] * EQ_BAND_COUNT
+                self._eq_live_preamp = 0.0
+            self._eq_fade_start_bands = list(self._eq_live_bands)
+            self._eq_fade_start_preamp = self._eq_live_preamp
+            self._eq_fade_target_bands = normalized
+            self._eq_fade_target_preamp = target_preamp
+            self._eq_remove_after_fade = False
+            # Skip the fade if VLC is already at the requested gains.
+            if (self._eq_fade_start_bands == self._eq_fade_target_bands
+                    and self._eq_fade_start_preamp == self._eq_fade_target_preamp):
+                return
+            self._eq_fade_steps_left = _EQ_FADE_STEPS
+            self._eq_fade_timer.start()
         except (AttributeError, OSError, RuntimeError) as exc:
             self._equalizer = None
             try:
@@ -798,6 +835,41 @@ class VideoPlayerView(QWidget):
             except (AttributeError, OSError, RuntimeError):
                 pass
             LOG.warning("Could not apply video VLC equalizer: %s", exc)
+
+    def _eq_fade_step(self) -> None:
+        if self._equalizer is None:
+            self._eq_fade_timer.stop()
+            return
+
+        self._eq_fade_steps_left -= 1
+        t = 1.0 - self._eq_fade_steps_left / _EQ_FADE_STEPS
+        try:
+            new_preamp = self._eq_fade_start_preamp + (self._eq_fade_target_preamp - self._eq_fade_start_preamp) * t
+            new_bands = [
+                self._eq_fade_start_bands[i] + (self._eq_fade_target_bands[i] - self._eq_fade_start_bands[i]) * t
+                for i in range(EQ_BAND_COUNT)
+            ]
+            self._equalizer.set_preamp(new_preamp)
+            for i, gain in enumerate(new_bands):
+                self._equalizer.set_amp_at_index(gain, i)
+            self._player.set_equalizer(self._equalizer)
+            self._eq_live_preamp = new_preamp
+            self._eq_live_bands = new_bands
+        except (AttributeError, OSError, RuntimeError) as exc:
+            LOG.warning("Video EQ fade step failed: %s", exc)
+            self._eq_fade_timer.stop()
+            return
+
+        if self._eq_fade_steps_left <= 0:
+            self._eq_fade_timer.stop()
+            if self._eq_remove_after_fade:
+                try:
+                    self._player.set_equalizer(None)
+                except (AttributeError, OSError, RuntimeError) as exc:
+                    LOG.warning("Could not clear video VLC equalizer after fade: %s", exc)
+                self._equalizer = None
+                self._eq_live_bands = [0.0] * EQ_BAND_COUNT
+                self._eq_live_preamp = 0.0
 
     def _on_rate_changed(self, index: int) -> None:
         _, rate = _RATE_OPTIONS[index]
