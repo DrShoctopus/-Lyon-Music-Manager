@@ -3,20 +3,22 @@
     End-to-end Windows build for Lyon Music Manager (WMP branch / main).
 
 .DESCRIPTION
-    From a clean checkout, produces dist\LyonMusicManager\ and a
-    distributable zip at dist\LyonMusicManager-windows.zip.
+    From a clean checkout, produces dist\LyonMusicManager\, a portable zip
+    (dist\SeaLyonMediaManager-{version}-windows.zip), and an Inno Setup 6
+    installer (dist\SeaLyonMediaManager-{version}-Setup.exe).
 
     Steps: create Python 3.11 venv, install dependencies, download
     ffmpeg.exe, libdiscid.dll, and the VLC runtime into bin\, run
-    PyInstaller, zip output.
+    PyInstaller, zip output, compile installer.
 
     Run from the project root:
         scripts\build-windows.ps1
 
     Optional flags:
-        -SkipBinaries  Don't re-download ffmpeg / libdiscid / VLC if bin\ is already populated.
-        -SkipZip       Build the bundle but don't zip it.
-        -Clean         Wipe .venv, build\, dist\ before building.
+        -SkipBinaries   Don't re-download ffmpeg / libdiscid / VLC if bin\ is already populated.
+        -SkipZip        Build the bundle but don't zip it.
+        -SkipInstaller  Skip the Inno Setup installer step (requires Inno Setup 6 on PATH or default install location).
+        -Clean          Wipe .venv, build\, dist\ before building.
 
 .NOTES
     Requires Python 3.11 64-bit on PATH (or the py launcher: py -3.11 ...).
@@ -25,6 +27,7 @@
 param(
     [switch]$SkipBinaries,
     [switch]$SkipZip,
+    [switch]$SkipInstaller,
     [switch]$Clean
 )
 
@@ -120,11 +123,12 @@ if ($SkipBinaries) {
     if ($needDiscid) {
         Write-Host "==> Downloading libdiscid (Windows x64)" -ForegroundColor Cyan
         $tmp = Join-Path $env:TEMP "lyon-discid.zip"
-        # Try MetaBrainz FTP mirrors; GitHub releases only ship source tarballs.
+        # GitHub releases page ships the Windows binary zip since 0.6.4.
+        # MusicBrainz FTP mirrors kept as fallbacks in case GitHub CDN is unavailable.
         $urls = @(
+            'https://github.com/metabrainz/libdiscid/releases/download/v0.6.4/libdiscid-0.6.4-win.zip',
             'https://ftp.musicbrainz.org/pub/musicbrainz/libdiscid/libdiscid-0.6.4-win.zip',
-            'https://ftp.osuosl.org/pub/musicbrainz/libdiscid/libdiscid-0.6.4-win.zip',
-            'https://ftp.musicbrainz.org/pub/musicbrainz/libdiscid/libdiscid-0.6.2-win.zip'
+            'https://ftp.osuosl.org/pub/musicbrainz/libdiscid/libdiscid-0.6.4-win.zip'
         )
         $ok = $false
         foreach ($u in $urls) {
@@ -159,7 +163,7 @@ if ($SkipBinaries) {
 
     if ($needVlc) {
         Write-Host "==> Downloading VLC runtime (Windows x64)" -ForegroundColor Cyan
-        $vlcVersion = '3.0.21'
+        $vlcVersion = '3.0.23'
         $tmp = Join-Path $env:TEMP "lyon-vlc.zip"
         $extract = Join-Path $env:TEMP 'lyon-vlc-extract'
         if (Test-Path $extract) { Remove-Item $extract -Recurse -Force }
@@ -183,8 +187,12 @@ if ($SkipBinaries) {
 
 # 5. Smoke-test that the app at least imports ---------------------------------
 Write-Host "==> Smoke-testing imports" -ForegroundColor Cyan
-$env:PATH = "$vlcDir;$env:PATH"
-$env:VLC_PLUGIN_PATH = Join-Path $vlcDir 'plugins'
+if (Test-Path $vlcDir) {
+    $env:PATH = "$vlcDir;$env:PATH"
+    $env:VLC_PLUGIN_PATH = Join-Path $vlcDir 'plugins'
+} else {
+    Write-Warning "bin\vlc not found; VLC backend smoke test will likely fail. Run without -SkipBinaries to download the runtime."
+}
 & $venvPython -c "from lyon.app import main; print('imports OK')"
 if ($LASTEXITCODE -ne 0) { throw "Import smoke test failed; aborting before PyInstaller." }
 & $venvPython -c "from PySide6.QtCore import QCoreApplication; app = QCoreApplication([]); from lyon.core.playback_backend import create_playback_backend; backend = create_playback_backend(); print(type(backend).__name__); assert type(backend).__name__ == 'VlcPlaybackBackend'"
@@ -210,18 +218,67 @@ if (-not (Test-Path (Join-Path $bundleVlc 'libvlc.dll'))) { throw "Packaged app 
 if (-not (Test-Path (Join-Path $bundleVlc 'libvlccore.dll'))) { throw "Packaged app is missing libvlccore.dll." }
 if (-not (Test-Path (Join-Path $bundleVlc 'plugins'))) { throw "Packaged app is missing VLC plugins." }
 
+# Read the app version from the Python package for use in output filenames.
+$initPy = Join-Path $Root 'lyon\__init__.py'
+$appVersion = '0.0.0'
+if (Test-Path $initPy) {
+    $m = Select-String -Path $initPy -Pattern '__version__\s*=\s*"([^"]+)"'
+    if ($m) { $appVersion = $m.Matches[0].Groups[1].Value }
+}
+Write-Host "    App version: $appVersion"
+
 # 7. Zip the bundle for distribution -----------------------------------------
 if ($SkipZip) {
     Write-Host "==> Skipping zip step (-SkipZip)" -ForegroundColor Yellow
     Write-Host "    Bundle is at: $bundle"
 } else {
-    $zip = Join-Path $Root 'dist\LyonMusicManager-windows.zip'
+    $zip = Join-Path $Root "dist\SeaLyonMediaManager-$appVersion-windows.zip"
     if (Test-Path $zip) { Remove-Item $zip -Force }
-    Write-Host "==> Zipping bundle to dist\LyonMusicManager-windows.zip" -ForegroundColor Cyan
+    Write-Host "==> Zipping bundle to dist\SeaLyonMediaManager-$appVersion-windows.zip" -ForegroundColor Cyan
     Compress-Archive -Path "$bundle\*" -DestinationPath $zip
     $size = (Get-Item $zip).Length / 1MB
-    Write-Host ""
-    Write-Host "==> Build complete" -ForegroundColor Green
     Write-Host ("    {0}  ({1:N1} MB)" -f $zip, $size)
-    Write-Host "    Distribute by sending this zip; users unzip and double-click LyonMusicManager.exe."
+}
+
+# 8. Inno Setup installer -----------------------------------------------------
+if ($SkipInstaller) {
+    Write-Host "==> Skipping installer step (-SkipInstaller)" -ForegroundColor Yellow
+} else {
+    Write-Host "==> Locating Inno Setup 6 compiler (ISCC)" -ForegroundColor Cyan
+    $iscc = $null
+    foreach ($candidate in @(
+        'C:\Program Files (x86)\Inno Setup 6\ISCC.exe',
+        'C:\Program Files\Inno Setup 6\ISCC.exe'
+    )) {
+        if (Test-Path $candidate) { $iscc = $candidate; break }
+    }
+    if (-not $iscc) {
+        $found = Get-Command ISCC.exe -ErrorAction SilentlyContinue
+        if ($found) { $iscc = $found.Source }
+    }
+    if (-not $iscc) {
+        Write-Warning "Inno Setup 6 not found; skipping installer. Install from https://jrsoftware.org/isinfo.php or pass -SkipInstaller to suppress this warning."
+    } else {
+        Write-Host "    Using: $iscc"
+        $iss = Join-Path $Root 'build\lyon.iss'
+        $ico = Join-Path $Root 'build\lyon-app-icon.ico'
+        if (-not (Test-Path $ico)) {
+            throw "Installer icon missing at build\lyon-app-icon.ico. Run the PyInstaller step first so the spec generates it from the brand PNG."
+        }
+        & $iscc $iss /DAppVersion=$appVersion /Q
+        if ($LASTEXITCODE -ne 0) { throw "Inno Setup compilation failed." }
+        $installer = Join-Path $Root "dist\SeaLyonMediaManager-$appVersion-Setup.exe"
+        if (-not (Test-Path $installer)) { throw "Expected installer not found at $installer." }
+        $iSize = (Get-Item $installer).Length / 1MB
+        Write-Host ("    {0}  ({1:N1} MB)" -f $installer, $iSize)
+    }
+}
+
+Write-Host ""
+Write-Host "==> Build complete" -ForegroundColor Green
+if (-not $SkipZip -and (Test-Path (Join-Path $Root "dist\SeaLyonMediaManager-$appVersion-windows.zip"))) {
+    Write-Host "    Portable zip  : dist\SeaLyonMediaManager-$appVersion-windows.zip  (unzip and double-click LyonMusicManager.exe)"
+}
+if (-not $SkipInstaller -and (Test-Path (Join-Path $Root "dist\SeaLyonMediaManager-$appVersion-Setup.exe"))) {
+    Write-Host "    Installer     : dist\SeaLyonMediaManager-$appVersion-Setup.exe"
 }
