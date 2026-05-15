@@ -176,10 +176,20 @@ class _FullscreenWindow(QWidget):
 
     def __init__(self, on_exit_cb, on_toggle_play_cb) -> None:
         super().__init__(None, Qt.Window | Qt.FramelessWindowHint)
-        self.setAttribute(Qt.WA_NativeWindow, True)
         self.setStyleSheet("background:#000000;")
         self._on_exit = on_exit_cb
         self._on_toggle_play = on_toggle_play_cb
+
+        # VLC must render into a *child* native sub-window, not into this
+        # top-level window directly.  Qt's backing-store blit targets the
+        # top-level X11 window on every repaint and would overwrite VLC's
+        # frames.  A WA_NativeWindow child gets its own XID that the backing
+        # store never touches, matching how the embedded _VideoSurface works.
+        self._vlc_surface = _VideoSurface(self)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(self._vlc_surface)
 
     def keyPressEvent(self, ev) -> None:
         if ev.key() == Qt.Key_Escape:
@@ -806,6 +816,10 @@ class VideoPlayerView(QWidget):
         if self._fs_window is not None:
             return  # already fullscreen
 
+        was_playing = bool(self._player.is_playing())
+        if was_playing:
+            self._player.pause()
+
         self._fs_window = _FullscreenWindow(
             on_exit_cb=self._exit_fullscreen,
             on_toggle_play_cb=self._toggle_play,
@@ -813,25 +827,39 @@ class VideoPlayerView(QWidget):
         self._fs_window.showFullScreen()
         self._fs_window.raise_()
         self._fs_window.activateWindow()
-        # Defer winId capture until the OS window is actually realized
-        QTimer.singleShot(50, self._attach_vlc_to_fullscreen_window)
+        # Defer winId capture until the OS window and its child surface are
+        # realized, then resume playback on the new surface.
+        QTimer.singleShot(150, lambda: self._attach_vlc_to_fullscreen_window(was_playing))
         self._fullscreen_btn.setText("Exit Fullscreen")
 
-    def _attach_vlc_to_fullscreen_window(self) -> None:
+    def _attach_vlc_to_fullscreen_window(self, resume: bool = False) -> None:
         if self._fs_window is None:
             return
-        self._attach_vlc_to(self._fs_window)
+        self._attach_vlc_to(self._fs_window._vlc_surface)
+        if resume:
+            self._player.play()
 
     def _exit_fullscreen(self) -> None:
         if self._fs_window is None:
             return
+
+        was_playing = bool(self._player.is_playing())
+        if was_playing:
+            self._player.pause()
+
         self._fs_window.close()
         self._fs_window = None
         self._fullscreen_btn.setText("Fullscreen")
         self._video_stack.setCurrentIndex(1)
-        # Re-attach rendering to the embedded surface after a tick so the
-        # native surface window is front-most in the OS compositor again.
-        QTimer.singleShot(50, lambda: self._attach_vlc_to(self._surface))
+
+        def _reattach() -> None:
+            self._attach_vlc_to(self._surface)
+            if was_playing:
+                self._player.play()
+
+        # Give the embedded surface a tick to become front-most in the
+        # compositor before handing VLC's output back to it.
+        QTimer.singleShot(100, _reattach)
 
     # ---------------------------------------------------------------- polling
 
