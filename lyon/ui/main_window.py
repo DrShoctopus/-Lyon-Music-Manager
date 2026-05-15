@@ -105,10 +105,6 @@ class MainWindow(QMainWindow):
             self.tab_group.addButton(btn)
             self._tab_buttons[name] = btn
         tlayout.addStretch(1)
-        settings_btn = QPushButton("Settings")
-        settings_btn.setObjectName("navTab")
-        settings_btn.clicked.connect(self.open_settings)
-        tlayout.addWidget(settings_btn)
         queue_btn = QPushButton("Queue")
         queue_btn.setObjectName("navTab")
         queue_btn.clicked.connect(self.open_queue)
@@ -117,6 +113,10 @@ class MainWindow(QMainWindow):
         equalizer_btn.setObjectName("navTab")
         equalizer_btn.clicked.connect(self.open_equalizer)
         tlayout.addWidget(equalizer_btn)
+        settings_btn = QPushButton("Settings")
+        settings_btn.setObjectName("navTab")
+        settings_btn.clicked.connect(self.open_settings)
+        tlayout.addWidget(settings_btn)
         layout.addWidget(tabs)
 
         # ---- stacked content
@@ -228,6 +228,9 @@ class MainWindow(QMainWindow):
         search_action = QAction("Focus Library Search", self, triggered=self._focus_library_search)
         search_action.setShortcut("Ctrl+F")
         playback_menu.addAction(search_action)
+
+        settings_menu = m.addMenu("&Settings")
+        settings_menu.addAction(QAction("Open Settings", self, triggered=self.open_settings))
 
         help_menu = m.addMenu("&Help")
         help_menu.addAction(QAction("Runtime Diagnostics", self, triggered=self.show_diagnostics))
