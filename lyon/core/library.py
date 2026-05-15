@@ -22,7 +22,10 @@ SUPPORTED_EXTS = SUPPORTED_AUDIO_EXTS | SUPPORTED_VIDEO_EXTS
 DISPLAY_ARTIST_SQL = "COALESCE(NULLIF(album_artist,''), NULLIF(artist,''), 'Unknown Artist')"
 DISPLAY_ALBUM_SQL = "COALESCE(NULLIF(album,''), 'Unknown Album')"
 
-SCHEMA = """
+# Original table shape at first release (version 0).
+# Never add migrated columns here — keep them in _MIGRATIONS so that
+# CREATE INDEX cannot outrun ALTER TABLE on existing databases.
+_SCHEMA_V0 = """
 CREATE TABLE IF NOT EXISTS tracks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     path TEXT UNIQUE NOT NULL,
@@ -38,16 +41,25 @@ CREATE TABLE IF NOT EXISTS tracks (
     bitrate INTEGER,
     samplerate INTEGER,
     added_at REAL DEFAULT (strftime('%s','now')),
-    artwork_path TEXT,
-    media_type TEXT NOT NULL DEFAULT 'audio',
-    disc_id TEXT
+    artwork_path TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_tracks_artist  ON tracks(album_artist, artist);
-CREATE INDEX IF NOT EXISTS idx_tracks_album   ON tracks(album);
-CREATE INDEX IF NOT EXISTS idx_tracks_title   ON tracks(title);
-CREATE INDEX IF NOT EXISTS idx_tracks_media_type ON tracks(media_type);
-CREATE INDEX IF NOT EXISTS idx_tracks_disc_id ON tracks(disc_id);
+CREATE INDEX IF NOT EXISTS idx_tracks_artist ON tracks(album_artist, artist);
+CREATE INDEX IF NOT EXISTS idx_tracks_album  ON tracks(album);
+CREATE INDEX IF NOT EXISTS idx_tracks_title  ON tracks(title);
 """
+
+# Versioned migrations applied in order after _SCHEMA_V0.
+# Each entry: (target_version, sql).  Always pair an ALTER TABLE with its
+# CREATE INDEX in consecutive entries at the same version so they live and
+# die together.  Never edit existing entries — only append new ones.
+_MIGRATIONS: list[tuple[int, str]] = [
+    # v1 — media type (audio / video) classification
+    (1, "ALTER TABLE tracks ADD COLUMN media_type TEXT NOT NULL DEFAULT 'audio'"),
+    (1, "CREATE INDEX IF NOT EXISTS idx_tracks_media_type ON tracks(media_type)"),
+    # v2 — MusicBrainz disc ID for duplicate-CD detection
+    (2, "ALTER TABLE tracks ADD COLUMN disc_id TEXT"),
+    (2, "CREATE INDEX IF NOT EXISTS idx_tracks_disc_id ON tracks(disc_id)"),
+]
 
 _PAGE_SIZE = 500  # rows per page in streaming queries
 
@@ -86,25 +98,26 @@ class Library:
         self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         with self._lock:
-            self.conn.executescript(SCHEMA)
+            self.conn.executescript(_SCHEMA_V0)
             self._migrate()
             self.conn.commit()
 
     def _migrate(self) -> None:
-        """Add columns that were introduced after initial release."""
-        try:
-            self.conn.execute(
-                "ALTER TABLE tracks ADD COLUMN media_type TEXT NOT NULL DEFAULT 'audio'"
-            )
-        except sqlite3.OperationalError:
-            pass  # column already exists
-        try:
-            self.conn.execute("ALTER TABLE tracks ADD COLUMN disc_id TEXT")
-        except sqlite3.OperationalError:
-            pass  # column already exists
-        self.conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_tracks_disc_id ON tracks(disc_id)"
-        )
+        """Apply any _MIGRATIONS not yet stamped in PRAGMA user_version."""
+        current = self.conn.execute("PRAGMA user_version").fetchone()[0]
+        target = max((v for v, _ in _MIGRATIONS), default=0)
+        if current >= target:
+            return
+        for version, sql in _MIGRATIONS:
+            if version <= current:
+                continue
+            try:
+                self.conn.execute(sql)
+            except sqlite3.OperationalError as exc:
+                # Index/column already exists from a previous partial run — safe to skip.
+                LOG.debug("Migration v%d skipped (%s): %s", version, sql[:60], exc)
+        # Write outside the per-statement loop so the stamp is atomic with commit().
+        self.conn.execute(f"PRAGMA user_version = {target}")
 
     def commit(self) -> None:
         with self._lock:
