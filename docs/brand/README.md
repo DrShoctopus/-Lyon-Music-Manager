@@ -1,4 +1,4 @@
-# Lyon Media Manager brand assets
+# Sea Lyon Media Manager brand assets
 
 This directory is the source of truth for the app's raster branding.
 

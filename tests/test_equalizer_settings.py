@@ -49,6 +49,16 @@ def test_settings_resets_stale_selected_custom_curve_name():
     assert settings.equalizer_curve_name == "Flat"
 
 
+def test_equalizer_preamp_defaults_and_clamps():
+    assert Settings().equalizer_preamp == 0
+    assert Settings(equalizer_preamp=20).equalizer_preamp == 20
+    assert Settings(equalizer_preamp=-20).equalizer_preamp == -20
+    assert Settings(equalizer_preamp=99).equalizer_preamp == 20
+    assert Settings(equalizer_preamp=-99).equalizer_preamp == -20
+    assert Settings(equalizer_preamp="bad").equalizer_preamp == 0
+    assert Settings(equalizer_preamp=None).equalizer_preamp == 0
+
+
 def test_library_paths_are_normalized_without_duplicates():
     assert normalize_library_paths(["", "  /music/a  ", "/music/a", "/music/b"]) == [
         "/music/a",

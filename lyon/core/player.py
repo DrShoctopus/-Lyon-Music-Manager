@@ -8,7 +8,7 @@ from typing import Optional
 from PySide6.QtCore import QObject, Signal
 
 from .library import Track
-from .equalizer import flat_equalizer_bands, normalize_equalizer_bands
+from .equalizer import clamp_preamp, flat_equalizer_bands, normalize_equalizer_bands
 from .playback_backend import PlaybackBackend, create_playback_backend
 
 
@@ -36,6 +36,7 @@ class Player(QObject):
         self._shuffle = False
         self._repeat = RepeatMode.OFF
         self._equalizer_enabled = False
+        self._equalizer_preamp = 0
         self._equalizer_bands = flat_equalizer_bands()
 
         self._backend.position_changed.connect(self.position_changed.emit)
@@ -128,7 +129,7 @@ class Player(QObject):
         self._index = idx
         track = self._queue[idx]
         self._backend.set_source(track.path)
-        self._backend.apply_equalizer(self._equalizer_enabled, self._equalizer_bands)
+        self._backend.apply_equalizer(self._equalizer_enabled, self._equalizer_bands, self._equalizer_preamp)
         self._backend.play()
         self.track_changed.emit(track)
 
@@ -149,6 +150,10 @@ class Player(QObject):
 
     def stop(self) -> None:
         self._backend.stop()
+
+    def cleanup(self) -> None:
+        """Release native backend resources. Call before the application exits."""
+        self._backend.cleanup()
 
     def next(self) -> None:
         if not self._queue:
@@ -181,14 +186,15 @@ class Player(QObject):
     def volume(self) -> int:
         return self._backend.volume()
 
-    def set_equalizer(self, enabled: bool, bands: list[int]) -> None:
+    def set_equalizer(self, enabled: bool, bands: list[int], preamp: int = 0) -> None:
         """Store and apply the active ten-band equalizer curve."""
         self._equalizer_enabled = bool(enabled)
+        self._equalizer_preamp = clamp_preamp(preamp)
         self._equalizer_bands = normalize_equalizer_bands(bands)
-        self._backend.apply_equalizer(self._equalizer_enabled, self._equalizer_bands)
+        self._backend.apply_equalizer(self._equalizer_enabled, self._equalizer_bands, self._equalizer_preamp)
 
-    def equalizer(self) -> tuple[bool, list[int]]:
-        return self._equalizer_enabled, list(self._equalizer_bands)
+    def equalizer(self) -> tuple[bool, list[int], int]:
+        return self._equalizer_enabled, list(self._equalizer_bands), self._equalizer_preamp
 
     def set_muted(self, muted: bool) -> None:
         self._backend.set_muted(muted)

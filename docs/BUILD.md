@@ -1,4 +1,4 @@
-# Building Lyon Music Manager for Windows
+# Building Sea Lyon Media Manager for Windows
 
 Tested on Windows 10/11 with Python 3.11. Should also run on Windows 8.1 if
 you grab a Python build that still supports it (3.8 was the last).
@@ -61,7 +61,7 @@ which trades faster startup for a slower first launch.
 
 ## Troubleshooting
 
-Open **Help > Runtime Diagnostics** in Lyon to check whether ffmpeg,
+Open **Help > Runtime Diagnostics** in Sea Lyon to check whether ffmpeg,
 libdiscid/discid, VLC/libVLC, and Qt WebEngine are available in the current
 source or packaged environment before troubleshooting individual features.
 
@@ -76,7 +76,7 @@ source or packaged environment before troubleshooting individual features.
 
 ## 6. VLC playback backend packaging
 
-Lyon now prefers libVLC for local music playback so the existing six-band EQ
+Sea Lyon now prefers libVLC for local music playback so the existing six-band EQ
 controls can drive VLC's real `AudioEqualizer`. Source installs need both the
 Python binding from `requirements.txt` and a VLC runtime discoverable by
 python-vlc.

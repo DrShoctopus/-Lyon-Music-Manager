@@ -4,75 +4,158 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
-    QGroupBox, QHBoxLayout, QLineEdit, QListWidget, QPushButton, QSpinBox,
-    QVBoxLayout, QWidget,
+    QHBoxLayout, QLabel, QLineEdit, QListWidget, QPushButton, QSpinBox,
+    QTabWidget, QVBoxLayout, QWidget,
 )
 
+from .. import __app_name__, __version__
 from ..core.settings import Settings, normalize_library_paths
+
+# (display label, settings key) pairs — order matches the combo box
+_RIP_FORMATS = [
+    ("FLAC (Lossless)",          "flac"),
+    ("MP3",                      "mp3"),
+    ("AAC / M4A",                "aac"),
+    ("Opus",                     "opus"),
+    ("OGG Vorbis",               "ogg"),
+    ("ALAC (Apple Lossless)",    "alac"),
+    ("WAV (Uncompressed)",       "wav"),
+    ("AIFF",                     "aiff"),
+    ("WMA",                      "wma"),
+]
+_LOSSY_FORMATS = {"mp3", "aac", "opus", "ogg", "wma"}
+_FLAC_FORMAT = "flac"
 
 
 class SettingsDialog(QDialog):
     def __init__(self, settings: Settings, parent: QWidget | None = None):
         super().__init__(parent)
         self.setWindowTitle("Settings")
-        self.resize(520, 360)
+        self.resize(540, 420)
         self.result_settings = replace(settings)
         self.result_settings.library_paths = normalize_library_paths(settings.library_paths)
 
-        form = QFormLayout()
+        tabs = QTabWidget()
+        tabs.addTab(self._build_library_tab(settings), "Library")
+        tabs.addTab(self._build_ripping_tab(settings), "CD Ripping")
+        tabs.addTab(self._build_metadata_tab(settings), "Metadata")
+        tabs.addTab(self._build_youtube_tab(settings), "YouTube")
+        tabs.addTab(self._build_about_tab(), "About")
 
-        # Music root
+        layout = QVBoxLayout(self)
+        layout.addWidget(tabs)
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.accepted.connect(self._accept)
+        bb.rejected.connect(self.reject)
+        layout.addWidget(bb)
+
+    # ------------------------------------------------------------------ tabs
+
+    def _build_library_tab(self, settings: Settings) -> QWidget:
+        w = QWidget()
+        form = QFormLayout(w)
+        form.setContentsMargins(12, 12, 12, 12)
+        form.setVerticalSpacing(8)
+
         root_row = QHBoxLayout()
         self.root_edit = QLineEdit(settings.music_root)
-        browse = QPushButton("Browse...")
+        browse = QPushButton("Browse…")
         browse.clicked.connect(self._browse_root)
         root_row.addWidget(self.root_edit, 1)
         root_row.addWidget(browse)
         root_w = QWidget(); root_w.setLayout(root_row)
         form.addRow("Music folder:", root_w)
 
-        # Library folders
         folders_box = QVBoxLayout()
         self.library_paths = QListWidget()
-        self.library_paths.setMinimumHeight(84)
+        self.library_paths.setMinimumHeight(100)
         for folder in normalize_library_paths(settings.library_paths):
             self.library_paths.addItem(folder)
         folder_buttons = QHBoxLayout()
-        add_library_folder = QPushButton("Add...")
-        remove_library_folder = QPushButton("Remove")
-        add_library_folder.clicked.connect(self._add_library_folder)
-        remove_library_folder.clicked.connect(self._remove_library_folder)
-        folder_buttons.addWidget(add_library_folder)
-        folder_buttons.addWidget(remove_library_folder)
+        add_folder_btn = QPushButton("Add…")
+        remove_folder_btn = QPushButton("Remove")
+        add_folder_btn.clicked.connect(self._add_library_folder)
+        remove_folder_btn.clicked.connect(self._remove_library_folder)
+        folder_buttons.addWidget(add_folder_btn)
+        folder_buttons.addWidget(remove_folder_btn)
         folder_buttons.addStretch(1)
         folders_box.addWidget(self.library_paths)
         folders_box.addLayout(folder_buttons)
         folders_w = QWidget(); folders_w.setLayout(folders_box)
         form.addRow("Library folders:", folders_w)
 
-        # FLAC compression
+        return w
+
+    def _build_ripping_tab(self, settings: Settings) -> QWidget:
+        w = QWidget()
+        form = QFormLayout(w)
+        form.setContentsMargins(12, 12, 12, 12)
+        form.setVerticalSpacing(8)
+
+        self.drive = QLineEdit(settings.cd_drive)
+        self.drive.setPlaceholderText("e.g. D:  (leave blank for auto)")
+        form.addRow("CD drive:", self.drive)
+
+        self.rip_fmt = QComboBox()
+        for label, key in _RIP_FORMATS:
+            self.rip_fmt.addItem(label, key)
+        current_fmt = settings.rip_format or "flac"
+        for i in range(self.rip_fmt.count()):
+            if self.rip_fmt.itemData(i) == current_fmt:
+                self.rip_fmt.setCurrentIndex(i)
+                break
+        form.addRow("Output format:", self.rip_fmt)
+
         self.compression = QSpinBox()
         self.compression.setRange(0, 8)
         self.compression.setValue(settings.flac_compression)
-        form.addRow("FLAC compression (0=fast, 8=best):", self.compression)
+        self.compression.setToolTip("0 = fastest encode, 8 = smallest file size")
+        self._compression_label = QLabel("FLAC compression:")
+        form.addRow(self._compression_label, self.compression)
 
-        # CD drive
-        self.drive = QLineEdit(settings.cd_drive)
-        self.drive.setPlaceholderText("e.g. D: (leave blank for auto)")
-        form.addRow("Default CD drive:", self.drive)
+        self.bitrate_combo = QComboBox()
+        self.bitrate_combo.addItems(["128", "192", "256", "320", "512"])
+        self.bitrate_combo.setCurrentText(str(settings.rip_audio_bitrate))
+        self.bitrate_combo.setToolTip("Audio bitrate in kilobits per second")
+        self._bitrate_label = QLabel("Bitrate (kbps):")
+        form.addRow(self._bitrate_label, self.bitrate_combo)
 
-        # Toggles
         self.eject = QCheckBox("Eject disc after rip")
         self.eject.setChecked(settings.eject_after_rip)
         form.addRow("", self.eject)
 
-        self.lookup = QCheckBox("Look up metadata online")
+        self.ctdb_verify = QCheckBox("Verify rip accuracy against CUETools DB")
+        self.ctdb_verify.setChecked(settings.ctdb_verify_rips)
+        self.ctdb_verify.setToolTip("Only applies when ripping to FLAC")
+        form.addRow("", self.ctdb_verify)
+
+        self.rip_fmt.currentIndexChanged.connect(self._on_rip_format_changed)
+        self._on_rip_format_changed()
+        return w
+
+    def _on_rip_format_changed(self) -> None:
+        fmt = self.rip_fmt.currentData() or "flac"
+        is_flac = fmt == _FLAC_FORMAT
+        is_lossy = fmt in _LOSSY_FORMATS
+        self._compression_label.setVisible(is_flac)
+        self.compression.setVisible(is_flac)
+        self._bitrate_label.setVisible(is_lossy)
+        self.bitrate_combo.setVisible(is_lossy)
+
+    def _build_metadata_tab(self, settings: Settings) -> QWidget:
+        w = QWidget()
+        form = QFormLayout(w)
+        form.setContentsMargins(12, 12, 12, 12)
+        form.setVerticalSpacing(8)
+
+        self.lookup = QCheckBox("Look up metadata online automatically")
         self.lookup.setChecked(settings.auto_lookup_metadata)
         form.addRow("", self.lookup)
 
-        self.cuetools_db = QCheckBox("Use CUETools DB Metadata Plugin lookup")
+        self.cuetools_db = QCheckBox("Use CUETools DB plugin for metadata")
         self.cuetools_db.setChecked(settings.cuetools_db_metadata_enabled)
         form.addRow("", self.cuetools_db)
 
@@ -80,11 +163,10 @@ class SettingsDialog(QDialog):
         self.artwork.setChecked(settings.download_artwork)
         form.addRow("", self.artwork)
 
-        self.metadata_diagnostics = QCheckBox("Log detailed metadata lookup diagnostics")
+        self.metadata_diagnostics = QCheckBox("Log detailed metadata diagnostics")
         self.metadata_diagnostics.setChecked(settings.metadata_diagnostics_enabled)
         form.addRow("", self.metadata_diagnostics)
 
-        # Provider settings
         self.contact = QLineEdit(settings.musicbrainz_contact)
         form.addRow("MusicBrainz contact:", self.contact)
 
@@ -92,53 +174,74 @@ class SettingsDialog(QDialog):
         self.audiodb_key.setPlaceholderText("123")
         form.addRow("TheAudioDB API key:", self.audiodb_key)
 
-        # YouTube Downloads group
-        yt_group = QGroupBox("YouTube Downloads")
-        yt_form = QFormLayout(yt_group)
+        return w
+
+    def _build_youtube_tab(self, settings: Settings) -> QWidget:
+        w = QWidget()
+        form = QFormLayout(w)
+        form.setContentsMargins(12, 12, 12, 12)
+        form.setVerticalSpacing(8)
 
         self.yt_audio_fmt = QComboBox()
         self.yt_audio_fmt.addItems(["flac", "mp3"])
         self.yt_audio_fmt.setCurrentText(settings.yt_audio_format)
-        yt_form.addRow("Audio format:", self.yt_audio_fmt)
+        form.addRow("Audio-only format:", self.yt_audio_fmt)
 
         self.yt_video_fmt = QComboBox()
         self.yt_video_fmt.addItems(["mp4", "mkv", "webm"])
         self.yt_video_fmt.setCurrentText(settings.yt_video_format)
-        yt_form.addRow("Video format:", self.yt_video_fmt)
+        form.addRow("Video format (video + audio):", self.yt_video_fmt)
 
-        audio_dir_row = QHBoxLayout()
-        default_audio = settings.yt_output_dir or str(Path(settings.music_root) / "YouTube")
-        self.yt_audio_dir = QLineEdit(settings.yt_output_dir)
-        self.yt_audio_dir.setPlaceholderText(default_audio)
-        browse_audio = QPushButton("Browse…")
-        browse_audio.clicked.connect(lambda: self._browse_yt_dir(self.yt_audio_dir))
-        audio_dir_row.addWidget(self.yt_audio_dir, 1)
-        audio_dir_row.addWidget(browse_audio)
-        audio_dir_w = QWidget(); audio_dir_w.setLayout(audio_dir_row)
-        yt_form.addRow("Audio save folder:", audio_dir_w)
-
-        video_dir_row = QHBoxLayout()
-        default_video = settings.yt_video_output_dir or str(Path(settings.music_root) / "Videos")
-        self.yt_video_dir = QLineEdit(settings.yt_video_output_dir)
-        self.yt_video_dir.setPlaceholderText(default_video)
-        browse_video = QPushButton("Browse…")
-        browse_video.clicked.connect(lambda: self._browse_yt_dir(self.yt_video_dir))
-        video_dir_row.addWidget(self.yt_video_dir, 1)
-        video_dir_row.addWidget(browse_video)
-        video_dir_w = QWidget(); video_dir_w.setLayout(video_dir_row)
-        yt_form.addRow("Video save folder:", video_dir_w)
+        save_dir_row = QHBoxLayout()
+        default_save = settings.yt_output_dir or str(Path(settings.music_root) / "YouTube")
+        self.yt_save_dir = QLineEdit(settings.yt_output_dir)
+        self.yt_save_dir.setPlaceholderText(default_save)
+        browse_save = QPushButton("Browse…")
+        browse_save.clicked.connect(lambda: self._browse_yt_dir(self.yt_save_dir))
+        save_dir_row.addWidget(self.yt_save_dir, 1)
+        save_dir_row.addWidget(browse_save)
+        save_dir_w = QWidget(); save_dir_w.setLayout(save_dir_row)
+        form.addRow("Save folder:", save_dir_w)
 
         self.yt_auto_add = QCheckBox("Automatically add downloads to library")
         self.yt_auto_add.setChecked(settings.yt_auto_add)
-        yt_form.addRow("", self.yt_auto_add)
+        form.addRow("", self.yt_auto_add)
 
-        layout = QVBoxLayout(self)
-        layout.addLayout(form)
-        layout.addWidget(yt_group)
-        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        bb.accepted.connect(self._accept)
-        bb.rejected.connect(self.reject)
-        layout.addWidget(bb)
+        return w
+
+    def _build_about_tab(self) -> QWidget:
+        w = QWidget()
+        layout = QVBoxLayout(w)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(6)
+
+        name_label = QLabel(__app_name__)
+        name_label.setStyleSheet("font-size:18px;font-weight:700;")
+        layout.addWidget(name_label)
+
+        version_label = QLabel(f"Version {__version__}")
+        version_label.setStyleSheet("font-size:12px;color:#888;")
+        layout.addWidget(version_label)
+
+        layout.addSpacing(12)
+
+        desc = QLabel(
+            "Sea Lyon is a music library manager, CD ripper, and player\n"
+            "for Windows, macOS, and Linux."
+        )
+        desc.setWordWrap(True)
+        layout.addWidget(desc)
+
+        layout.addSpacing(12)
+
+        license_label = QLabel("Released under the MIT License.")
+        license_label.setStyleSheet("color:#888;")
+        layout.addWidget(license_label)
+
+        layout.addStretch(1)
+        return w
+
+    # ------------------------------------------------------------------ helpers
 
     def _browse_root(self) -> None:
         d = QFileDialog.getExistingDirectory(self, "Choose music folder", self.root_edit.text())
@@ -163,9 +266,16 @@ class SettingsDialog(QDialog):
     def _library_folder_exists(self, folder: str) -> bool:
         return any(self.library_paths.item(row).text() == folder for row in range(self.library_paths.count()))
 
+    # ------------------------------------------------------------------ accept
+
     def _accept(self) -> None:
         self.result_settings.music_root = self.root_edit.text().strip() or self.result_settings.music_root
+        self.result_settings.rip_format = self.rip_fmt.currentData() or "flac"
         self.result_settings.flac_compression = self.compression.value()
+        try:
+            self.result_settings.rip_audio_bitrate = int(self.bitrate_combo.currentText())
+        except ValueError:
+            self.result_settings.rip_audio_bitrate = 320
         self.result_settings.cd_drive = self.drive.text().strip()
         self.result_settings.library_paths = normalize_library_paths([
             self.library_paths.item(row).text()
@@ -176,11 +286,11 @@ class SettingsDialog(QDialog):
         self.result_settings.cuetools_db_metadata_enabled = self.cuetools_db.isChecked()
         self.result_settings.download_artwork = self.artwork.isChecked()
         self.result_settings.metadata_diagnostics_enabled = self.metadata_diagnostics.isChecked()
+        self.result_settings.ctdb_verify_rips = self.ctdb_verify.isChecked()
         self.result_settings.musicbrainz_contact = self.contact.text().strip() or self.result_settings.musicbrainz_contact
         self.result_settings.theaudiodb_api_key = self.audiodb_key.text().strip() or "123"
         self.result_settings.yt_audio_format = self.yt_audio_fmt.currentText()
         self.result_settings.yt_video_format = self.yt_video_fmt.currentText()
-        self.result_settings.yt_output_dir = self.yt_audio_dir.text().strip()
-        self.result_settings.yt_video_output_dir = self.yt_video_dir.text().strip()
+        self.result_settings.yt_output_dir = self.yt_save_dir.text().strip()
         self.result_settings.yt_auto_add = self.yt_auto_add.isChecked()
         self.accept()

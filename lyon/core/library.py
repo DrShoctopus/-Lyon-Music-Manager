@@ -1,6 +1,7 @@
 """SQLite-backed music library."""
 from __future__ import annotations
 
+import logging
 import os
 import sqlite3
 import threading
@@ -12,6 +13,8 @@ from mutagen import File as MutagenFile
 
 from .settings import app_data_dir
 
+LOG = logging.getLogger(__name__)
+
 SUPPORTED_AUDIO_EXTS = {".flac", ".mp3", ".m4a", ".aac", ".ogg", ".opus", ".wav", ".wma"}
 SUPPORTED_VIDEO_EXTS = {".mp4", ".mkv", ".webm", ".avi", ".mov"}
 SUPPORTED_EXTS = SUPPORTED_AUDIO_EXTS | SUPPORTED_VIDEO_EXTS
@@ -19,7 +22,10 @@ SUPPORTED_EXTS = SUPPORTED_AUDIO_EXTS | SUPPORTED_VIDEO_EXTS
 DISPLAY_ARTIST_SQL = "COALESCE(NULLIF(album_artist,''), NULLIF(artist,''), 'Unknown Artist')"
 DISPLAY_ALBUM_SQL = "COALESCE(NULLIF(album,''), 'Unknown Album')"
 
-SCHEMA = """
+# Original table shape at first release (version 0).
+# Never add migrated columns here — keep them in _MIGRATIONS so that
+# CREATE INDEX cannot outrun ALTER TABLE on existing databases.
+_SCHEMA_V0 = """
 CREATE TABLE IF NOT EXISTS tracks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     path TEXT UNIQUE NOT NULL,
@@ -35,14 +41,25 @@ CREATE TABLE IF NOT EXISTS tracks (
     bitrate INTEGER,
     samplerate INTEGER,
     added_at REAL DEFAULT (strftime('%s','now')),
-    artwork_path TEXT,
-    media_type TEXT NOT NULL DEFAULT 'audio'
+    artwork_path TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_tracks_artist ON tracks(album_artist, artist);
 CREATE INDEX IF NOT EXISTS idx_tracks_album  ON tracks(album);
 CREATE INDEX IF NOT EXISTS idx_tracks_title  ON tracks(title);
-CREATE INDEX IF NOT EXISTS idx_tracks_media_type ON tracks(media_type);
 """
+
+# Versioned migrations applied in order after _SCHEMA_V0.
+# Each entry: (target_version, sql).  Always pair an ALTER TABLE with its
+# CREATE INDEX in consecutive entries at the same version so they live and
+# die together.  Never edit existing entries — only append new ones.
+_MIGRATIONS: list[tuple[int, str]] = [
+    # v1 — media type (audio / video) classification
+    (1, "ALTER TABLE tracks ADD COLUMN media_type TEXT NOT NULL DEFAULT 'audio'"),
+    (1, "CREATE INDEX IF NOT EXISTS idx_tracks_media_type ON tracks(media_type)"),
+    # v2 — MusicBrainz disc ID for duplicate-CD detection
+    (2, "ALTER TABLE tracks ADD COLUMN disc_id TEXT"),
+    (2, "CREATE INDEX IF NOT EXISTS idx_tracks_disc_id ON tracks(disc_id)"),
+]
 
 _PAGE_SIZE = 500  # rows per page in streaming queries
 
@@ -81,18 +98,26 @@ class Library:
         self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         with self._lock:
-            self.conn.executescript(SCHEMA)
+            self.conn.executescript(_SCHEMA_V0)
             self._migrate()
             self.conn.commit()
 
     def _migrate(self) -> None:
-        """Add columns that were introduced after initial release."""
-        try:
-            self.conn.execute(
-                "ALTER TABLE tracks ADD COLUMN media_type TEXT NOT NULL DEFAULT 'audio'"
-            )
-        except sqlite3.OperationalError:
-            pass  # column already exists
+        """Apply any _MIGRATIONS not yet stamped in PRAGMA user_version."""
+        current = self.conn.execute("PRAGMA user_version").fetchone()[0]
+        target = max((v for v, _ in _MIGRATIONS), default=0)
+        if current >= target:
+            return
+        for version, sql in _MIGRATIONS:
+            if version <= current:
+                continue
+            try:
+                self.conn.execute(sql)
+            except sqlite3.OperationalError as exc:
+                # Index/column already exists from a previous partial run — safe to skip.
+                LOG.debug("Migration v%d skipped (%s): %s", version, sql[:60], exc)
+        # Write outside the per-statement loop so the stamp is atomic with commit().
+        self.conn.execute(f"PRAGMA user_version = {target}")
 
     def commit(self) -> None:
         with self._lock:
@@ -142,13 +167,19 @@ class Library:
             self.conn.commit()
         return added
 
-    def add_file(self, path: str | os.PathLike) -> bool:
+    def add_file(self, path: str | os.PathLike, disc_id: str | None = None) -> bool:
         path = str(path)
         ext = Path(path).suffix.lower()
         media_type = "video" if ext in SUPPORTED_VIDEO_EXTS else "audio"
 
         with self._lock:
             if self.conn.execute("SELECT 1 FROM tracks WHERE path = ?", (path,)).fetchone():
+                if disc_id:
+                    self.conn.execute(
+                        "UPDATE tracks SET disc_id = ?"
+                        " WHERE path = ? AND (disc_id IS NULL OR disc_id = '')",
+                        (disc_id, path),
+                    )
                 return False
         meta = _read_tags(path)
         if meta is None:
@@ -167,8 +198,9 @@ class Library:
             cur = self.conn.execute(
                 """INSERT OR IGNORE INTO tracks
                    (path, title, artist, album_artist, album, track_no, disc_no,
-                    year, genre, duration, bitrate, samplerate, artwork_path, media_type)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    year, genre, duration, bitrate, samplerate, artwork_path, media_type,
+                    disc_id)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     path,
                     meta["title"],
@@ -184,9 +216,19 @@ class Library:
                     meta["samplerate"],
                     str(art) if art else None,
                     media_type,
+                    disc_id or None,
                 ),
             )
-            return cur.rowcount > 0
+            inserted = cur.rowcount > 0
+            if not inserted and disc_id:
+                # Row already existed (scanned earlier, or pre-feature rip).
+                # Backfill disc_id so duplicate-CD detection works next time.
+                self.conn.execute(
+                    "UPDATE tracks SET disc_id = ?"
+                    " WHERE path = ? AND (disc_id IS NULL OR disc_id = '')",
+                    (disc_id, path),
+                )
+            return inserted
 
     # ------------------------------------------------------------------ queries
     def all_artists(self, media_type: str | None = None) -> list[str]:
@@ -244,19 +286,20 @@ class Library:
         return [_row_to_track(r) for r in rows]
 
     def search(self, query: str, media_type: str | None = None) -> list[Track]:
-        like = f"%{query}%"
+        escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        like = f"%{escaped}%"
         filter_sql = "" if media_type is None else "AND media_type = ?"
         base_params = (like, like, like, like, like, like)
         params = base_params + (media_type,) if media_type is not None else base_params
         with self._lock:
             rows = self.conn.execute(
                 f"""SELECT * FROM tracks
-                   WHERE (title LIKE ?
-                      OR artist LIKE ?
-                      OR album_artist LIKE ?
-                      OR album LIKE ?
-                      OR {DISPLAY_ARTIST_SQL} LIKE ?
-                      OR {DISPLAY_ALBUM_SQL} LIKE ?)
+                   WHERE (title LIKE ? ESCAPE '\\'
+                      OR artist LIKE ? ESCAPE '\\'
+                      OR album_artist LIKE ? ESCAPE '\\'
+                      OR album LIKE ? ESCAPE '\\'
+                      OR {DISPLAY_ARTIST_SQL} LIKE ? ESCAPE '\\'
+                      OR {DISPLAY_ALBUM_SQL} LIKE ? ESCAPE '\\')
                    {filter_sql}
                    ORDER BY {DISPLAY_ARTIST_SQL}, {DISPLAY_ALBUM_SQL}, disc_no, track_no
                    LIMIT 500""",
@@ -283,6 +326,27 @@ class Library:
             if len(rows) < _PAGE_SIZE:
                 break
             offset += len(rows)
+
+    def has_disc(self, disc_id: str, min_tracks: int = 1) -> bool:
+        """Return True if at least *min_tracks* library tracks carry this disc ID."""
+        if not disc_id:
+            return False
+        min_tracks = max(1, min_tracks)  # never let a 0-track TOC false-positive
+        with self._lock:
+            count = self.conn.execute(
+                "SELECT COUNT(*) FROM tracks WHERE disc_id = ?", (disc_id,)
+            ).fetchone()[0]
+        return count >= min_tracks
+
+    def album_for_disc(self, disc_id: str) -> tuple[str, str] | None:
+        """Return (display_artist, album) for the first track carrying this disc ID, or None."""
+        with self._lock:
+            row = self.conn.execute(
+                f"SELECT {DISPLAY_ARTIST_SQL} AS a, {DISPLAY_ALBUM_SQL} AS b"
+                " FROM tracks WHERE disc_id = ? LIMIT 1",
+                (disc_id,),
+            ).fetchone()
+        return (row["a"], row["b"]) if row else None
 
     def remove_missing(self) -> int:
         with self._lock:
@@ -322,7 +386,8 @@ def _row_to_track(r: sqlite3.Row) -> Track:
 def _read_tags(path: str) -> dict | None:
     try:
         f = MutagenFile(path, easy=True)
-    except Exception:
+    except Exception as exc:
+        LOG.warning("Failed to read tags from %s: %s", path, exc)
         return None
     if f is None:
         return None

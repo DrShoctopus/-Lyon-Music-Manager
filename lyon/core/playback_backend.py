@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 from typing import Any, Optional
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, QUrl, Signal
 
 from .equalizer import EQ_BAND_COUNT, normalize_equalizer_bands
 from .settings import bundled_bin_dir
@@ -56,6 +56,16 @@ def _configure_vlc_runtime_path() -> None:
     _CONFIGURED_VLC_DIRS.add(vlc_dir)
 
 
+def close_dll_handles() -> None:
+    """Release Windows DLL directory handles acquired by _configure_vlc_runtime_path."""
+    for handle in _DLL_DIRECTORY_HANDLES:
+        try:
+            handle.close()
+        except Exception as exc:
+            LOG.debug("Could not close DLL directory handle: %s", exc)
+    _DLL_DIRECTORY_HANDLES.clear()
+
+
 class PlaybackBackend(QObject):
     """Interface shared by concrete playback engines."""
 
@@ -99,8 +109,11 @@ class PlaybackBackend(QObject):
     def is_playing(self) -> bool:
         raise NotImplementedError
 
-    def apply_equalizer(self, enabled: bool, bands: list[int]) -> None:
+    def apply_equalizer(self, enabled: bool, bands: list[int], preamp: int = 0) -> None:
         raise NotImplementedError
+
+    def cleanup(self) -> None:
+        """Release any native resources held by the backend. Safe to call on all backends."""
 
 
 class QMediaPlaybackBackend(PlaybackBackend):
@@ -126,8 +139,6 @@ class QMediaPlaybackBackend(PlaybackBackend):
         self._player.mediaStatusChanged.connect(self._on_media_status)
 
     def set_source(self, path: str) -> None:
-        from PySide6.QtCore import QUrl
-
         self._player.setSource(QUrl.fromLocalFile(path))
 
     def play(self) -> None:
@@ -163,7 +174,7 @@ class QMediaPlaybackBackend(PlaybackBackend):
     def is_playing(self) -> bool:
         return self._player.playbackState() == self._qmedia_player_cls.PlayingState
 
-    def apply_equalizer(self, enabled: bool, bands: list[int]) -> None:
+    def apply_equalizer(self, enabled: bool, bands: list[int], preamp: int = 0) -> None:
         # Qt Multimedia has no per-band EQ API; intentional no-op on this backend.
         pass
 
@@ -204,12 +215,13 @@ class VlcPlaybackBackend(PlaybackBackend):
         self._equalizer = None
 
         self._timer = QTimer(self)
-        self._timer.setInterval(500)
+        self._timer.setInterval(200)
         self._timer.timeout.connect(self._poll)
 
     def set_source(self, path: str) -> None:
         media = self._instance.media_new_path(str(Path(path)))
         self._player.set_media(media)
+        media.release()  # drop our reference; VLC holds its own via set_media
         self._ended = False
         self._last_position = (-1, -1)
         self._player.audio_set_volume(self._volume)
@@ -260,7 +272,7 @@ class VlcPlaybackBackend(PlaybackBackend):
     def is_playing(self) -> bool:
         return bool(self._player.is_playing())
 
-    def apply_equalizer(self, enabled: bool, bands: list[int]) -> None:
+    def apply_equalizer(self, enabled: bool, bands: list[int], preamp: int = 0) -> None:
         if not enabled:
             self._equalizer = None
             try:
@@ -274,7 +286,7 @@ class VlcPlaybackBackend(PlaybackBackend):
             if equalizer is None:
                 raise RuntimeError("VLC did not create an AudioEqualizer instance")
             normalized_bands = normalize_equalizer_bands(bands)
-            equalizer.set_preamp(0.0)
+            equalizer.set_preamp(float(preamp))
             for ui_band, vlc_index in zip(normalized_bands, VLC_EQ_BAND_INDEXES, strict=True):
                 equalizer.set_amp_at_index(float(ui_band), vlc_index)
             self._player.set_equalizer(equalizer)
@@ -292,8 +304,28 @@ class VlcPlaybackBackend(PlaybackBackend):
             self._last_state = state
             self.state_changed.emit(state)
 
+    def cleanup(self) -> None:
+        """Release native libVLC resources. Must be called before the app exits."""
+        self._timer.stop()
+        try:
+            self._player.stop()
+            self._player.release()
+        except Exception as exc:
+            LOG.debug("Error releasing VLC player: %s", exc)
+        try:
+            self._instance.release()
+        except Exception as exc:
+            LOG.debug("Error releasing VLC instance: %s", exc)
+        self._player = None  # type: ignore[assignment]
+        self._instance = None  # type: ignore[assignment]
+
     def _poll(self) -> None:
-        state = self._player.get_state()
+        try:
+            state = self._player.get_state()
+        except Exception as exc:
+            LOG.debug("VLC get_state failed (backend may be shutting down): %s", exc)
+            self._timer.stop()
+            return
         if state == self._vlc.State.Ended:
             if not self._ended:
                 self._ended = True

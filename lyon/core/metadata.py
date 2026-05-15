@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -19,13 +20,13 @@ import requests
 from . import settings as _settings
 
 
-CTDB_LOOKUP_URL = "https://db.cuetools.net/lookup2.php"
-CTDB_BASE_URL = "https://db.cuetools.net/"
+CTDB_LOOKUP_URL = "http://db.cuetools.net/lookup2.php"
+CTDB_BASE_URL = "http://db.cuetools.net/"
 CTDB_TIMEOUT_SECONDS = 20
 THEAUDIODB_API_BASE = "https://www.theaudiodb.com/api/v1/json"
 THEAUDIODB_DEFAULT_API_KEY = "123"
 HTTP_TIMEOUT_SECONDS = 15
-DISC_METADATA_PROVIDER_ORDER = ("cuetools_db", "musicbrainz", "theaudiodb")
+DISC_METADATA_PROVIDER_ORDER = ("cuetools_db", "musicbrainz")
 ALBUM_METADATA_PROVIDER_ORDER = ("musicbrainz", "theaudiodb")
 ARTWORK_PROVIDER_ORDER = ("cover_art_archive", "album_artwork_url", "theaudiodb")
 METADATA_PROVIDER_ORDER = ALBUM_METADATA_PROVIDER_ORDER
@@ -41,6 +42,10 @@ _http_session_lock = threading.Lock()
 # Guards the one-time musicbrainzngs useragent initialisation.
 _init_lock = threading.Lock()
 _initialised = False
+
+# MusicBrainz API ToS requires ≤1 request per second.
+_mb_rate_limit_lock = threading.Lock()
+_mb_last_request_time: float = 0.0
 
 
 @dataclass
@@ -92,6 +97,35 @@ def _init() -> None:
         _initialised = True
 
 
+def _mb_rate_limit() -> None:
+    """Throttle to ≤1 MusicBrainz request per second as required by their ToS."""
+    global _mb_last_request_time
+    with _mb_rate_limit_lock:
+        now = time.monotonic()
+        wait = 1.0 - (now - _mb_last_request_time)
+        if wait > 0:
+            time.sleep(wait)
+        _mb_last_request_time = time.monotonic()
+
+
+def shutdown() -> None:
+    """Close the shared HTTP session and diagnostics log handler."""
+    global _http_session, _metadata_file_handler
+    if _http_session is not None:
+        try:
+            _http_session.close()
+        except Exception:
+            pass
+        _http_session = None
+    if _metadata_file_handler is not None:
+        try:
+            LOG.removeHandler(_metadata_file_handler)
+            _metadata_file_handler.close()
+        except Exception:
+            pass
+        _metadata_file_handler = None
+
+
 def lookup_disc(
     discid_str: str,
     toc: str | None = None,
@@ -115,13 +149,6 @@ def lookup_disc(
         provider_attempts.append((provider_name, info))
         if _has_usable_metadata(info):
             return _with_theaudiodb_enrichment(info)
-
-    if _use_cuetools_db(use_cuetools_db) and ctdb_toc is None:
-        for fuzzy in (False, True):
-            info = lookup_ctdb_disc(toc, fuzzy=fuzzy)
-            provider_attempts.append((f"cuetools_db_legacy_fuzzy_{int(fuzzy)}", info))
-            if _has_usable_metadata(info):
-                return _with_theaudiodb_enrichment(info)
 
     if _metadata_diagnostics_enabled():
         _log_empty_disc_lookup(discid_str, toc, ctdb_toc, use_cuetools_db, provider_attempts)
@@ -149,6 +176,7 @@ def lookup_musicbrainz_disc(discid_str: str, toc: str | None = None) -> Optional
     if not discid_str:
         return None
     _init()
+    _mb_rate_limit()
     try:
         result = musicbrainzngs.get_releases_by_discid(
             discid_str, includes=["recordings", "artists"], toc=toc, cdstubs=True
@@ -324,6 +352,7 @@ def fetch_artwork(album: AlbumInfo) -> bytes | None:
 def search_musicbrainz_album(artist: str, album: str) -> Optional[AlbumInfo]:
     """Search MusicBrainz release metadata by artist and album title."""
     _init()
+    _mb_rate_limit()
     try:
         result = musicbrainzngs.search_releases(artist=artist, release=album, limit=1)
     except (musicbrainzngs.ResponseError, musicbrainzngs.NetworkError) as exc:
@@ -343,6 +372,7 @@ def search_musicbrainz_album(artist: str, album: str) -> Optional[AlbumInfo]:
         )
         return None
     rid = rels[0]["id"]
+    _mb_rate_limit()
     try:
         full = musicbrainzngs.get_release_by_id(
             rid, includes=["recordings", "artists"]
@@ -725,7 +755,6 @@ def _fetch_artwork_url(url: str) -> bytes | None:
         )
     except requests.RequestException as exc:
         _log_metadata_diagnostic("Artwork request failed for %s: %s", url, exc)
-        return None
     return None
 
 

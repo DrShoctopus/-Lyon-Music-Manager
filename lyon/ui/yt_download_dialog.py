@@ -71,7 +71,7 @@ class YtDownloadDialog(QDialog):
 
         # Output directory
         dir_row = QHBoxLayout()
-        self.dir_edit = QLineEdit(self._default_audio_dir())
+        self.dir_edit = QLineEdit(self._default_dir())
         browse_btn = QPushButton("Browse…")
         browse_btn.clicked.connect(self._browse_output)
         dir_row.addWidget(self.dir_edit, 1)
@@ -120,15 +120,10 @@ class YtDownloadDialog(QDialog):
 
     # ------------------------------------------------------------------ helpers
 
-    def _default_audio_dir(self) -> str:
+    def _default_dir(self) -> str:
         if self.settings.yt_output_dir:
             return self.settings.yt_output_dir
         return str(Path(self.settings.music_root) / "YouTube")
-
-    def _default_video_dir(self) -> str:
-        if self.settings.yt_video_output_dir:
-            return self.settings.yt_video_output_dir
-        return str(Path(self.settings.music_root) / "Videos")
 
     def _set_format_default(self) -> None:
         if self.radio_audio.isChecked():
@@ -144,10 +139,6 @@ class YtDownloadDialog(QDialog):
 
     def _on_type_changed(self) -> None:
         self._set_format_default()
-        if self.radio_audio.isChecked():
-            self.dir_edit.setText(self._default_audio_dir())
-        else:
-            self.dir_edit.setText(self._default_video_dir())
 
     def _browse_output(self) -> None:
         d = QFileDialog.getExistingDirectory(

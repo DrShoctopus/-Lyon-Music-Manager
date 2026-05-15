@@ -20,6 +20,9 @@ EQ_BANDS: tuple[tuple[str, str], ...] = (
 EQ_BAND_COUNT = len(EQ_BANDS)
 MIN_EQ_GAIN_DB = -12
 MAX_EQ_GAIN_DB = 12
+MIN_EQ_PREAMP_DB = -20
+MAX_EQ_PREAMP_DB = 20
+DEFAULT_EQ_PREAMP_DB = 0
 DEFAULT_EQ_CURVE_NAME = "Flat"
 UNSAVED_EQ_CURVE_NAME = "Custom (unsaved)"
 
@@ -59,6 +62,14 @@ def normalize_equalizer_bands(bands: Iterable[Any] | None) -> list[int]:
 def flat_equalizer_bands() -> list[int]:
     """Return a new flat ten-band EQ curve."""
     return [0] * EQ_BAND_COUNT
+
+
+def clamp_preamp(value: Any) -> int:
+    try:
+        gain = int(value)
+    except (TypeError, ValueError):
+        gain = DEFAULT_EQ_PREAMP_DB
+    return max(MIN_EQ_PREAMP_DB, min(MAX_EQ_PREAMP_DB, gain))
 
 
 def _clamp_gain(value: Any) -> int:

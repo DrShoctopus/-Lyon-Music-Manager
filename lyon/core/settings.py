@@ -10,8 +10,10 @@ from pathlib import Path
 
 from .equalizer import (
     DEFAULT_EQ_CURVE_NAME,
+    DEFAULT_EQ_PREAMP_DB,
     RESERVED_EQ_CURVE_NAMES,
     UNSAVED_EQ_CURVE_NAME,
+    clamp_preamp,
     flat_equalizer_bands,
     normalize_equalizer_bands,
 )
@@ -74,8 +76,9 @@ def normalize_library_paths(paths: object) -> list[str]:
 @dataclass
 class Settings:
     music_root: str = field(default_factory=lambda: str(_default_music_root()))
-    rip_format: str = "flac"           # flac is the only supported output today
-    flac_compression: int = 8           # 0-8
+    rip_format: str = "flac"           # flac | mp3 | aac | opus | ogg | alac | wav | aiff | wma
+    flac_compression: int = 4           # 0-8
+    rip_audio_bitrate: int = 320        # kbps, used by lossy formats (mp3, aac, opus, ogg, wma)
     cd_drive: str = ""                 # e.g. "D:" - blank means auto-pick first
     musicbrainz_app: str = "LyonMusicManager"
     musicbrainz_version: str = field(default_factory=_app_version)
@@ -86,9 +89,11 @@ class Settings:
     cuetools_db_metadata_enabled: bool = True
     download_artwork: bool = True
     metadata_diagnostics_enabled: bool = False
+    ctdb_verify_rips: bool = True
     last_volume: int = 80
     library_paths: list[str] = field(default_factory=list)
     equalizer_enabled: bool = False
+    equalizer_preamp: int = DEFAULT_EQ_PREAMP_DB
     equalizer_bands: list[int] = field(default_factory=flat_equalizer_bands)
     equalizer_curve_name: str = DEFAULT_EQ_CURVE_NAME
     equalizer_custom_curves: dict[str, list[int]] = field(default_factory=dict)
@@ -96,11 +101,11 @@ class Settings:
     yt_audio_format: str = "flac"        # flac | mp3
     yt_video_format: str = "mp4"         # mp4 | mkv | webm
     yt_output_dir: str = ""              # defaults to music_root/YouTube at runtime
-    yt_video_output_dir: str = ""        # defaults to music_root/Videos at runtime
     yt_auto_add: bool = True             # add downloaded files to library automatically
 
     def __post_init__(self) -> None:
         self.library_paths = normalize_library_paths(self.library_paths)
+        self.equalizer_preamp = clamp_preamp(self.equalizer_preamp)
         self.equalizer_bands = normalize_equalizer_bands(self.equalizer_bands)
         custom_curves = self.equalizer_custom_curves if isinstance(self.equalizer_custom_curves, dict) else {}
         self.equalizer_custom_curves = {
@@ -136,6 +141,9 @@ class Settings:
                     "settings.json was corrupt; reset to defaults. Bad file saved to %s",
                     backup,
                 )
+                instance = cls()
+                instance._corrupt_backup_path = str(backup)
+                return instance
         return cls()
 
     def save(self) -> None:

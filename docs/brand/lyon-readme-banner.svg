@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360" role="img" aria-labelledby="title desc">
-  <title id="title">Lyon Media Manager</title>
-  <desc id="desc">Glossy sea lion branding for the Lyon Media Manager README.</desc>
+  <title id="title">Sea Lyon Media Manager</title>
+  <desc id="desc">Glossy sea lion branding for the Sea Lyon Media Manager README.</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#12385f"/>
@@ -58,11 +58,11 @@
     </g>
     <path d="M75 159 C73 94 118 56 159 50" fill="none" stroke="#fff" stroke-width="6" stroke-linecap="round" opacity=".42"/>
   </g>
-  <g transform="translate(520 104)">
-    <text x="0" y="70" font-family="Segoe UI, Arial, sans-serif" font-size="88" font-weight="300" fill="#d9ecfb" opacity=".96">Lyon</text>
+  <g transform="translate(420 104)">
+    <text x="0" y="70" font-family="Segoe UI, Arial, sans-serif" font-size="88" font-weight="300" fill="#d9ecfb" opacity=".96">Sea Lyon</text>
     <text x="4" y="136" font-family="Segoe UI, Arial, sans-serif" font-size="42" font-weight="300" letter-spacing="12" fill="#42d6f5">Media Manager</text>
-    <line x1="6" y1="177" x2="382" y2="177" stroke="#10d5f0" stroke-opacity=".55"/>
-    <circle cx="184" cy="177" r="5" fill="#10d5f0"/>
-    <text x="80" y="226" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="300" letter-spacing="8" fill="#a6c4e1" opacity=".75">Organize. Play. Create.</text>
+    <line x1="6" y1="177" x2="482" y2="177" stroke="#10d5f0" stroke-opacity=".55"/>
+    <circle cx="244" cy="177" r="5" fill="#10d5f0"/>
+    <text x="100" y="226" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="300" letter-spacing="8" fill="#a6c4e1" opacity=".75">Organize. Play. Create.</text>
   </g>
 </svg>

@@ -23,9 +23,12 @@ from PySide6.QtWidgets import (
 from ..core.equalizer import (
     BUILTIN_EQ_CURVES,
     DEFAULT_EQ_CURVE_NAME,
+    DEFAULT_EQ_PREAMP_DB,
     EQ_BANDS,
     MAX_EQ_GAIN_DB,
+    MAX_EQ_PREAMP_DB,
     MIN_EQ_GAIN_DB,
+    MIN_EQ_PREAMP_DB,
     RESERVED_EQ_CURVE_NAMES,
     UNSAVED_EQ_CURVE_NAME,
     flat_equalizer_bands,
@@ -46,7 +49,7 @@ class EqualizerDialog(QDialog):
     custom presets in the same picker.
     """
 
-    equalizer_changed = Signal(bool, list)
+    equalizer_changed = Signal(bool, list, int)
     settings_saved = Signal(object)
 
     def __init__(self, settings: Settings, parent: QWidget | None = None):
@@ -95,6 +98,22 @@ class EqualizerDialog(QDialog):
         top_row.addWidget(delete_curve)
         layout.addLayout(top_row)
 
+        preamp_row = QHBoxLayout()
+        preamp_row.addWidget(QLabel("Preamp:"))
+        self._preamp_slider = QSlider(Qt.Horizontal)
+        self._preamp_slider.setRange(MIN_EQ_PREAMP_DB, MAX_EQ_PREAMP_DB)
+        self._preamp_slider.setValue(settings.equalizer_preamp)
+        self._preamp_slider.setTickPosition(QSlider.TicksBothSides)
+        self._preamp_slider.setTickInterval(5)
+        self._preamp_slider.setToolTip("Overall gain applied before the EQ bands")
+        self._preamp_slider.valueChanged.connect(self._preamp_changed)
+        preamp_row.addWidget(self._preamp_slider, 1)
+        self._preamp_label = QLabel(self._format_gain(settings.equalizer_preamp))
+        self._preamp_label.setMinimumWidth(54)
+        self._preamp_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        preamp_row.addWidget(self._preamp_label)
+        layout.addLayout(preamp_row)
+
         panel = QFrame()
         panel.setObjectName("equalizerPanel")
         grid = QGridLayout(panel)
@@ -127,8 +146,8 @@ class EqualizerDialog(QDialog):
         layout.addWidget(panel, 1)
 
         hint = QLabel(
-            "Lyon maps these ten controls directly to libVLC's native EQ bands "
-            "and automatically lowers preamp headroom on boosted curves to keep playback clean. "
+            "Preamp adjusts the overall input level before the EQ bands are applied. "
+            "Lyon maps the ten band controls directly to libVLC's native EQ. "
             "Changes apply immediately and are saved with the app settings."
         )
         hint.setWordWrap(True)
@@ -150,7 +169,13 @@ class EqualizerDialog(QDialog):
         layout.addLayout(buttons)
 
     def reset_flat(self) -> None:
+        self.enable_box.blockSignals(True)
         self.enable_box.setChecked(False)
+        self.enable_box.blockSignals(False)
+        self._preamp_slider.blockSignals(True)
+        self._preamp_slider.setValue(DEFAULT_EQ_PREAMP_DB)
+        self._preamp_slider.blockSignals(False)
+        self._preamp_label.setText(self._format_gain(DEFAULT_EQ_PREAMP_DB))
         self.result_settings.equalizer_curve_name = DEFAULT_EQ_CURVE_NAME
         self._select_curve(DEFAULT_EQ_CURVE_NAME, curve_type="builtin")
         self._set_sliders(flat_equalizer_bands())
@@ -184,7 +209,6 @@ class EqualizerDialog(QDialog):
         self.settings_saved.emit(self.result_settings)
 
     def closeEvent(self, event) -> None:
-        self.save_settings()
         super().closeEvent(event)
 
     def _populate_curve_combo(
@@ -237,7 +261,11 @@ class EqualizerDialog(QDialog):
 
     def _sync_result_settings(self) -> None:
         self.result_settings.equalizer_enabled = self.enable_box.isChecked()
+        self.result_settings.equalizer_preamp = self.preamp_value()
         self.result_settings.equalizer_bands = self.band_values()
+
+    def preamp_value(self) -> int:
+        return self._preamp_slider.value()
 
     def band_values(self) -> list[int]:
         return [slider.value() for slider in self._sliders]
@@ -275,9 +303,13 @@ class EqualizerDialog(QDialog):
         for slider, label in zip(self._sliders, self._value_labels, strict=True):
             label.setText(self._format_gain(slider.value()))
 
+    def _preamp_changed(self) -> None:
+        self._preamp_label.setText(self._format_gain(self._preamp_slider.value()))
+        self._emit_change()
+
     def _emit_change(self) -> None:
         self._sync_result_settings()
-        self.equalizer_changed.emit(self.result_settings.equalizer_enabled, self.band_values())
+        self.equalizer_changed.emit(self.result_settings.equalizer_enabled, self.band_values(), self.preamp_value())
 
     @staticmethod
     def _format_gain(value: int) -> str:

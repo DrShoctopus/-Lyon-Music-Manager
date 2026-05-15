@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QPixmap, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
     QAbstractItemView, QComboBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
@@ -154,6 +154,7 @@ def _rip_request_from_toc(
         target_dir=folder,
         track_offsets=tuple(toc.track_offsets),
         leadout_sector=toc.sectors,
+        ctdb_toc=toc.ctdb_toc_string,
     )
 
 
@@ -271,9 +272,13 @@ class RipperView(QWidget):
         self.ripper.log.connect(self.log)
         self.ripper.log.connect(self.status_label.setText)
 
-        self.album_edit.textChanged.connect(self._update_dest)
-        self.artist_edit.textChanged.connect(self._update_dest)
-        self.year_edit.textChanged.connect(self._update_dest)
+        self._dest_timer = QTimer(self)
+        self._dest_timer.setSingleShot(True)
+        self._dest_timer.setInterval(200)
+        self._dest_timer.timeout.connect(self._update_dest)
+        self.album_edit.textChanged.connect(self._dest_timer.start)
+        self.artist_edit.textChanged.connect(self._dest_timer.start)
+        self.year_edit.textChanged.connect(self._dest_timer.start)
 
         self.refresh_drives()
         self._update_dest()
@@ -330,6 +335,20 @@ class RipperView(QWidget):
             )
             self.status_label.setText("No audio disc detected.")
             return
+
+        if toc.discid and self.library.has_disc(toc.discid, toc.track_count):
+            album_info = self.library.album_for_disc(toc.discid)
+            label = f"{album_info[0]} – {album_info[1]}" if album_info else "this disc"
+            self._reset_disc_state()
+            self.status_label.setText("Already in library — disc ejected.")
+            cd_detect.eject(toc.drive)
+            QMessageBox.information(
+                self,
+                "Already in Library",
+                f"“{label}” is already in your library.\nThe disc has been ejected.",
+            )
+            return
+
         self._toc = toc
         self.status_label.setText(
             f"Disc found in {toc.drive} ({toc.track_count} tracks). Looking up metadata..."
@@ -339,6 +358,17 @@ class RipperView(QWidget):
             self._start_lookup(toc)
         else:
             self.start_btn.setEnabled(True)
+
+    def _reset_disc_state(self) -> None:
+        """Clear cached TOC + album info and wipe the disc-specific UI fields."""
+        self._toc = None
+        self._album = None
+        self.tracks_model.removeRows(0, self.tracks_model.rowCount())
+        self.album_edit.clear()
+        self.artist_edit.clear()
+        self.year_edit.clear()
+        self.cover.setPixmap(cover_pixmap(None, 140, "CD"))
+        self.progress.setValue(0)
 
     def _start_lookup(self, toc: cd_detect.DiscToc) -> None:
         self._lookup = _LookupThread(toc, self.settings, self)
@@ -555,8 +585,8 @@ class RipperView(QWidget):
     def _on_track_finished(self, n: int, path: str) -> None:
         self._set_track_progress(n, 100)
         self.progress.setValue(self.progress.value() + 1)
-        self.library.add_file(path)
-        self.library.conn.commit()
+        self.library.add_file(path, disc_id=self._toc.discid if self._toc else None)
+        self.library.commit()
 
     def _on_rip_finished(self, ok: bool, msg: str) -> None:
         self.status_label.setText(msg)
