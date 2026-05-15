@@ -9,12 +9,15 @@ from PySide6.QtCore import QThread, Signal
 from .settings import bundled_bin_dir
 
 
-def _ffmpeg_available() -> bool:
-    """Return True if ffmpeg is discoverable on PATH or in the bundled bin dir."""
-    if shutil.which("ffmpeg") or shutil.which("ffmpeg.exe"):
-        return True
+def _find_ffmpeg() -> Path | None:
+    """Return path to ffmpeg binary, checking bundled bin dir first, then PATH."""
     bin_dir = bundled_bin_dir()
-    return (bin_dir / "ffmpeg.exe").exists() or (bin_dir / "ffmpeg").exists()
+    for name in ("ffmpeg.exe", "ffmpeg"):
+        candidate = bin_dir / name
+        if candidate.exists():
+            return candidate
+    found = shutil.which("ffmpeg.exe") or shutil.which("ffmpeg")
+    return Path(found) if found else None
 
 
 class _YtLogger:
@@ -90,10 +93,10 @@ class YtDownloadWorker(QThread):
             Path(self.output_dir) / "%(uploader)s" / "%(title)s.%(ext)s"
         )
 
-        has_ffmpeg = _ffmpeg_available()
+        ffmpeg_path = _find_ffmpeg()
 
         if self.mode == "audio":
-            if not has_ffmpeg:
+            if not ffmpeg_path:
                 self.error.emit(
                     "ffmpeg is required for audio conversion but was not found. "
                     "Install ffmpeg and place it on PATH (or in the app bin folder), then retry."
@@ -112,7 +115,7 @@ class YtDownloadWorker(QThread):
             fmt_selector = "bestaudio/best"
             merge_fmt = None
         else:
-            if has_ffmpeg:
+            if ffmpeg_path:
                 postprocessors = [
                     {"key": "EmbedThumbnail"},
                     {"key": "FFmpegMetadata", "add_metadata": True},
@@ -126,7 +129,6 @@ class YtDownloadWorker(QThread):
                     "(quality capped at ~720p). Install ffmpeg for full quality and metadata embedding."
                 )
                 postprocessors = []
-                # Request a pre-merged mp4 stream; fall back to any best single stream.
                 fmt_selector = f"best[ext={self.fmt}]/best[ext=mp4]/best"
                 merge_fmt = None
 
@@ -144,6 +146,8 @@ class YtDownloadWorker(QThread):
         }
         if merge_fmt:
             ydl_opts["merge_output_format"] = merge_fmt
+        if ffmpeg_path:
+            ydl_opts["ffmpeg_location"] = str(ffmpeg_path.parent)
 
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
