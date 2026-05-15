@@ -256,6 +256,7 @@ class VideoPlayerView(QWidget):
         self._surface_attached = False  # deferred until first showEvent
         self._eq_enabled = False
         self._eq_bands: list[int] = []
+        self._eq_preamp: int = 0
         self._equalizer: Any = None
 
         try:
@@ -752,10 +753,11 @@ class VideoPlayerView(QWidget):
         self._player.audio_set_mute(checked)
         self._mute_btn.setText("--" if checked else "M")
 
-    def apply_equalizer(self, enabled: bool, bands: list[int]) -> None:
+    def apply_equalizer(self, enabled: bool, bands: list[int], preamp: int = 0) -> None:
         """Apply or clear the 10-band equalizer on the video player's VLC instance."""
         self._eq_enabled = enabled
         self._eq_bands = list(bands)
+        self._eq_preamp = int(preamp)
         if not self._available:
             return
         if not enabled:
@@ -770,7 +772,7 @@ class VideoPlayerView(QWidget):
             equalizer = self._vlc.AudioEqualizer()
             if equalizer is None:
                 raise RuntimeError("VLC did not create an AudioEqualizer instance")
-            equalizer.set_preamp(0.0)
+            equalizer.set_preamp(float(preamp))
             for band_index, band_gain in enumerate(normalized):
                 equalizer.set_amp_at_index(float(band_gain), band_index)
             self._player.set_equalizer(equalizer)

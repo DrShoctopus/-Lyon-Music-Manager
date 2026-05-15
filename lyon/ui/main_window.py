@@ -56,7 +56,7 @@ class MainWindow(QMainWindow):
         self.library = Library()
         self.player = Player(self)
         self.player.set_volume(self.settings.last_volume)
-        self.player.set_equalizer(self.settings.equalizer_enabled, self.settings.equalizer_bands)
+        self.player.set_equalizer(self.settings.equalizer_enabled, self.settings.equalizer_bands, self.settings.equalizer_preamp)
         self._scan_thread: _LibraryScanThread | None = None
         self._equalizer_dialog: EqualizerDialog | None = None
         self._queue_dialog: QueueDialog | None = None
@@ -127,7 +127,7 @@ class MainWindow(QMainWindow):
         self.ripper_view = RipperView(self.settings, self.library)
         self.youtube_view = YouTubeView()
         self.video_player_view = VideoPlayerView(library=self.library)
-        self.video_player_view.apply_equalizer(self.settings.equalizer_enabled, self.settings.equalizer_bands)
+        self.video_player_view.apply_equalizer(self.settings.equalizer_enabled, self.settings.equalizer_bands, self.settings.equalizer_preamp)
         self._library_refresh_timer.timeout.connect(self.video_player_view.refresh_catalog)
 
         self.stack.addWidget(self.now_playing)
@@ -389,11 +389,12 @@ class MainWindow(QMainWindow):
 
     def _apply_equalizer_settings(self, settings: Settings) -> None:
         self.settings.equalizer_enabled = settings.equalizer_enabled
+        self.settings.equalizer_preamp = settings.equalizer_preamp
         self.settings.equalizer_bands = list(settings.equalizer_bands)
         self.settings.equalizer_curve_name = settings.equalizer_curve_name
         self.settings.equalizer_custom_curves = dict(settings.equalizer_custom_curves)
-        self.player.set_equalizer(self.settings.equalizer_enabled, self.settings.equalizer_bands)
-        self.video_player_view.apply_equalizer(self.settings.equalizer_enabled, self.settings.equalizer_bands)
+        self.player.set_equalizer(self.settings.equalizer_enabled, self.settings.equalizer_bands, self.settings.equalizer_preamp)
+        self.video_player_view.apply_equalizer(self.settings.equalizer_enabled, self.settings.equalizer_bands, self.settings.equalizer_preamp)
         self.statusBar().showMessage("Equalizer settings saved.", 3000)
 
     def _clear_equalizer_dialog(self, *_args) -> None:

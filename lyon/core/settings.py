@@ -10,8 +10,10 @@ from pathlib import Path
 
 from .equalizer import (
     DEFAULT_EQ_CURVE_NAME,
+    DEFAULT_EQ_PREAMP_DB,
     RESERVED_EQ_CURVE_NAMES,
     UNSAVED_EQ_CURVE_NAME,
+    clamp_preamp,
     flat_equalizer_bands,
     normalize_equalizer_bands,
 )
@@ -91,6 +93,7 @@ class Settings:
     last_volume: int = 80
     library_paths: list[str] = field(default_factory=list)
     equalizer_enabled: bool = False
+    equalizer_preamp: int = DEFAULT_EQ_PREAMP_DB
     equalizer_bands: list[int] = field(default_factory=flat_equalizer_bands)
     equalizer_curve_name: str = DEFAULT_EQ_CURVE_NAME
     equalizer_custom_curves: dict[str, list[int]] = field(default_factory=dict)
@@ -102,6 +105,7 @@ class Settings:
 
     def __post_init__(self) -> None:
         self.library_paths = normalize_library_paths(self.library_paths)
+        self.equalizer_preamp = clamp_preamp(self.equalizer_preamp)
         self.equalizer_bands = normalize_equalizer_bands(self.equalizer_bands)
         custom_curves = self.equalizer_custom_curves if isinstance(self.equalizer_custom_curves, dict) else {}
         self.equalizer_custom_curves = {
