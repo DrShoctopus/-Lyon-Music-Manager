@@ -218,6 +218,7 @@ class VideoPlayerView(QWidget):
         self._user_dragging = False
         self._current_path = ""
         self._fs_window: _FullscreenWindow | None = None
+        self._surface_attached = False  # deferred until first showEvent
 
         try:
             import importlib
@@ -262,6 +263,7 @@ class VideoPlayerView(QWidget):
         layout.addStretch(1)
 
     def _build_player_ui(self) -> None:
+        self.setObjectName("videoPlayerView")
         # ---- Toolbar -------------------------------------------------------
         toolbar = QHBoxLayout()
         toolbar.setContentsMargins(10, 8, 10, 6)
@@ -300,7 +302,6 @@ class VideoPlayerView(QWidget):
         # ---- Video surface -------------------------------------------------
         self._surface = _VideoSurface(self)
         self._surface.mouseDoubleClickEvent = lambda ev: self._enter_fullscreen()
-        self._attach_vlc_to(self._surface)
 
         # ---- Controls frame ------------------------------------------------
         controls = QFrame()
@@ -645,6 +646,9 @@ class VideoPlayerView(QWidget):
             self._load_path(path)
 
     def _load_path(self, path: str) -> None:
+        if not self._surface_attached:
+            self._attach_vlc_to(self._surface)
+            self._surface_attached = True
         self._current_path = path
         media = self._instance.media_new_path(path)
         self._player.set_media(media)
@@ -860,6 +864,17 @@ class VideoPlayerView(QWidget):
             self._player.pause()
             self._play_btn.setText("▶")
             self._play_btn.setChecked(False)
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        # Defer winId() / native-window creation until the widget is fully
+        # embedded in the Qt window hierarchy.  Calling it during __init__
+        # (before addWidget to QStackedWidget) produced a premature native
+        # window that broke QStackedWidget show/hide, causing the previous
+        # tab's content to bleed through and the transport bar to duplicate.
+        if self._available and not self._surface_attached:
+            self._attach_vlc_to(self._surface)
+            self._surface_attached = True
 
     def keyPressEvent(self, ev) -> None:
         if not self._available:
