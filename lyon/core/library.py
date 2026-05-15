@@ -174,6 +174,12 @@ class Library:
 
         with self._lock:
             if self.conn.execute("SELECT 1 FROM tracks WHERE path = ?", (path,)).fetchone():
+                if disc_id:
+                    self.conn.execute(
+                        "UPDATE tracks SET disc_id = ?"
+                        " WHERE path = ? AND (disc_id IS NULL OR disc_id = '')",
+                        (disc_id, path),
+                    )
                 return False
         meta = _read_tags(path)
         if meta is None:
