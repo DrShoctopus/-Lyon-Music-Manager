@@ -257,15 +257,11 @@ class MainWindow(QMainWindow):
 
     def _on_view_changed(self, _idx: int) -> None:
         current = self.stack.currentWidget()
-        is_youtube = current is self.youtube_view
         is_rip = current is self.ripper_view
         is_video = current is self.video_player_view
-        hide_transport = is_youtube or is_rip or is_video
-        self.transport.setVisible(not hide_transport)
-        if is_youtube or is_rip:
+        self.transport.setVisible(not is_rip and not is_video)
+        if is_rip:
             self.player.stop()
-        if not is_youtube:
-            self.youtube_view.pause_all_videos()
         if not is_video:
             self.video_player_view.pause_playback()
 
@@ -397,9 +393,9 @@ class MainWindow(QMainWindow):
             self, "About " + __app_name__,
             f"<h3>{__app_name__} {__version__}</h3>"
             "<p><b>Custom Built For Chuck Lyon</b></p>"
-            "<p>Rip your CDs to FLAC, manage your library, browse YouTube, "
+            "<p>Rip your CDs to FLAC, manage your library, search YouTube, "
             "and play music with a familiar Windows Media Player look.</p>"
-            "<p>Uses MusicBrainz, Cover Art Archive, ffmpeg, and Qt WebEngine.</p>",
+            "<p>Uses MusicBrainz, Cover Art Archive, ffmpeg, and yt-dlp.</p>",
         )
 
     # ------------------------------------------------------------------ drag-and-drop
