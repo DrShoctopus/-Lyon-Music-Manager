@@ -29,13 +29,14 @@ from .youtube_view import YouTubeView
 
 
 class _LibraryScanThread(QThread):
-    finished_with = Signal(int, str)  # (new_tracks, label)
+    finished_with = Signal(int, int, str)  # (new_tracks, removed_tracks, label)
 
-    def __init__(self, library: Library, roots: list[str], label: str, parent=None):
+    def __init__(self, library: Library, roots: list[str], label: str, prune: bool = False, parent=None):
         super().__init__(parent)
         self.library = library
         self.roots = roots
         self.label = label
+        self.prune = prune
         self._cancel = False
 
     def request_stop(self) -> None:
@@ -43,8 +44,9 @@ class _LibraryScanThread(QThread):
         self._cancel = True
 
     def run(self) -> None:
+        removed = self.library.remove_missing() if self.prune else 0
         n = self.library.scan_paths(self.roots, should_cancel=lambda: self._cancel)
-        self.finished_with.emit(n, self.label)
+        self.finished_with.emit(n, removed, self.label)
 
 
 class MainWindow(QMainWindow):
@@ -276,7 +278,7 @@ class MainWindow(QMainWindow):
         self._start_scan([folder], f"Added tracks from {folder}")
 
     def rescan(self) -> None:
-        self._start_scan(self.settings.library_paths or [self.settings.music_root], "Rescanned")
+        self._start_scan(self.settings.library_paths or [self.settings.music_root], "Rescanned", prune=True)
 
     def _on_yt_download(self, url: str) -> None:
         dlg = YtDownloadDialog(url, self.settings, self.library, self)
@@ -302,18 +304,21 @@ class MainWindow(QMainWindow):
             f"Enqueued {count} track{plural}. Queue now has {total} track{queue_plural}.", 3000
         )
 
-    def _start_scan(self, roots: list[str], label: str) -> None:
+    def _start_scan(self, roots: list[str], label: str, prune: bool = False) -> None:
         if self._scan_thread is not None and self._scan_thread.isRunning():
             self.statusBar().showMessage("Library scan already running.", 4000)
             return
         self.statusBar().showMessage("Scanning library...")
-        self._scan_thread = _LibraryScanThread(self.library, list(roots), label, self)
+        self._scan_thread = _LibraryScanThread(self.library, list(roots), label, prune, self)
         self._scan_thread.finished_with.connect(self._on_scan_finished)
         self._scan_thread.finished.connect(self._scan_thread.deleteLater)
         self._scan_thread.start()
 
-    def _on_scan_finished(self, n: int, label: str) -> None:
-        self.statusBar().showMessage(f"{label}: {n} new tracks", 5000)
+    def _on_scan_finished(self, n: int, removed: int, label: str) -> None:
+        parts = [f"{label}: {n} new tracks"]
+        if removed:
+            parts.append(f"{removed} removed")
+        self.statusBar().showMessage(", ".join(parts), 5000)
         self.library_view.refresh()
         self.video_player_view.refresh_catalog()
         self._scan_thread = None
