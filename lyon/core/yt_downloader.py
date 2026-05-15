@@ -68,13 +68,13 @@ class YtDownloadWorker(QThread):
     -------
     progress(str)      -- log / status line suitable for display
     track_ready(str)   -- absolute path of each completed output file
-    finished(int, int) -- (succeeded, failed) counts when done
+    download_finished(int, int) -- (succeeded, failed) counts when done
     error(str)         -- emitted on a fatal error before finished
     """
 
     progress = Signal(str)
     track_ready = Signal(str)
-    finished = Signal(int, int)
+    download_finished = Signal(int, int)
     error = Signal(str)
 
     def __init__(
@@ -108,6 +108,7 @@ class YtDownloadWorker(QThread):
             self.error.emit(
                 "yt-dlp is not installed. Run:  pip install yt-dlp"
             )
+            self.download_finished.emit(0, 1)
             return
 
         out_template = str(
@@ -122,7 +123,7 @@ class YtDownloadWorker(QThread):
                     "ffmpeg is required for audio conversion but was not found. "
                     "Install ffmpeg and place it on PATH (or in the app bin folder), then retry."
                 )
-                self.finished.emit(0, 1)
+                self.download_finished.emit(0, 1)
                 return
             postprocessors = [
                 {
@@ -178,7 +179,7 @@ class YtDownloadWorker(QThread):
             if not self._cancelled:
                 self.error.emit(str(exc))
         finally:
-            self.finished.emit(self._succeeded, self._failed)
+            self.download_finished.emit(self._succeeded, self._failed)
 
     # ------------------------------------------------------------------ hooks
 

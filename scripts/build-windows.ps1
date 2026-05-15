@@ -191,6 +191,13 @@ if ($LASTEXITCODE -ne 0) { throw "Import smoke test failed; aborting before PyIn
 if ($LASTEXITCODE -ne 0) { throw "VLC backend smoke test failed; aborting before PyInstaller." }
 
 # 6. PyInstaller bundle -------------------------------------------------------
+Write-Host "==> Validating PyInstaller inputs" -ForegroundColor Cyan
+foreach ($required in @('main.py', 'docs\brand\lyon-app-icon.png', 'bin\ffmpeg.exe')) {
+    if (-not (Test-Path (Join-Path $Root $required))) {
+        throw "Required build input missing: $required"
+    }
+}
+
 Write-Host "==> Running PyInstaller" -ForegroundColor Cyan
 & $venvPython -m PyInstaller --noconfirm build\lyon.spec
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }

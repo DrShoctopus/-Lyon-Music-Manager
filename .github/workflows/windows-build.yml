@@ -109,6 +109,15 @@ jobs:
           python -c "from lyon.app import main; print('imports OK')"
           python -c "from PySide6.QtCore import QCoreApplication; app = QCoreApplication([]); from lyon.core.playback_backend import create_playback_backend; backend = create_playback_backend(); print(type(backend).__name__); assert type(backend).__name__ == 'VlcPlaybackBackend'"
 
+      - name: Validate PyInstaller inputs
+        shell: pwsh
+        run: |
+          foreach ($required in @('main.py', 'docs\brand\lyon-app-icon.png', 'bin\ffmpeg.exe')) {
+            if (-not (Test-Path $required)) {
+              throw "Required build input missing: $required"
+            }
+          }
+
       - name: Build with PyInstaller
         run: python -m PyInstaller --noconfirm build/lyon.spec
 

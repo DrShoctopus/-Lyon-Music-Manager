@@ -13,9 +13,13 @@ AccurateRip v1 CRC algorithm:
 """
 from __future__ import annotations
 
-import array
+from collections import deque
+import queue
+import struct
 import subprocess
 import sys
+import threading
+import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -29,6 +33,8 @@ import requests
 CTDB_LOOKUP_URL = "http://db.cuetools.net/lookup2.php"
 CTDB_TIMEOUT_SECONDS = 20
 _SKIP_SAMPLES = 2940  # 5 CD frames * 588 samples/frame
+_DECODE_TIMEOUT_SECONDS = 180
+_DECODE_CHUNK_SIZE = 64 * 1024
 
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
@@ -52,7 +58,7 @@ def compute_accuraterip_v1_crc(
 ) -> Optional[int]:
     """Decode *flac_path* and return its AccurateRip v1 CRC, or None on error."""
     try:
-        proc = subprocess.run(
+        proc = subprocess.Popen(
             [
                 ffmpeg,
                 "-hide_banner",
@@ -66,30 +72,120 @@ def compute_accuraterip_v1_crc(
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             creationflags=_NO_WINDOW,
-            timeout=180,
-            check=False,
         )
     except (OSError, subprocess.SubprocessError):
         return None
 
-    data = proc.stdout
-    if not data or len(data) % 4 != 0:
+    if proc.stdout is None:
+        _terminate_decode_process(proc)
         return None
 
-    num_samples = len(data) // 4
-    # array.array stores raw C uint32 values (~4 bytes each vs ~28 bytes per int
-    # in a Python tuple), cutting peak memory use by ~85% on a 42 MB PCM buffer.
-    samples = array.array('I', data)
-    if sys.byteorder == 'big':
-        samples.byteswap()
+    try:
+        return _crc_from_pcm_stream(
+            proc,
+            is_first_track=is_first_track,
+            is_last_track=is_last_track,
+        )
+    except (OSError, subprocess.SubprocessError):
+        _terminate_decode_process(proc)
+        return None
 
+
+def _crc_from_pcm_stream(
+    proc: subprocess.Popen,
+    *,
+    is_first_track: bool,
+    is_last_track: bool,
+) -> Optional[int]:
+    chunks: queue.Queue[bytes | None] = queue.Queue()
+    assert proc.stdout is not None
+
+    def _read_stdout() -> None:
+        try:
+            while True:
+                chunk = proc.stdout.read(_DECODE_CHUNK_SIZE)
+                if not chunk:
+                    break
+                chunks.put(chunk)
+        except OSError:
+            pass
+        finally:
+            chunks.put(None)
+
+    reader = threading.Thread(target=_read_stdout, name="ctdb-ffmpeg-stdout", daemon=True)
+    reader.start()
+
+    crc = 0
+    sample_index = 0
     skip_start = _SKIP_SAMPLES if is_first_track else 0
-    skip_end = num_samples - _SKIP_SAMPLES if is_last_track and num_samples > _SKIP_SAMPLES else num_samples
+    trailing: deque[tuple[int, int]] = deque()
+    leftover = b""
+    deadline = time.monotonic() + _DECODE_TIMEOUT_SECONDS
+    saw_eof = False
 
-    # Accumulate without per-iteration masking to keep the inner loop fast;
-    # mask only once at the end.
-    crc = sum(samples[i] * (i + 1) for i in range(skip_start, skip_end))
+    while not saw_eof:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            _terminate_decode_process(proc)
+            reader.join(timeout=1)
+            return None
+        try:
+            chunk = chunks.get(timeout=min(0.1, remaining))
+        except queue.Empty:
+            continue
+        if chunk is None:
+            saw_eof = True
+            continue
+        data = leftover + chunk
+        usable = len(data) - (len(data) % 4)
+        leftover = data[usable:]
+        if usable == 0:
+            continue
+        for (sample,) in struct.iter_unpack("<I", data[:usable]):
+            if is_last_track:
+                trailing.append((sample_index, sample))
+                if len(trailing) > _SKIP_SAMPLES:
+                    crc = _accumulate_sample(crc, trailing.popleft(), skip_start)
+            elif sample_index >= skip_start:
+                crc += sample * (sample_index + 1)
+            sample_index += 1
+
+    try:
+        proc.wait(timeout=1)
+    except subprocess.TimeoutExpired:
+        _terminate_decode_process(proc)
+        reader.join(timeout=1)
+        return None
+    reader.join(timeout=1)
+
+    if proc.returncode != 0 or leftover or sample_index == 0:
+        return None
+
+    if is_last_track and sample_index <= _SKIP_SAMPLES:
+        while trailing:
+            crc = _accumulate_sample(crc, trailing.popleft(), skip_start)
+
     return crc & 0xFFFFFFFF
+
+
+def _accumulate_sample(crc: int, indexed_sample: tuple[int, int], skip_start: int) -> int:
+    index, sample = indexed_sample
+    if index < skip_start:
+        return crc
+    return crc + sample * (index + 1)
+
+
+def _terminate_decode_process(proc: subprocess.Popen) -> None:
+    if proc.poll() is not None:
+        return
+    try:
+        proc.kill()
+    except OSError:
+        pass
+    try:
+        proc.wait(timeout=1)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
 
 
 def fetch_ctdb_crcs(

@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
 
 from .. import __app_name__, __version__
 from ..core import metadata
+from ..core.cd_detect import close_dll_handles as close_cd_dll_handles
 from ..core.library import Library
 from ..core.playback_backend import close_dll_handles
 from ..core.player import Player
@@ -295,6 +296,8 @@ class MainWindow(QMainWindow):
         self._tab_buttons["YouTube"].setChecked(True)
         if self.youtube_view.search_youtube(query):
             self.statusBar().showMessage(f"Searching YouTube for {query}", 3000)
+        elif self.youtube_view.is_searching():
+            self.statusBar().showMessage("YouTube search already in progress.", 3000)
         else:
             self.statusBar().showMessage("YouTube search is unavailable.", 3000)
 
@@ -339,8 +342,18 @@ class MainWindow(QMainWindow):
         if dlg.exec():
             self.settings = dlg.result_settings
             self.settings.save()
+            metadata.reset_musicbrainz_useragent()
             self.ripper_view.apply_settings(self.settings)
-            self.player.set_equalizer(self.settings.equalizer_enabled, self.settings.equalizer_bands)
+            self.player.set_equalizer(
+                self.settings.equalizer_enabled,
+                self.settings.equalizer_bands,
+                self.settings.equalizer_preamp,
+            )
+            self.video_player_view.apply_equalizer(
+                self.settings.equalizer_enabled,
+                self.settings.equalizer_bands,
+                self.settings.equalizer_preamp,
+            )
             if self.settings.library_paths != old_paths and self.settings.library_paths:
                 self._start_scan(self.settings.library_paths, "Scanned")
             self.statusBar().showMessage("Settings saved.", 3000)
@@ -352,6 +365,7 @@ class MainWindow(QMainWindow):
         if dlg.exec():
             self.settings = dlg.result_settings
             self.settings.save()
+            metadata.reset_musicbrainz_useragent()
             self.ripper_view.apply_settings(self.settings)
             if self.settings.library_paths:
                 self._start_scan(self.settings.library_paths, "Scanned")
@@ -457,6 +471,7 @@ class MainWindow(QMainWindow):
         if self._scan_thread is not None and self._scan_thread.isRunning():
             self._scan_thread.request_stop()
             self._scan_thread.wait()
+        self.youtube_view.shutdown()
         # Cancel any in-flight rip / disc lookup so worker threads don't
         # outlive the window.
         self.ripper_view.shutdown()
@@ -469,5 +484,6 @@ class MainWindow(QMainWindow):
         self.player.cleanup()
         self.library.close()
         metadata.shutdown()
+        close_cd_dll_handles()
         close_dll_handles()
         super().closeEvent(ev)

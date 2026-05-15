@@ -1,9 +1,13 @@
 from lyon.core.cd_detect import (
     _CtdbTocEntry,
+    _DLL_DIRECTORY_HANDLES,
+    _ensure_bin_dir_on_path,
     _ctdb_entries_from_windows_toc,
     _ctdb_toc_from_track_data,
     _disc_toc_from_ctdb_entries,
+    close_dll_handles,
 )
+from lyon.core import cd_detect
 
 
 def _track_data(track_number: int, control_adr: int, offset: int) -> bytes:
@@ -82,3 +86,25 @@ def test_windows_toc_parser_detects_audio_data_and_leadout_entries():
             is_leadout=True,
         ),
     ]
+
+
+def test_bin_dir_dll_handle_is_retained_and_closed(monkeypatch, tmp_path):
+    class Handle:
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    handle = Handle()
+    monkeypatch.setattr(cd_detect, "_bin_dir_on_path", False)
+    _DLL_DIRECTORY_HANDLES.clear()
+    monkeypatch.setattr(cd_detect, "bundled_bin_dir", lambda: tmp_path)
+    monkeypatch.setenv("PATH", "")
+    monkeypatch.setattr(cd_detect.os, "add_dll_directory", lambda path: handle, raising=False)
+
+    _ensure_bin_dir_on_path()
+
+    assert _DLL_DIRECTORY_HANDLES == [handle]
+    close_dll_handles()
+    assert handle.closed
+    assert _DLL_DIRECTORY_HANDLES == []
