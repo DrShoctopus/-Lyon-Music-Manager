@@ -87,3 +87,24 @@ def test_track_rows_include_audio_details(tmp_path):
 
     assert track.bitrate == 320000
     assert track.samplerate == 48000
+
+
+def test_add_file_backfills_disc_id_for_existing_track(tmp_path):
+    """add_file() must write disc_id even when the path already exists in the DB.
+
+    Without this, tracks scanned before disc-ID support was added would never
+    get their disc_id populated, so has_disc() would always return False and
+    the "Already in library" dialog would never appear.
+    """
+    library = Library(tmp_path / "library.db")
+    # Simulate a track added before disc_id support (no disc_id column value).
+    add_track(library, "/music/track01.flac", artist="Artist", album="Album")
+
+    # Confirm no disc_id is set yet.
+    assert not library.has_disc("DISCID123", 1)
+
+    # Re-add the same path with a disc_id (simulates re-ripping or backfill).
+    library.add_file("/music/track01.flac", disc_id="DISCID123")
+    library.commit()
+
+    assert library.has_disc("DISCID123", 1)
