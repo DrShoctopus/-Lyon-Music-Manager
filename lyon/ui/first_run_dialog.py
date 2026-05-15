@@ -19,14 +19,14 @@ class FirstRunDialog(QDialog):
 
     def __init__(self, settings: Settings, parent: QWidget | None = None):
         super().__init__(parent)
-        self.setWindowTitle("Welcome to Lyon Media Manager")
+        self.setWindowTitle("Welcome to Sea Lyon Media Manager")
         self.resize(680, 480)
         self.result_settings = replace(settings)
         self.result_settings.library_paths = normalize_library_paths(settings.library_paths)
         self.skipped = False
         self._checks = run_dependency_checks()
 
-        title = QLabel("Let’s finish setting up Lyon Media Manager")
+        title = QLabel("Let’s finish setting up Sea Lyon Media Manager")
         font = title.font(); font.setPointSize(15); font.setBold(True); title.setFont(font)
         title.setStyleSheet("color:#72f4ff;")
 

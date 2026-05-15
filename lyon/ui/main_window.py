@@ -29,13 +29,14 @@ from .youtube_view import YouTubeView
 
 
 class _LibraryScanThread(QThread):
-    finished_with = Signal(int, str)  # (new_tracks, label)
+    finished_with = Signal(int, int, str)  # (new_tracks, removed_tracks, label)
 
-    def __init__(self, library: Library, roots: list[str], label: str, parent=None):
+    def __init__(self, library: Library, roots: list[str], label: str, prune: bool = False, parent=None):
         super().__init__(parent)
         self.library = library
         self.roots = roots
         self.label = label
+        self.prune = prune
         self._cancel = False
 
     def request_stop(self) -> None:
@@ -43,8 +44,9 @@ class _LibraryScanThread(QThread):
         self._cancel = True
 
     def run(self) -> None:
+        removed = self.library.remove_missing() if self.prune else 0
         n = self.library.scan_paths(self.roots, should_cancel=lambda: self._cancel)
-        self.finished_with.emit(n, self.label)
+        self.finished_with.emit(n, removed, self.label)
 
 
 class MainWindow(QMainWindow):
@@ -54,7 +56,7 @@ class MainWindow(QMainWindow):
         self.library = Library()
         self.player = Player(self)
         self.player.set_volume(self.settings.last_volume)
-        self.player.set_equalizer(self.settings.equalizer_enabled, self.settings.equalizer_bands)
+        self.player.set_equalizer(self.settings.equalizer_enabled, self.settings.equalizer_bands, self.settings.equalizer_preamp)
         self._scan_thread: _LibraryScanThread | None = None
         self._equalizer_dialog: EqualizerDialog | None = None
         self._queue_dialog: QueueDialog | None = None
@@ -103,10 +105,6 @@ class MainWindow(QMainWindow):
             self.tab_group.addButton(btn)
             self._tab_buttons[name] = btn
         tlayout.addStretch(1)
-        settings_btn = QPushButton("Settings")
-        settings_btn.setObjectName("navTab")
-        settings_btn.clicked.connect(self.open_settings)
-        tlayout.addWidget(settings_btn)
         queue_btn = QPushButton("Queue")
         queue_btn.setObjectName("navTab")
         queue_btn.clicked.connect(self.open_queue)
@@ -115,6 +113,10 @@ class MainWindow(QMainWindow):
         equalizer_btn.setObjectName("navTab")
         equalizer_btn.clicked.connect(self.open_equalizer)
         tlayout.addWidget(equalizer_btn)
+        settings_btn = QPushButton("Settings")
+        settings_btn.setObjectName("navTab")
+        settings_btn.clicked.connect(self.open_settings)
+        tlayout.addWidget(settings_btn)
         layout.addWidget(tabs)
 
         # ---- stacked content
@@ -125,6 +127,7 @@ class MainWindow(QMainWindow):
         self.ripper_view = RipperView(self.settings, self.library)
         self.youtube_view = YouTubeView()
         self.video_player_view = VideoPlayerView(library=self.library)
+        self.video_player_view.apply_equalizer(self.settings.equalizer_enabled, self.settings.equalizer_bands, self.settings.equalizer_preamp)
         self._library_refresh_timer.timeout.connect(self.video_player_view.refresh_catalog)
 
         self.stack.addWidget(self.now_playing)
@@ -227,6 +230,9 @@ class MainWindow(QMainWindow):
         search_action.setShortcut("Ctrl+F")
         playback_menu.addAction(search_action)
 
+        settings_menu = m.addMenu("&Settings")
+        settings_menu.addAction(QAction("Open Settings", self, triggered=self.open_settings))
+
         help_menu = m.addMenu("&Help")
         help_menu.addAction(QAction("Runtime Diagnostics", self, triggered=self.show_diagnostics))
         help_menu.addAction(QAction("About", self, triggered=self.show_about))
@@ -257,15 +263,11 @@ class MainWindow(QMainWindow):
 
     def _on_view_changed(self, _idx: int) -> None:
         current = self.stack.currentWidget()
-        is_youtube = current is self.youtube_view
         is_rip = current is self.ripper_view
         is_video = current is self.video_player_view
-        hide_transport = is_youtube or is_rip or is_video
-        self.transport.setVisible(not hide_transport)
-        if is_youtube or is_rip:
+        self.transport.setVisible(not is_rip and not is_video)
+        if is_rip:
             self.player.stop()
-        if not is_youtube:
-            self.youtube_view.pause_all_videos()
         if not is_video:
             self.video_player_view.pause_playback()
 
@@ -280,7 +282,7 @@ class MainWindow(QMainWindow):
         self._start_scan([folder], f"Added tracks from {folder}")
 
     def rescan(self) -> None:
-        self._start_scan(self.settings.library_paths or [self.settings.music_root], "Rescanned")
+        self._start_scan(self.settings.library_paths or [self.settings.music_root], "Rescanned", prune=True)
 
     def _on_yt_download(self, url: str) -> None:
         dlg = YtDownloadDialog(url, self.settings, self.library, self)
@@ -306,18 +308,21 @@ class MainWindow(QMainWindow):
             f"Enqueued {count} track{plural}. Queue now has {total} track{queue_plural}.", 3000
         )
 
-    def _start_scan(self, roots: list[str], label: str) -> None:
+    def _start_scan(self, roots: list[str], label: str, prune: bool = False) -> None:
         if self._scan_thread is not None and self._scan_thread.isRunning():
             self.statusBar().showMessage("Library scan already running.", 4000)
             return
         self.statusBar().showMessage("Scanning library...")
-        self._scan_thread = _LibraryScanThread(self.library, list(roots), label, self)
+        self._scan_thread = _LibraryScanThread(self.library, list(roots), label, prune, self)
         self._scan_thread.finished_with.connect(self._on_scan_finished)
         self._scan_thread.finished.connect(self._scan_thread.deleteLater)
         self._scan_thread.start()
 
-    def _on_scan_finished(self, n: int, label: str) -> None:
-        self.statusBar().showMessage(f"{label}: {n} new tracks", 5000)
+    def _on_scan_finished(self, n: int, removed: int, label: str) -> None:
+        parts = [f"{label}: {n} new tracks"]
+        if removed:
+            parts.append(f"{removed} removed")
+        self.statusBar().showMessage(", ".join(parts), 5000)
         self.library_view.refresh()
         self.video_player_view.refresh_catalog()
         self._scan_thread = None
@@ -375,6 +380,7 @@ class MainWindow(QMainWindow):
         if self._equalizer_dialog is None:
             self._equalizer_dialog = EqualizerDialog(self.settings, self)
             self._equalizer_dialog.equalizer_changed.connect(self.player.set_equalizer)
+            self._equalizer_dialog.equalizer_changed.connect(self.video_player_view.apply_equalizer)
             self._equalizer_dialog.settings_saved.connect(self._apply_equalizer_settings)
             self._equalizer_dialog.finished.connect(self._clear_equalizer_dialog)
         self._equalizer_dialog.show()
@@ -383,10 +389,12 @@ class MainWindow(QMainWindow):
 
     def _apply_equalizer_settings(self, settings: Settings) -> None:
         self.settings.equalizer_enabled = settings.equalizer_enabled
+        self.settings.equalizer_preamp = settings.equalizer_preamp
         self.settings.equalizer_bands = list(settings.equalizer_bands)
         self.settings.equalizer_curve_name = settings.equalizer_curve_name
         self.settings.equalizer_custom_curves = dict(settings.equalizer_custom_curves)
-        self.player.set_equalizer(self.settings.equalizer_enabled, self.settings.equalizer_bands)
+        self.player.set_equalizer(self.settings.equalizer_enabled, self.settings.equalizer_bands, self.settings.equalizer_preamp)
+        self.video_player_view.apply_equalizer(self.settings.equalizer_enabled, self.settings.equalizer_bands, self.settings.equalizer_preamp)
         self.statusBar().showMessage("Equalizer settings saved.", 3000)
 
     def _clear_equalizer_dialog(self, *_args) -> None:
@@ -397,9 +405,9 @@ class MainWindow(QMainWindow):
             self, "About " + __app_name__,
             f"<h3>{__app_name__} {__version__}</h3>"
             "<p><b>Custom Built For Chuck Lyon</b></p>"
-            "<p>Rip your CDs to FLAC, manage your library, browse YouTube, "
+            "<p>Rip your CDs to FLAC, manage your library, search YouTube, "
             "and play music with a familiar Windows Media Player look.</p>"
-            "<p>Uses MusicBrainz, Cover Art Archive, ffmpeg, and Qt WebEngine.</p>",
+            "<p>Uses MusicBrainz, Cover Art Archive, ffmpeg, and yt-dlp.</p>",
         )
 
     # ------------------------------------------------------------------ drag-and-drop

@@ -1,4 +1,4 @@
-"""Lyon Media Manager startup branding helpers."""
+"""Sea Lyon Media Manager startup branding helpers."""
 from __future__ import annotations
 
 import sys

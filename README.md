@@ -1,10 +1,10 @@
 <p align="center">
-  <img src="docs/brand/lyon-splash.png" alt="Lyon Media Manager sea lion splash" width="100%">
+  <img src="docs/brand/lyon-splash.png" alt="Sea Lyon Media Manager sea lion splash" width="100%">
 </p>
 
-# Lyon Media Manager
+# Sea Lyon Media Manager
 
-Lyon Media Manager is a Windows-focused desktop media app for ripping audio CDs
+Sea Lyon Media Manager is a Windows-focused desktop media app for ripping audio CDs
 to a choice of lossless or lossy formats, organizing a local music library,
 playing tracks and video files, downloading from YouTube, and browsing YouTube
 from one Windows Media Player-inspired interface.
@@ -358,7 +358,7 @@ startup, and CD detection helpers.
 
 ## Credits And Third-Party Services
 
-Lyon Media Manager uses CUETools DB and MusicBrainz metadata, TheAudioDB album
+Sea Lyon Media Manager uses CUETools DB and MusicBrainz metadata, TheAudioDB album
 metadata and artwork, Cover Art Archive artwork, ffmpeg/libcdio for CD audio
 extraction, libdiscid for disc IDs, libVLC for local audio/video playback and
 equalizer support, yt-dlp for YouTube downloading, Mutagen for tag handling, and

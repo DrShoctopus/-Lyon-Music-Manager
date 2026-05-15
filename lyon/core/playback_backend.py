@@ -109,7 +109,7 @@ class PlaybackBackend(QObject):
     def is_playing(self) -> bool:
         raise NotImplementedError
 
-    def apply_equalizer(self, enabled: bool, bands: list[int]) -> None:
+    def apply_equalizer(self, enabled: bool, bands: list[int], preamp: int = 0) -> None:
         raise NotImplementedError
 
     def cleanup(self) -> None:
@@ -174,7 +174,7 @@ class QMediaPlaybackBackend(PlaybackBackend):
     def is_playing(self) -> bool:
         return self._player.playbackState() == self._qmedia_player_cls.PlayingState
 
-    def apply_equalizer(self, enabled: bool, bands: list[int]) -> None:
+    def apply_equalizer(self, enabled: bool, bands: list[int], preamp: int = 0) -> None:
         # Qt Multimedia has no per-band EQ API; intentional no-op on this backend.
         pass
 
@@ -272,7 +272,7 @@ class VlcPlaybackBackend(PlaybackBackend):
     def is_playing(self) -> bool:
         return bool(self._player.is_playing())
 
-    def apply_equalizer(self, enabled: bool, bands: list[int]) -> None:
+    def apply_equalizer(self, enabled: bool, bands: list[int], preamp: int = 0) -> None:
         if not enabled:
             self._equalizer = None
             try:
@@ -286,7 +286,7 @@ class VlcPlaybackBackend(PlaybackBackend):
             if equalizer is None:
                 raise RuntimeError("VLC did not create an AudioEqualizer instance")
             normalized_bands = normalize_equalizer_bands(bands)
-            equalizer.set_preamp(0.0)
+            equalizer.set_preamp(float(preamp))
             for ui_band, vlc_index in zip(normalized_bands, VLC_EQ_BAND_INDEXES, strict=True):
                 equalizer.set_amp_at_index(float(ui_band), vlc_index)
             self._player.set_equalizer(equalizer)

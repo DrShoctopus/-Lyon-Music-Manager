@@ -1,9 +1,23 @@
 """yt-dlp download worker thread."""
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 from PySide6.QtCore import QThread, Signal
+
+from .settings import bundled_bin_dir
+
+
+def _find_ffmpeg() -> Path | None:
+    """Return path to ffmpeg binary, checking bundled bin dir first, then PATH."""
+    bin_dir = bundled_bin_dir()
+    for name in ("ffmpeg.exe", "ffmpeg"):
+        candidate = bin_dir / name
+        if candidate.exists():
+            return candidate
+    found = shutil.which("ffmpeg.exe") or shutil.which("ffmpeg")
+    return Path(found) if found else None
 
 
 class _YtLogger:
@@ -79,7 +93,16 @@ class YtDownloadWorker(QThread):
             Path(self.output_dir) / "%(uploader)s" / "%(title)s.%(ext)s"
         )
 
+        ffmpeg_path = _find_ffmpeg()
+
         if self.mode == "audio":
+            if not ffmpeg_path:
+                self.error.emit(
+                    "ffmpeg is required for audio conversion but was not found. "
+                    "Install ffmpeg and place it on PATH (or in the app bin folder), then retry."
+                )
+                self.finished.emit(0, 1)
+                return
             postprocessors = [
                 {
                     "key": "FFmpegExtractAudio",
@@ -92,13 +115,22 @@ class YtDownloadWorker(QThread):
             fmt_selector = "bestaudio/best"
             merge_fmt = None
         else:
-            postprocessors = [
-                {"key": "EmbedThumbnail"},
-                {"key": "FFmpegMetadata", "add_metadata": True},
-                {"key": "FFmpegEmbedSubtitle"},
-            ]
-            fmt_selector = "bestvideo+bestaudio/best"
-            merge_fmt = self.fmt
+            if ffmpeg_path:
+                postprocessors = [
+                    {"key": "EmbedThumbnail"},
+                    {"key": "FFmpegMetadata", "add_metadata": True},
+                    {"key": "FFmpegEmbedSubtitle"},
+                ]
+                fmt_selector = "bestvideo+bestaudio/best"
+                merge_fmt = self.fmt
+            else:
+                self.progress.emit(
+                    "WARNING: ffmpeg not found — downloading best available pre-merged stream "
+                    "(quality capped at ~720p). Install ffmpeg for full quality and metadata embedding."
+                )
+                postprocessors = []
+                fmt_selector = f"best[ext={self.fmt}]/best[ext=mp4]/best"
+                merge_fmt = None
 
         ydl_opts: dict = {
             "format": fmt_selector,
@@ -109,11 +141,16 @@ class YtDownloadWorker(QThread):
             "postprocessor_hooks": [self._on_postprocessor],
             "noplaylist": not self.playlist,
             "writethumbnail": True,
+            # Keep the thumbnail sidecar file on disk after EmbedThumbnail runs
+            # so _thumb_pixmap() can find it when rendering the video card.
+            "keep_thumbnail": self.mode == "video",
             # Keep going through playlist errors rather than aborting.
             "ignoreerrors": self.playlist,
         }
         if merge_fmt:
             ydl_opts["merge_output_format"] = merge_fmt
+        if ffmpeg_path:
+            ydl_opts["ffmpeg_location"] = str(ffmpeg_path.parent)
 
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:

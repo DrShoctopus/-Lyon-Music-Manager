@@ -251,9 +251,14 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 
 QSplitter::handle { background: #161c23; }
 QMenu { background: #111820; border: 1px solid #27313b; }
+QMenu::item { padding: 6px 28px 6px 16px; }
 QMenu::item:selected { background: #1466c7; }
+QMenu::separator { height: 1px; background: #27313b; margin: 3px 8px; }
 
 /* Video player */
+QWidget#videoPlayerView {
+    background: #0a0e13;
+}
 QWidget#videoSurface {
     background: #000000;
 }

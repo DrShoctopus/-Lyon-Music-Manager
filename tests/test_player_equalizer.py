@@ -62,8 +62,8 @@ class FakeBackend(QObject):
     def is_playing(self) -> bool:
         return self._playing
 
-    def apply_equalizer(self, enabled: bool, bands: list[int]) -> None:
-        self.equalizer_calls.append((enabled, list(bands)))
+    def apply_equalizer(self, enabled: bool, bands: list[int], preamp: int = 0) -> None:
+        self.equalizer_calls.append((enabled, list(bands), preamp))
 
 
 def _track(path: str = "C:/Music/test.flac") -> Track:
@@ -86,22 +86,22 @@ def test_set_equalizer_normalizes_and_pushes_to_backend():
     backend = FakeBackend()
     player = Player(backend=backend)
 
-    player.set_equalizer(True, [20, -20, 3, "4", 0])
+    player.set_equalizer(True, [20, -20, 3, "4", 0], preamp=6)
 
-    assert player.equalizer() == (True, [12, -12, 3, 4, 0, 0, 0, 0, 0, 0])
-    assert backend.equalizer_calls == [(True, [12, -12, 3, 4, 0, 0, 0, 0, 0, 0])]
+    assert player.equalizer() == (True, [12, -12, 3, 4, 0, 0, 0, 0, 0, 0], 6)
+    assert backend.equalizer_calls == [(True, [12, -12, 3, 4, 0, 0, 0, 0, 0, 0], 6)]
 
 
 def test_equalizer_is_reapplied_on_track_load():
     backend = FakeBackend()
     player = Player(backend=backend)
-    player.set_equalizer(True, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+    player.set_equalizer(True, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], preamp=3)
 
     player.set_queue([_track()])
 
     assert backend.sources == ["C:/Music/test.flac"]
     assert backend.play_count == 1
-    assert backend.equalizer_calls[-1] == (True, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+    assert backend.equalizer_calls[-1] == (True, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 3)
 
 
 def test_queue_items_can_move_and_remove_without_losing_current_track():
