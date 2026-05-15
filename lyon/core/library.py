@@ -45,8 +45,6 @@ CREATE TABLE IF NOT EXISTS tracks (
 CREATE INDEX IF NOT EXISTS idx_tracks_artist  ON tracks(album_artist, artist);
 CREATE INDEX IF NOT EXISTS idx_tracks_album   ON tracks(album);
 CREATE INDEX IF NOT EXISTS idx_tracks_title   ON tracks(title);
-CREATE INDEX IF NOT EXISTS idx_tracks_media_type ON tracks(media_type);
-CREATE INDEX IF NOT EXISTS idx_tracks_disc_id ON tracks(disc_id);
 """
 
 _PAGE_SIZE = 500  # rows per page in streaming queries
@@ -102,6 +100,9 @@ class Library:
             self.conn.execute("ALTER TABLE tracks ADD COLUMN disc_id TEXT")
         except sqlite3.OperationalError:
             pass  # column already exists
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tracks_media_type ON tracks(media_type)"
+        )
         self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_tracks_disc_id ON tracks(disc_id)"
         )
