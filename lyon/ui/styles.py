@@ -254,6 +254,9 @@ QMenu { background: #111820; border: 1px solid #27313b; }
 QMenu::item:selected { background: #1466c7; }
 
 /* Video player */
+QWidget#videoPlayerView {
+    background: #0a0e13;
+}
 QWidget#videoSurface {
     background: #000000;
 }
