@@ -22,6 +22,8 @@ class LibraryView(QWidget):
     request_rescan = Signal()
     request_add_folder = Signal()
     request_youtube_search = Signal(str)
+    request_open_settings = Signal()
+    request_diagnostics = Signal()
 
     def __init__(self, library: Library, parent: QWidget | None = None):
         super().__init__(parent)
@@ -97,15 +99,34 @@ class LibraryView(QWidget):
         splitter.setSizes([180, 220, 600])
 
         # Empty-state overlay shown when no tracks are present
-        self._empty_label = QLabel(
-            "No music found.\nClick Add Folder or use File → Add Folder to Library."
-        )
-        self._empty_label.setAlignment(Qt.AlignCenter)
-        self._empty_label.setStyleSheet("color:#8a93a0;font-size:13px;")
+        empty_widget = QWidget()
+        empty_layout = QVBoxLayout(empty_widget)
+        empty_layout.setAlignment(Qt.AlignCenter)
+        empty_layout.setSpacing(16)
+
+        empty_text = QLabel("No music found.\nAdd a folder to start building your library.")
+        empty_text.setAlignment(Qt.AlignCenter)
+        empty_text.setStyleSheet("color:#8a93a0;font-size:13px;")
+        empty_layout.addWidget(empty_text)
+
+        empty_btns = QHBoxLayout()
+        empty_btns.setSpacing(8)
+        empty_btns.setAlignment(Qt.AlignCenter)
+        _add_btn = QPushButton("Add Folder")
+        _add_btn.setObjectName("accent")
+        _add_btn.clicked.connect(self.request_add_folder.emit)
+        _settings_btn = QPushButton("Open Settings")
+        _settings_btn.clicked.connect(self.request_open_settings.emit)
+        _diag_btn = QPushButton("Run Diagnostics")
+        _diag_btn.clicked.connect(self.request_diagnostics.emit)
+        empty_btns.addWidget(_add_btn)
+        empty_btns.addWidget(_settings_btn)
+        empty_btns.addWidget(_diag_btn)
+        empty_layout.addLayout(empty_btns)
 
         self._browser_stack = QStackedWidget()
-        self._browser_stack.addWidget(self._empty_label)  # index 0: empty state
-        self._browser_stack.addWidget(splitter)            # index 1: browser
+        self._browser_stack.addWidget(empty_widget)  # index 0: empty state
+        self._browser_stack.addWidget(splitter)       # index 1: browser
 
         # Track count / duration footer
         self._footer_label = QLabel("")

@@ -448,6 +448,7 @@ class RipRequest:
     track_offsets: tuple[int, ...] = ()
     leadout_sector: int = 0
     ctdb_toc: str = ""
+    track_numbers: tuple[int, ...] = ()
 
 
 @dataclass
@@ -574,6 +575,7 @@ class RipWorker(QObject):
     track_started = Signal(int, str)            # (1-based, title)
     track_progress = Signal(int, int)           # (track_no, percent 0-100)
     track_finished = Signal(int, str)           # (track_no, output_path)
+    track_failed = Signal(int, str)             # (track_no, reason)
     finished = Signal(bool, str)                # (success, message)
     log = Signal(str)
 
@@ -659,11 +661,20 @@ class RipWorker(QObject):
             self.finished.emit(False, message)
             return
 
+        track_filter = set(self.request.track_numbers)
+        tracks_to_rip = [
+            track for track in album.tracks
+            if not track_filter or track.number in track_filter
+        ]
+        if track_filter and not tracks_to_rip:
+            self.finished.emit(False, "No matching tracks were found to rip.")
+            return
+
         total = len(album.tracks) or 1
         ext = _format_ext(self.settings.rip_format)
         success = True
         ripped_files: dict[int, Path] = {}
-        for tr in album.tracks:
+        for tr in tracks_to_rip:
             if self._cancel:
                 self.finished.emit(False, "Cancelled")
                 return
@@ -676,6 +687,7 @@ class RipWorker(QObject):
                 success = False
                 failures.append(failure)
                 self.log.emit(f"Track {tr.number} failed: {failure.reason}")
+                self.track_failed.emit(tr.number, failure.reason)
                 continue
 
             from .tagger import write_tags
@@ -684,6 +696,8 @@ class RipWorker(QObject):
                 reason = "Track ripped but audio tags could not be written."
                 failures.append(RipFailure(tr.number, tr.title, out, reason))
                 self.log.emit(f"Track {tr.number} {reason.lower()}")
+                self.track_failed.emit(tr.number, reason)
+                continue
             self.track_finished.emit(tr.number, str(out))
             ripped_files[tr.number] = out
 
@@ -693,21 +707,26 @@ class RipWorker(QObject):
             and self.request.ctdb_toc
             and (self.settings.rip_format or "flac").lower() == "flac"
         ):
-            self._verify_rips(ff, ripped_files)
+            self._verify_rips(ff, ripped_files, total)
 
         message = "Rip complete." if success else "Rip finished with errors."
         if not success:
             self._emit_failure_log(folder, ff, failures, message)
         self.finished.emit(success, message)
 
-    def _verify_rips(self, ffmpeg: str, ripped_files: dict[int, Path]) -> None:
+    def _verify_rips(
+        self,
+        ffmpeg: str,
+        ripped_files: dict[int, Path],
+        total_tracks: int,
+    ) -> None:
         from .ctdb_verify import verify_rips
         self.log.emit("Verifying rips against CUETools DB...")
         results = verify_rips(
             ripped_files,
             self.request.ctdb_toc,
             ffmpeg,
-            len(ripped_files),
+            total_tracks,
         )
         for r in results:
             self.log.emit(r.message)
@@ -1008,6 +1027,7 @@ class Ripper(QObject):
     track_started = Signal(int, str)
     track_progress = Signal(int, int)
     track_finished = Signal(int, str)
+    track_failed = Signal(int, str)
     finished = Signal(bool, str)
     log = Signal(str)
 
@@ -1033,6 +1053,7 @@ class Ripper(QObject):
         self._worker.track_started.connect(self.track_started)
         self._worker.track_progress.connect(self.track_progress)
         self._worker.track_finished.connect(self.track_finished)
+        self._worker.track_failed.connect(self.track_failed)
         self._worker.log.connect(self.log)
         self._worker.finished.connect(self._on_finished)
         self._thread.start()

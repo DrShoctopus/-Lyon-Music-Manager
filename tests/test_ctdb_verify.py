@@ -271,6 +271,25 @@ def test_verify_rips_all_match():
     assert results[0].confidence == 30
 
 
+def test_verify_rips_uses_disc_boundaries_for_partial_track_set():
+    import lyon.core.ctdb_verify as mod
+
+    files = _files([2])
+    ctdb = {2: [(0xBBBB, 30)]}
+    calls: list[tuple[int, bool, bool]] = []
+
+    def fake_crc(path, ffmpeg, *, is_first_track, is_last_track):
+        track_no = int(str(path).split("_")[-1].replace(".flac", ""))
+        calls.append((track_no, is_first_track, is_last_track))
+        return 0xBBBB
+
+    with _patched_fetch(ctdb), mock.patch.object(mod, "compute_accuraterip_v1_crc", side_effect=fake_crc):
+        results = verify_rips(files, "0:15000:45000", "ffmpeg", 3)
+
+    assert results[0].verified
+    assert calls == [(2, False, False)]
+
+
 def test_verify_rips_crc_mismatch():
     files = _files([1])
     ctdb = {1: [(0xAAAA, 10)]}

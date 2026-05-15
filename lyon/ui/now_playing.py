@@ -171,15 +171,25 @@ class TransportBar(QWidget):
         self.shuffle_btn = self._make_btn("⤨")
         self.shuffle_btn.setToolTip("Shuffle")
         self.shuffle_btn.setCheckable(True)
+        self.shuffle_btn.setAccessibleName("Shuffle")
+        self.shuffle_btn.setAccessibleDescription("Toggle shuffle mode")
         self.repeat_btn = self._make_btn("⟳")
         self.repeat_btn.setToolTip("Repeat")
         self.repeat_btn.setCheckable(True)
+        self.repeat_btn.setAccessibleName("Repeat off")
+        self.repeat_btn.setAccessibleDescription("Cycle repeat mode: off, repeat all, repeat one")
         self.stop_btn = self._make_btn("■")
         self.stop_btn.setToolTip("Stop")
+        self.stop_btn.setAccessibleName("Stop")
+        self.stop_btn.setAccessibleDescription("Stop playback")
         self.prev_btn = self._make_btn("◀◀")
         self.prev_btn.setToolTip("Previous")
+        self.prev_btn.setAccessibleName("Previous")
+        self.prev_btn.setAccessibleDescription("Play previous track")
         self.next_btn = self._make_btn("▶▶")
         self.next_btn.setToolTip("Next")
+        self.next_btn.setAccessibleName("Next")
+        self.next_btn.setAccessibleDescription("Play next track")
 
         self.play_btn = PlayPauseButton()
         self.play_btn.setObjectName("transportPlay")
@@ -243,11 +253,15 @@ class TransportBar(QWidget):
         self.vol.setMaximumWidth(150)
         self.vol.valueChanged.connect(player.set_volume)
 
-        self.mute_btn = self._make_btn("🔊")
+        self.mute_btn = self._make_btn("Vol")
         self.mute_btn.setToolTip("Mute/Unmute")
         self.mute_btn.setCheckable(True)
         self.mute_btn.setChecked(player.is_muted())
+        self.mute_btn.setAccessibleName("Mute" if player.is_muted() else "Volume")
+        self.mute_btn.setAccessibleDescription("Toggle mute")
         self.mute_btn.toggled.connect(self._on_mute_toggled)
+        if player.is_muted():
+            self.mute_btn.setText("Mut")
 
         vol_row = QHBoxLayout()
         vol_row.setContentsMargins(0, 0, 0, 0)
@@ -285,7 +299,9 @@ class TransportBar(QWidget):
         mode = self.player.cycle_repeat()
         self.repeat_btn.setChecked(mode != RepeatMode.OFF)
         labels = {RepeatMode.OFF: "⟳", RepeatMode.ALL: "⟳A", RepeatMode.ONE: "⟳1"}
+        accessible = {RepeatMode.OFF: "Repeat off", RepeatMode.ALL: "Repeat all", RepeatMode.ONE: "Repeat one"}
         self.repeat_btn.setText(labels[mode])
+        self.repeat_btn.setAccessibleName(accessible[mode])
 
     def _on_track(self, track: Track | None) -> None:
         if track is None:
@@ -308,14 +324,16 @@ class TransportBar(QWidget):
 
     def _on_mute_toggled(self, muted: bool) -> None:
         self.player.set_muted(muted)
-        self.mute_btn.setText("🔇" if muted else "🔊")
+        self.mute_btn.setText("Mut" if muted else "Vol")
+        self.mute_btn.setAccessibleName("Mute" if muted else "Volume")
 
     def _on_state(self, state: str) -> None:
         self.play_btn.set_playing(state == "playing")
         muted = self.player.is_muted()
         self.mute_btn.blockSignals(True)
         self.mute_btn.setChecked(muted)
-        self.mute_btn.setText("🔇" if muted else "🔊")
+        self.mute_btn.setText("Mut" if muted else "Vol")
+        self.mute_btn.setAccessibleName("Mute" if muted else "Volume")
         self.mute_btn.blockSignals(False)
 
     def _on_seek_release(self) -> None:

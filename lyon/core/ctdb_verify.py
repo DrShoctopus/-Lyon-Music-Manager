@@ -275,10 +275,11 @@ def verify_rips(
 
     results: list[TrackVerifyResult] = []
     sorted_tracks = sorted(ripped_files)
+    disc_total = max(total_tracks, sorted_tracks[-1] if sorted_tracks else 0)
     for track_no in sorted_tracks:
         flac_path = ripped_files[track_no]
-        is_first = track_no == sorted_tracks[0]
-        is_last = track_no == sorted_tracks[-1]
+        is_first = track_no == 1
+        is_last = track_no == disc_total
 
         crc = compute_accuraterip_v1_crc(
             flac_path,
