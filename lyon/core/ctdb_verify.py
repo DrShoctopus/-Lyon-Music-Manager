@@ -26,7 +26,7 @@ except ImportError:
 
 import requests
 
-CTDB_LOOKUP_URL = "https://db.cuetools.net/lookup2.php"
+CTDB_LOOKUP_URL = "http://db.cuetools.net/lookup2.php"
 CTDB_TIMEOUT_SECONDS = 20
 _SKIP_SAMPLES = 2940  # 5 CD frames * 588 samples/frame
 
