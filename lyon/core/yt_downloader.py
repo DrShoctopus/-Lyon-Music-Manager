@@ -141,6 +141,9 @@ class YtDownloadWorker(QThread):
             "postprocessor_hooks": [self._on_postprocessor],
             "noplaylist": not self.playlist,
             "writethumbnail": True,
+            # Keep the thumbnail sidecar file on disk after EmbedThumbnail runs
+            # so _thumb_pixmap() can find it when rendering the video card.
+            "keep_thumbnail": self.mode == "video",
             # Keep going through playlist errors rather than aborting.
             "ignoreerrors": self.playlist,
         }

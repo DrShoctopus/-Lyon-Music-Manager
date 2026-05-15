@@ -24,8 +24,8 @@ from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
-    QPushButton, QScrollArea, QSizePolicy, QSlider, QToolButton,
-    QVBoxLayout, QWidget,
+    QPushButton, QScrollArea, QSizePolicy, QSlider, QStackedWidget,
+    QToolButton, QVBoxLayout, QWidget,
 )
 
 from ..core.playback_backend import _configure_vlc_runtime_path
@@ -176,10 +176,20 @@ class _FullscreenWindow(QWidget):
 
     def __init__(self, on_exit_cb, on_toggle_play_cb) -> None:
         super().__init__(None, Qt.Window | Qt.FramelessWindowHint)
-        self.setAttribute(Qt.WA_NativeWindow, True)
         self.setStyleSheet("background:#000000;")
         self._on_exit = on_exit_cb
         self._on_toggle_play = on_toggle_play_cb
+
+        # VLC must render into a *child* native sub-window, not into this
+        # top-level window directly.  Qt's backing-store blit targets the
+        # top-level X11 window on every repaint and would overwrite VLC's
+        # frames.  A WA_NativeWindow child gets its own XID that the backing
+        # store never touches, matching how the embedded _VideoSurface works.
+        self._vlc_surface = _VideoSurface(self)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(self._vlc_surface)
 
     def keyPressEvent(self, ev) -> None:
         if ev.key() == Qt.Key_Escape:
@@ -197,6 +207,30 @@ class _FullscreenWindow(QWidget):
     def mouseDoubleClickEvent(self, ev) -> None:
         self._on_exit()
         super().mouseDoubleClickEvent(ev)
+
+
+# ---------------------------------------------------------------------------
+# Splash pane (default background when no video is loaded)
+# ---------------------------------------------------------------------------
+
+class _SplashPane(QLabel):
+    """Centered Lyon splash shown in the video area when no video is playing."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setAlignment(Qt.AlignCenter)
+        self.setStyleSheet("background:#0a1118;")
+        from .branding import startup_splash_pixmap
+        pm = startup_splash_pixmap()
+        self._source: QPixmap | None = pm if not pm.isNull() else None
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if self._source:
+            max_w = max(1, int(self.width() * 0.62))
+            max_h = max(1, int(self.height() * 0.62))
+            pm = self._source.scaled(max_w, max_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            self.setPixmap(pm)
 
 
 # ---------------------------------------------------------------------------
@@ -299,9 +333,16 @@ class VideoPlayerView(QWidget):
         toolbar.addWidget(self._fullscreen_btn)
         toolbar.addWidget(self._sidebar_btn)
 
-        # ---- Video surface -------------------------------------------------
+        # ---- Video surface + splash stack ----------------------------------
         self._surface = _VideoSurface(self)
         self._surface.mouseDoubleClickEvent = lambda ev: self._enter_fullscreen()
+
+        self._splash_pane = _SplashPane()
+
+        self._video_stack = QStackedWidget()
+        self._video_stack.addWidget(self._splash_pane)  # index 0 – no video
+        self._video_stack.addWidget(self._surface)       # index 1 – VLC output
+        self._video_stack.setCurrentIndex(0)
 
         # ---- Controls frame ------------------------------------------------
         controls = QFrame()
@@ -422,7 +463,7 @@ class VideoPlayerView(QWidget):
         content_row.setSpacing(0)
         content_row.addWidget(self._sidebar)
         content_row.addWidget(self._sidebar_sep)
-        content_row.addWidget(self._surface, 1)
+        content_row.addWidget(self._video_stack, 1)
 
         # ---- Main layout ---------------------------------------------------
         layout = QVBoxLayout(self)
@@ -646,6 +687,7 @@ class VideoPlayerView(QWidget):
             self._load_path(path)
 
     def _load_path(self, path: str) -> None:
+        self._video_stack.setCurrentIndex(1)
         if not self._surface_attached:
             self._attach_vlc_to(self._surface)
             self._surface_attached = True
@@ -675,6 +717,7 @@ class VideoPlayerView(QWidget):
             self._play_btn.setText("▶")
             self._play_btn.setChecked(False)
         else:
+            self._video_stack.setCurrentIndex(1)
             self._player.play()
             self._timer.start()
             self._play_btn.setText("||")
@@ -689,6 +732,7 @@ class VideoPlayerView(QWidget):
         self._seek.setValue(0)
         self._seek.blockSignals(False)
         self._elapsed_lbl.setText("0:00")
+        self._video_stack.setCurrentIndex(0)
 
     def _on_seek_release(self) -> None:
         if self._player.get_length() > 0:
@@ -772,6 +816,10 @@ class VideoPlayerView(QWidget):
         if self._fs_window is not None:
             return  # already fullscreen
 
+        was_playing = bool(self._player.is_playing())
+        if was_playing:
+            self._player.pause()
+
         self._fs_window = _FullscreenWindow(
             on_exit_cb=self._exit_fullscreen,
             on_toggle_play_cb=self._toggle_play,
@@ -779,24 +827,39 @@ class VideoPlayerView(QWidget):
         self._fs_window.showFullScreen()
         self._fs_window.raise_()
         self._fs_window.activateWindow()
-        # Defer winId capture until the OS window is actually realized
-        QTimer.singleShot(50, self._attach_vlc_to_fullscreen_window)
+        # Defer winId capture until the OS window and its child surface are
+        # realized, then resume playback on the new surface.
+        QTimer.singleShot(150, lambda: self._attach_vlc_to_fullscreen_window(was_playing))
         self._fullscreen_btn.setText("Exit Fullscreen")
 
-    def _attach_vlc_to_fullscreen_window(self) -> None:
+    def _attach_vlc_to_fullscreen_window(self, resume: bool = False) -> None:
         if self._fs_window is None:
             return
-        self._attach_vlc_to(self._fs_window)
+        self._attach_vlc_to(self._fs_window._vlc_surface)
+        if resume:
+            self._player.play()
 
     def _exit_fullscreen(self) -> None:
         if self._fs_window is None:
             return
+
+        was_playing = bool(self._player.is_playing())
+        if was_playing:
+            self._player.pause()
+
         self._fs_window.close()
         self._fs_window = None
         self._fullscreen_btn.setText("Fullscreen")
-        # Re-attach rendering to the embedded surface after a tick so the
-        # native surface window is front-most in the OS compositor again.
-        QTimer.singleShot(50, lambda: self._attach_vlc_to(self._surface))
+        self._video_stack.setCurrentIndex(1)
+
+        def _reattach() -> None:
+            self._attach_vlc_to(self._surface)
+            if was_playing:
+                self._player.play()
+
+        # Give the embedded surface a tick to become front-most in the
+        # compositor before handing VLC's output back to it.
+        QTimer.singleShot(100, _reattach)
 
     # ---------------------------------------------------------------- polling
 
@@ -833,6 +896,7 @@ class VideoPlayerView(QWidget):
         dur = max(0, int(self._player.get_length()))
         self._seek.setValue(dur)
         self._seek.blockSignals(False)
+        self._video_stack.setCurrentIndex(0)
 
     # ---------------------------------------------------------------- lifecycle
 
