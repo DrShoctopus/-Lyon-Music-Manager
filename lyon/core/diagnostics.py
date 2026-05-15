@@ -168,21 +168,19 @@ def check_vlc() -> DependencyCheck:
     )
 
 
-def check_qt_webengine() -> DependencyCheck:
-    widgets = _has_module("PySide6.QtWebEngineWidgets")
-    core = _has_module("PySide6.QtWebEngineCore")
-    if widgets and core:
+def check_ytdlp() -> DependencyCheck:
+    if _has_module("yt_dlp"):
         return DependencyCheck(
-            "Qt WebEngine / YouTube",
+            "yt-dlp / YouTube",
             DiagnosticStatus.OK,
-            "Qt WebEngine is available for the in-app YouTube tab.",
+            "yt-dlp is available for YouTube search and downloads.",
             "No action needed.",
         )
     return DependencyCheck(
-        "Qt WebEngine / YouTube",
+        "yt-dlp / YouTube",
         DiagnosticStatus.WARNING,
-        "The in-app YouTube tab is unavailable because PySide6-Addons/QtWebEngine is missing.",
-        "Install PySide6-Addons and restart Lyon.",
+        "yt-dlp is not installed; the YouTube tab will be disabled.",
+        "Run: pip install yt-dlp",
     )
 
 
@@ -192,7 +190,7 @@ def run_dependency_checks() -> list[DependencyCheck]:
         check_ffmpeg(),
         check_libdiscid(),
         check_vlc(),
-        check_qt_webengine(),
+        check_ytdlp(),
     ]
 
 
