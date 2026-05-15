@@ -286,11 +286,7 @@ def test_search_album_uses_musicbrainz_before_theaudiodb(monkeypatch):
 
 
 def test_provider_names_keep_only_supported_metadata_sources():
-    assert metadata.DISC_METADATA_PROVIDER_ORDER == (
-        "cuetools_db",
-        "musicbrainz",
-        "theaudiodb",
-    )
+    assert metadata.DISC_METADATA_PROVIDER_ORDER == ("cuetools_db", "musicbrainz")
     assert metadata.ALBUM_METADATA_PROVIDER_ORDER == ("musicbrainz", "theaudiodb")
     assert metadata.ARTWORK_PROVIDER_ORDER == (
         "cover_art_archive",

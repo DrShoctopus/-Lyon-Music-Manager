@@ -26,7 +26,7 @@ CTDB_TIMEOUT_SECONDS = 20
 THEAUDIODB_API_BASE = "https://www.theaudiodb.com/api/v1/json"
 THEAUDIODB_DEFAULT_API_KEY = "123"
 HTTP_TIMEOUT_SECONDS = 15
-DISC_METADATA_PROVIDER_ORDER = ("cuetools_db", "musicbrainz", "theaudiodb")
+DISC_METADATA_PROVIDER_ORDER = ("cuetools_db", "musicbrainz")
 ALBUM_METADATA_PROVIDER_ORDER = ("musicbrainz", "theaudiodb")
 ARTWORK_PROVIDER_ORDER = ("cover_art_archive", "album_artwork_url", "theaudiodb")
 METADATA_PROVIDER_ORDER = ALBUM_METADATA_PROVIDER_ORDER
@@ -149,13 +149,6 @@ def lookup_disc(
         provider_attempts.append((provider_name, info))
         if _has_usable_metadata(info):
             return _with_theaudiodb_enrichment(info)
-
-    if _use_cuetools_db(use_cuetools_db) and ctdb_toc is None:
-        for fuzzy in (False, True):
-            info = lookup_ctdb_disc(toc, fuzzy=fuzzy)
-            provider_attempts.append((f"cuetools_db_legacy_fuzzy_{int(fuzzy)}", info))
-            if _has_usable_metadata(info):
-                return _with_theaudiodb_enrichment(info)
 
     if _metadata_diagnostics_enabled():
         _log_empty_disc_lookup(discid_str, toc, ctdb_toc, use_cuetools_db, provider_attempts)
@@ -762,7 +755,6 @@ def _fetch_artwork_url(url: str) -> bytes | None:
         )
     except requests.RequestException as exc:
         _log_metadata_diagnostic("Artwork request failed for %s: %s", url, exc)
-        return None
     return None
 
 
