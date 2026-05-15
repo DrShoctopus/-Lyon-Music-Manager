@@ -22,15 +22,15 @@ def app():
 
 def test_selecting_builtin_curve_applies_bands_once(app):
     dialog = EqualizerDialog(Settings(), None)
-    changes: list[tuple[bool, list[int]]] = []
-    dialog.equalizer_changed.connect(lambda enabled, bands: changes.append((enabled, list(bands))))
+    changes: list[tuple[bool, list[int], int]] = []
+    dialog.equalizer_changed.connect(lambda enabled, bands, preamp: changes.append((enabled, list(bands), preamp)))
 
     rock_index = dialog.curve_combo.findText("Rock")
     dialog.curve_combo.setCurrentIndex(rock_index)
 
     assert dialog.band_values() == BUILTIN_EQ_CURVES["Rock"]
     assert dialog.result_settings.equalizer_curve_name == "Rock"
-    assert changes == [(False, BUILTIN_EQ_CURVES["Rock"])]
+    assert changes == [(False, BUILTIN_EQ_CURVES["Rock"], 0)]
 
 
 def test_manual_slider_edit_marks_dropdown_as_unsaved(app):
