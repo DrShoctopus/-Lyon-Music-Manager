@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QToolButton, QVBoxLayout, QWidget,
 )
 
+from ..core.equalizer import normalize_equalizer_bands
 from ..core.playback_backend import _configure_vlc_runtime_path
 from .widgets import ElidedLabel, format_duration, format_ms, placeholder_cover
 
@@ -253,6 +254,9 @@ class VideoPlayerView(QWidget):
         self._current_path = ""
         self._fs_window: _FullscreenWindow | None = None
         self._surface_attached = False  # deferred until first showEvent
+        self._eq_enabled = False
+        self._eq_bands: list[int] = []
+        self._equalizer: Any = None
 
         try:
             import importlib
@@ -696,6 +700,8 @@ class VideoPlayerView(QWidget):
         self._player.set_media(media)
         media.release()  # drop our reference; VLC holds its own via set_media
         self._player.audio_set_volume(self._vol_slider.value())
+        if self._equalizer is not None:
+            self._player.set_equalizer(self._equalizer)
         self._info_lbl.setText(Path(path).name)
         self._set_controls_enabled(True)
         self._player.play()
@@ -745,6 +751,37 @@ class VideoPlayerView(QWidget):
     def _on_mute_toggled(self, checked: bool) -> None:
         self._player.audio_set_mute(checked)
         self._mute_btn.setText("--" if checked else "M")
+
+    def apply_equalizer(self, enabled: bool, bands: list[int]) -> None:
+        """Apply or clear the 10-band equalizer on the video player's VLC instance."""
+        self._eq_enabled = enabled
+        self._eq_bands = list(bands)
+        if not self._available:
+            return
+        if not enabled:
+            self._equalizer = None
+            try:
+                self._player.set_equalizer(None)
+            except (AttributeError, OSError, RuntimeError) as exc:
+                LOG.warning("Could not clear video VLC equalizer: %s", exc)
+            return
+        try:
+            normalized = normalize_equalizer_bands(bands)
+            equalizer = self._vlc.AudioEqualizer()
+            if equalizer is None:
+                raise RuntimeError("VLC did not create an AudioEqualizer instance")
+            equalizer.set_preamp(0.0)
+            for band_index, band_gain in enumerate(normalized):
+                equalizer.set_amp_at_index(float(band_gain), band_index)
+            self._player.set_equalizer(equalizer)
+            self._equalizer = equalizer
+        except (AttributeError, OSError, RuntimeError) as exc:
+            self._equalizer = None
+            try:
+                self._player.set_equalizer(None)
+            except (AttributeError, OSError, RuntimeError):
+                pass
+            LOG.warning("Could not apply video VLC equalizer: %s", exc)
 
     def _on_rate_changed(self, index: int) -> None:
         _, rate = _RATE_OPTIONS[index]

@@ -127,6 +127,7 @@ class MainWindow(QMainWindow):
         self.ripper_view = RipperView(self.settings, self.library)
         self.youtube_view = YouTubeView()
         self.video_player_view = VideoPlayerView(library=self.library)
+        self.video_player_view.apply_equalizer(self.settings.equalizer_enabled, self.settings.equalizer_bands)
         self._library_refresh_timer.timeout.connect(self.video_player_view.refresh_catalog)
 
         self.stack.addWidget(self.now_playing)
@@ -379,6 +380,7 @@ class MainWindow(QMainWindow):
         if self._equalizer_dialog is None:
             self._equalizer_dialog = EqualizerDialog(self.settings, self)
             self._equalizer_dialog.equalizer_changed.connect(self.player.set_equalizer)
+            self._equalizer_dialog.equalizer_changed.connect(self.video_player_view.apply_equalizer)
             self._equalizer_dialog.settings_saved.connect(self._apply_equalizer_settings)
             self._equalizer_dialog.finished.connect(self._clear_equalizer_dialog)
         self._equalizer_dialog.show()
@@ -391,6 +393,7 @@ class MainWindow(QMainWindow):
         self.settings.equalizer_curve_name = settings.equalizer_curve_name
         self.settings.equalizer_custom_curves = dict(settings.equalizer_custom_curves)
         self.player.set_equalizer(self.settings.equalizer_enabled, self.settings.equalizer_bands)
+        self.video_player_view.apply_equalizer(self.settings.equalizer_enabled, self.settings.equalizer_bands)
         self.statusBar().showMessage("Equalizer settings saved.", 3000)
 
     def _clear_equalizer_dialog(self, *_args) -> None:
