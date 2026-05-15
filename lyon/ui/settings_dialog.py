@@ -37,6 +37,8 @@ class SettingsDialog(QDialog):
         self.resize(540, 420)
         self.result_settings = replace(settings)
         self.result_settings.library_paths = normalize_library_paths(settings.library_paths)
+        self._initial_music_root = settings.music_root.strip()
+        self._initial_library_paths = set(self.result_settings.library_paths)
 
         tabs = QTabWidget()
         tabs.addTab(self._build_library_tab(settings), "Library")
@@ -267,6 +269,19 @@ class SettingsDialog(QDialog):
     def _check_contact(self, text: str) -> None:
         self._contact_warn.setVisible("example.invalid" in text)
 
+    def _new_missing_paths(self, root_text: str, library_paths: list[str]) -> list[str]:
+        missing: list[str] = []
+        if (
+            root_text
+            and root_text != self._initial_music_root
+            and not Path(root_text).exists()
+        ):
+            missing.append(root_text)
+        for path in library_paths:
+            if path not in self._initial_library_paths and not Path(path).exists():
+                missing.append(path)
+        return missing
+
     # ------------------------------------------------------------------ helpers
 
     def _browse_root(self) -> None:
@@ -295,14 +310,12 @@ class SettingsDialog(QDialog):
     # ------------------------------------------------------------------ accept
 
     def _accept(self) -> None:
-        missing: list[str] = []
         root_text = self.root_edit.text().strip()
-        if root_text and not Path(root_text).exists():
-            missing.append(root_text)
-        for row in range(self.library_paths.count()):
-            p = self.library_paths.item(row).text()
-            if p and not Path(p).exists():
-                missing.append(p)
+        library_paths = normalize_library_paths([
+            self.library_paths.item(row).text()
+            for row in range(self.library_paths.count())
+        ])
+        missing = self._new_missing_paths(root_text, library_paths)
         if missing:
             shown = "\n".join(missing[:6])
             if len(missing) > 6:
@@ -325,10 +338,7 @@ class SettingsDialog(QDialog):
         except ValueError:
             self.result_settings.rip_audio_bitrate = 320
         self.result_settings.cd_drive = self.drive.text().strip()
-        self.result_settings.library_paths = normalize_library_paths([
-            self.library_paths.item(row).text()
-            for row in range(self.library_paths.count())
-        ])
+        self.result_settings.library_paths = library_paths
         self.result_settings.eject_after_rip = self.eject.isChecked()
         self.result_settings.auto_lookup_metadata = self.lookup.isChecked()
         self.result_settings.cuetools_db_metadata_enabled = self.cuetools_db.isChecked()

@@ -330,6 +330,97 @@ def test_rip_request_reuses_detected_disc_toc(tmp_path):
     assert request.target_dir == tmp_path
     assert request.track_offsets == (150, 15150)
     assert request.leadout_sector == 30150
+    assert request.track_numbers == ()
+
+
+def test_rip_worker_filters_retry_tracks_without_shrinking_album_metadata(monkeypatch, tmp_path):
+    album = AlbumInfo(artist="Artist", album="Album")
+    album.tracks = [
+        TrackInfo(number=1, title="First"),
+        TrackInfo(number=2, title="Second"),
+        TrackInfo(number=3, title="Third"),
+    ]
+    request = RipRequest(
+        "D:",
+        album,
+        tmp_path,
+        track_offsets=(150, 15150, 30150),
+        leadout_sector=45150,
+        track_numbers=(2,),
+    )
+    worker = RipWorker(
+        Settings(download_artwork=False, ctdb_verify_rips=False),
+        request,
+    )
+    ripped: list[tuple[int, str]] = []
+    tag_calls: list[tuple[int, int, str]] = []
+    finished: list[tuple[bool, str]] = []
+
+    def fake_rip_track(self, ffmpeg, track_no, title, out):
+        ripped.append((track_no, out.name))
+        out.write_bytes(b"audio")
+        return None
+
+    def fake_write_tags(path, tagged_album, track, artwork):
+        tag_calls.append((track.number, len(tagged_album.tracks), path.name))
+        return True
+
+    monkeypatch.setattr("lyon.core.ripper.find_ffmpeg", lambda: "ffmpeg")
+    monkeypatch.setattr("lyon.core.ripper._ffmpeg_supports_demuxer", lambda *_: True)
+    monkeypatch.setattr(RipWorker, "_rip_track", fake_rip_track)
+    monkeypatch.setitem(
+        sys.modules,
+        "lyon.core.tagger",
+        types.SimpleNamespace(write_tags=fake_write_tags),
+    )
+    worker.finished.connect(lambda ok, msg: finished.append((ok, msg)))
+
+    worker.run()
+
+    assert ripped == [(2, "02 - Second.flac")]
+    assert tag_calls == [(2, 3, "02 - Second.flac")]
+    assert finished[-1] == (True, "Rip complete.")
+
+
+def test_rip_worker_reports_tag_failures_as_failed_not_finished(monkeypatch, tmp_path):
+    album = AlbumInfo(artist="Artist", album="Album")
+    album.tracks = [TrackInfo(number=1, title="First")]
+    request = RipRequest(
+        "D:",
+        album,
+        tmp_path,
+        track_offsets=(150,),
+        leadout_sector=15150,
+    )
+    worker = RipWorker(
+        Settings(download_artwork=False, ctdb_verify_rips=False),
+        request,
+    )
+    failed: list[tuple[int, str]] = []
+    completed: list[tuple[int, str]] = []
+    finished: list[tuple[bool, str]] = []
+
+    def fake_rip_track(self, ffmpeg, track_no, title, out):
+        out.write_bytes(b"audio")
+        return None
+
+    monkeypatch.setattr("lyon.core.ripper.find_ffmpeg", lambda: "ffmpeg")
+    monkeypatch.setattr("lyon.core.ripper._ffmpeg_supports_demuxer", lambda *_: True)
+    monkeypatch.setattr(RipWorker, "_rip_track", fake_rip_track)
+    monkeypatch.setitem(
+        sys.modules,
+        "lyon.core.tagger",
+        types.SimpleNamespace(write_tags=lambda *_: False),
+    )
+    worker.track_failed.connect(lambda n, reason: failed.append((n, reason)))
+    worker.track_finished.connect(lambda n, path: completed.append((n, path)))
+    worker.finished.connect(lambda ok, msg: finished.append((ok, msg)))
+
+    worker.run()
+
+    assert failed == [(1, "Track ripped but audio tags could not be written.")]
+    assert completed == []
+    assert finished[-1] == (False, "Rip finished with errors.")
 
 
 def test_libcdio_failure_summary_recommends_supported_ffmpeg():

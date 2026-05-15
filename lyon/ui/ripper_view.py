@@ -190,6 +190,7 @@ def _rip_request_from_toc(
     toc: cd_detect.DiscToc,
     album: AlbumInfo,
     folder: Path,
+    track_numbers: tuple[int, ...] = (),
 ) -> RipRequest:
     """Build a rip request using the already-read disc TOC.
 
@@ -204,6 +205,7 @@ def _rip_request_from_toc(
         track_offsets=tuple(toc.track_offsets),
         leadout_sector=toc.sectors,
         ctdb_toc=toc.ctdb_toc_string,
+        track_numbers=track_numbers,
     )
 
 
@@ -221,8 +223,9 @@ class RipperView(QWidget):
         self._disc_reader: _DiscReadThread | None = None
         self._lookup: _LookupThread | None = None
         self._search: _AlbumSearchThread | None = None
-        self._expected_track_nums: set[int] = set()
+        self._active_track_nums: set[int] = set()
         self._done_track_nums: set[int] = set()
+        self._last_rip_folder: Path | None = None
 
         # Drive selector + actions
         toolbar = QHBoxLayout()
@@ -326,6 +329,7 @@ class RipperView(QWidget):
         self.ripper.track_started.connect(self._on_track_started)
         self.ripper.track_progress.connect(self._on_track_progress)
         self.ripper.track_finished.connect(self._on_track_finished)
+        self.ripper.track_failed.connect(self._on_track_failed)
         self.ripper.finished.connect(self._on_rip_finished)
         self.ripper.log.connect(self.log)
         self.ripper.log.connect(self.status_label.setText)
@@ -427,6 +431,10 @@ class RipperView(QWidget):
         self.year_edit.clear()
         self.cover.setPixmap(cover_pixmap(None, 140, "CD"))
         self.progress.setValue(0)
+        self.retry_btn.setVisible(False)
+        self._active_track_nums = set()
+        self._done_track_nums = set()
+        self._last_rip_folder = None
 
     def _start_lookup(self, toc: cd_detect.DiscToc) -> None:
         self._lookup = _LookupThread(toc, self.settings, self)
@@ -574,16 +582,17 @@ class RipperView(QWidget):
                 return
 
         folder = unique_target_folder(self.settings, album, create=True)
+        self._last_rip_folder = folder
         self.start_btn.setEnabled(False)
         self.cancel_btn.setEnabled(True)
         self.detect_btn.setEnabled(False)
         self.retry_btn.setVisible(False)
         self.progress.setRange(0, len(album.tracks))
         self.progress.setValue(0)
-        self._expected_track_nums = {tr.number for tr in album.tracks}
+        self._active_track_nums = {tr.number for tr in album.tracks}
         self._done_track_nums = set()
         for tr in album.tracks:
-            self._set_track_progress(tr.number, 0)
+            self._set_track_status_sentinel(tr.number, _STATUS_WAITING)
 
         req = _rip_request_from_toc(self._toc, album, folder)
         self.ripper.start(req)
@@ -653,6 +662,9 @@ class RipperView(QWidget):
         self.library.add_file(path, disc_id=self._toc.discid if self._toc else None)
         self.library.commit()
 
+    def _on_track_failed(self, n: int, _reason: str) -> None:
+        self._set_track_status_sentinel(n, _STATUS_FAILED)
+
     def _on_rip_finished(self, ok: bool, msg: str) -> None:
         self.status_label.setText(msg)
         self.start_btn.setEnabled(True)
@@ -663,12 +675,10 @@ class RipperView(QWidget):
             # Mark any track that wasn't completed as Failed (or Cancelled).
             cancelled = "cancel" in msg.lower()
             sentinel = _STATUS_CANCELLED if cancelled else _STATUS_FAILED
-            failed_nums: list[int] = []
-            for n in self._expected_track_nums - self._done_track_nums:
-                self._set_track_status_sentinel(n, sentinel)
-                if not cancelled:
-                    failed_nums.append(n)
-            if failed_nums:
+            for n in self._active_track_nums - self._done_track_nums:
+                if self._track_status(n) != _STATUS_FAILED:
+                    self._set_track_status_sentinel(n, sentinel)
+            if not cancelled and self._track_nums_with_status(_STATUS_FAILED):
                 self.retry_btn.setVisible(True)
 
         if ok and self.settings.eject_after_rip and self._toc:
@@ -688,29 +698,46 @@ class RipperView(QWidget):
                 status_item.setData(sentinel, Qt.UserRole)
                 break
 
+    def _track_status(self, number: int):
+        for r in range(self.tracks_model.rowCount()):
+            if _row_track_no(self.tracks_model.item(r, 0).text()) == number:
+                return self.tracks_model.item(r, 2).data(Qt.UserRole)
+        return None
+
+    def _track_nums_with_status(self, sentinel) -> set[int]:
+        nums: set[int] = set()
+        for r in range(self.tracks_model.rowCount()):
+            number = _row_track_no(self.tracks_model.item(r, 0).text())
+            if number and self.tracks_model.item(r, 2).data(Qt.UserRole) == sentinel:
+                nums.add(number)
+        return nums
+
     def _retry_failed(self) -> None:
         """Re-rip only the tracks that are currently marked Failed."""
         if not self._toc:
             return
         album = self._album_from_edits()
-        failed_nums = self._expected_track_nums - self._done_track_nums
-        retry_tracks = [tr for tr in album.tracks if tr.number in failed_nums]
-        if not retry_tracks:
+        failed_nums = self._track_nums_with_status(_STATUS_FAILED)
+        if not failed_nums:
             return
 
-        album.tracks = retry_tracks
-        folder = unique_target_folder(self.settings, album)
+        folder = self._last_rip_folder or unique_target_folder(self.settings, album, create=True)
 
         self.start_btn.setEnabled(False)
         self.cancel_btn.setEnabled(True)
         self.detect_btn.setEnabled(False)
         self.retry_btn.setVisible(False)
-        self.progress.setRange(0, len(retry_tracks))
+        self.progress.setRange(0, len(failed_nums))
         self.progress.setValue(0)
-        self._expected_track_nums = {tr.number for tr in retry_tracks}
+        self._active_track_nums = set(failed_nums)
         self._done_track_nums = set()
-        for tr in retry_tracks:
-            self._set_track_status_sentinel(tr.number, _STATUS_WAITING)
+        for n in sorted(failed_nums):
+            self._set_track_status_sentinel(n, _STATUS_WAITING)
 
-        req = _rip_request_from_toc(self._toc, album, folder)
+        req = _rip_request_from_toc(
+            self._toc,
+            album,
+            folder,
+            track_numbers=tuple(sorted(failed_nums)),
+        )
         self.ripper.start(req)
