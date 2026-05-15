@@ -108,3 +108,37 @@ def test_add_file_backfills_disc_id_for_existing_track(tmp_path):
     library.commit()
 
     assert library.has_disc("DISCID123", 1)
+
+
+def test_video_file_prefers_same_stem_thumbnail_sidecar(tmp_path):
+    library = Library(tmp_path / "library.db")
+    media_dir = tmp_path / "YouTube" / "Uploader"
+    media_dir.mkdir(parents=True)
+    video = media_dir / "Example Video.mp4"
+    video.write_bytes(b"not a real mp4")
+    thumbnail = media_dir / "Example Video.jpg"
+    thumbnail.write_bytes(b"thumbnail")
+    folder_cover = media_dir / "cover.jpg"
+    folder_cover.write_bytes(b"folder cover")
+
+    assert library.add_file(video)
+    library.commit()
+
+    track = next(library.all_tracks(media_type="video"))
+    assert track.artwork_path == str(thumbnail)
+
+
+def test_video_file_uses_folder_art_when_no_same_stem_thumbnail(tmp_path):
+    library = Library(tmp_path / "library.db")
+    media_dir = tmp_path / "Videos"
+    media_dir.mkdir()
+    video = media_dir / "Local Clip.mp4"
+    video.write_bytes(b"not a real mp4")
+    folder_cover = media_dir / "cover.jpg"
+    folder_cover.write_bytes(b"folder cover")
+
+    assert library.add_file(video)
+    library.commit()
+
+    track = next(library.all_tracks(media_type="video"))
+    assert track.artwork_path == str(folder_cover)

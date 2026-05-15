@@ -192,8 +192,12 @@ class Library:
                 }
             else:
                 return False
-        # Look for adjacent cover art
-        art = _find_local_artwork(Path(path).parent)
+        # Look for adjacent cover art.  YouTube video downloads keep their
+        # thumbnail as a same-stem sidecar image next to the media file, so
+        # prefer that exact match before falling back to album-folder art.
+        file_path = Path(path)
+        art = _find_video_artwork(file_path) if media_type == "video" else None
+        art = art or _find_local_artwork(file_path.parent)
         with self._lock:
             cur = self.conn.execute(
                 """INSERT OR IGNORE INTO tracks
@@ -421,6 +425,15 @@ def _read_tags(path: str) -> dict | None:
         "bitrate": int(getattr(info, "bitrate", 0) or 0),
         "samplerate": int(getattr(info, "sample_rate", 0) or 0),
     }
+
+
+def _find_video_artwork(path: Path) -> Path | None:
+    """Return an exact same-stem thumbnail sidecar for a video file, if present."""
+    for ext in (".jpg", ".jpeg", ".png", ".webp"):
+        p = path.with_suffix(ext)
+        if p.exists():
+            return p
+    return None
 
 
 def _find_local_artwork(folder: Path) -> Path | None:
