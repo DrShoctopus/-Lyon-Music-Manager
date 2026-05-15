@@ -69,8 +69,6 @@ class EqualizerDialog(QDialog):
         self._sliders: list[QSlider] = []
         self._value_labels: list[QLabel] = []
         self._loading_curve = False
-        self._preamp_slider: QSlider
-        self._preamp_label: QLabel
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 14, 16, 14)
@@ -148,8 +146,8 @@ class EqualizerDialog(QDialog):
         layout.addWidget(panel, 1)
 
         hint = QLabel(
-            "Lyon maps these ten controls directly to libVLC's native EQ bands "
-            "and automatically lowers preamp headroom on boosted curves to keep playback clean. "
+            "Preamp adjusts the overall input level before the EQ bands are applied. "
+            "Lyon maps the ten band controls directly to libVLC's native EQ. "
             "Changes apply immediately and are saved with the app settings."
         )
         hint.setWordWrap(True)
@@ -171,8 +169,13 @@ class EqualizerDialog(QDialog):
         layout.addLayout(buttons)
 
     def reset_flat(self) -> None:
+        self.enable_box.blockSignals(True)
         self.enable_box.setChecked(False)
+        self.enable_box.blockSignals(False)
+        self._preamp_slider.blockSignals(True)
         self._preamp_slider.setValue(DEFAULT_EQ_PREAMP_DB)
+        self._preamp_slider.blockSignals(False)
+        self._preamp_label.setText(self._format_gain(DEFAULT_EQ_PREAMP_DB))
         self.result_settings.equalizer_curve_name = DEFAULT_EQ_CURVE_NAME
         self._select_curve(DEFAULT_EQ_CURVE_NAME, curve_type="builtin")
         self._set_sliders(flat_equalizer_bands())
