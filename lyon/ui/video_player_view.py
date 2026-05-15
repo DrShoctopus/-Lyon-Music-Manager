@@ -241,6 +241,8 @@ class _SplashPane(QLabel):
 class VideoPlayerView(QWidget):
     """Full-featured libVLC video player tab with collapsible catalog sidebar."""
 
+    request_diagnostics = Signal()
+
     def __init__(self, library: Any = None, parent: QWidget | None = None):
         super().__init__(parent)
         self._library = library
@@ -296,9 +298,15 @@ class VideoPlayerView(QWidget):
         body.setAlignment(Qt.AlignCenter)
         body.setStyleSheet("color:#cfd6e2;")
 
+        diag_btn = QPushButton("Run Diagnostics")
+        diag_btn.setToolTip("Open the diagnostics panel to verify your runtime environment")
+        diag_btn.clicked.connect(self.request_diagnostics.emit)
+
         layout.addStretch(1)
         layout.addWidget(title)
         layout.addWidget(body)
+        layout.addSpacing(16)
+        layout.addWidget(diag_btn, alignment=Qt.AlignCenter)
         layout.addStretch(1)
 
     def _build_player_ui(self) -> None:
@@ -379,7 +387,7 @@ class VideoPlayerView(QWidget):
         seek_row.addWidget(self._seek, 1)
         seek_row.addWidget(self._total_lbl)
 
-        # Transport + options row
+        # Primary transport row: play / stop / volume / mute
         self._play_btn = self._make_transport_btn("▶")
         self._play_btn.setToolTip("Play / Pause  [Space]")
         self._play_btn.setCheckable(True)
@@ -389,6 +397,33 @@ class VideoPlayerView(QWidget):
         self._stop_btn.setToolTip("Stop")
         self._stop_btn.clicked.connect(self._stop)
 
+        vol_lbl = QLabel("♬")
+        vol_lbl.setObjectName("volumeIcon")
+        self._vol_slider = QSlider(Qt.Horizontal)
+        self._vol_slider.setObjectName("volumeSlider")
+        self._vol_slider.setRange(0, 100)
+        self._vol_slider.setValue(80)
+        self._vol_slider.setFixedWidth(110)
+        self._vol_slider.setToolTip("Volume")
+        self._vol_slider.valueChanged.connect(self._on_volume_changed)
+        self._player.audio_set_volume(80)
+
+        self._mute_btn = self._make_transport_btn("M")
+        self._mute_btn.setToolTip("Mute / Unmute")
+        self._mute_btn.setCheckable(True)
+        self._mute_btn.clicked.connect(self._on_mute_toggled)
+
+        transport_row = QHBoxLayout()
+        transport_row.setContentsMargins(0, 0, 0, 0)
+        transport_row.setSpacing(6)
+        transport_row.addWidget(self._play_btn)
+        transport_row.addWidget(self._stop_btn)
+        transport_row.addStretch(1)
+        transport_row.addWidget(vol_lbl)
+        transport_row.addWidget(self._vol_slider)
+        transport_row.addWidget(self._mute_btn)
+
+        # Secondary options row: speed / audio track / subtitle track
         speed_lbl = self._ctrl_label("Speed:")
         self._rate_combo = QComboBox()
         for label, _ in _RATE_OPTIONS:
@@ -415,44 +450,23 @@ class VideoPlayerView(QWidget):
         self._sub_file_btn.setToolTip("Load an external subtitle file (.srt, .ass, ...)")
         self._sub_file_btn.clicked.connect(self._load_sub_file)
 
-        vol_lbl = QLabel("♬")
-        vol_lbl.setObjectName("volumeIcon")
-        self._vol_slider = QSlider(Qt.Horizontal)
-        self._vol_slider.setObjectName("volumeSlider")
-        self._vol_slider.setRange(0, 100)
-        self._vol_slider.setValue(80)
-        self._vol_slider.setFixedWidth(110)
-        self._vol_slider.setToolTip("Volume")
-        self._vol_slider.valueChanged.connect(self._on_volume_changed)
-        self._player.audio_set_volume(80)
-
-        self._mute_btn = self._make_transport_btn("M")
-        self._mute_btn.setToolTip("Mute / Unmute")
-        self._mute_btn.setCheckable(True)
-        self._mute_btn.clicked.connect(self._on_mute_toggled)
-
-        btn_row = QHBoxLayout()
-        btn_row.setContentsMargins(0, 0, 0, 0)
-        btn_row.setSpacing(6)
-        btn_row.addWidget(self._play_btn)
-        btn_row.addWidget(self._stop_btn)
-        btn_row.addSpacing(6)
-        btn_row.addWidget(speed_lbl)
-        btn_row.addWidget(self._rate_combo)
-        btn_row.addSpacing(8)
-        btn_row.addWidget(audio_lbl)
-        btn_row.addWidget(self._audio_combo)
-        btn_row.addSpacing(8)
-        btn_row.addWidget(sub_lbl)
-        btn_row.addWidget(self._sub_combo)
-        btn_row.addWidget(self._sub_file_btn)
-        btn_row.addStretch(1)
-        btn_row.addWidget(vol_lbl)
-        btn_row.addWidget(self._vol_slider)
-        btn_row.addWidget(self._mute_btn)
+        opts_row = QHBoxLayout()
+        opts_row.setContentsMargins(0, 2, 0, 0)
+        opts_row.setSpacing(6)
+        opts_row.addWidget(speed_lbl)
+        opts_row.addWidget(self._rate_combo)
+        opts_row.addSpacing(12)
+        opts_row.addWidget(audio_lbl)
+        opts_row.addWidget(self._audio_combo)
+        opts_row.addSpacing(12)
+        opts_row.addWidget(sub_lbl)
+        opts_row.addWidget(self._sub_combo)
+        opts_row.addWidget(self._sub_file_btn)
+        opts_row.addStretch(1)
 
         cl.addLayout(seek_row)
-        cl.addLayout(btn_row)
+        cl.addLayout(transport_row)
+        cl.addLayout(opts_row)
 
         # ---- Sidebar + video surface (side by side) -------------------------
         self._sidebar = self._build_sidebar()

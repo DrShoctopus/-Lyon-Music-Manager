@@ -55,6 +55,27 @@ QPushButton#navTab:checked {
         stop:0 rgba(92,213,255,0.18), stop:1 rgba(49,112,224,0.08));
 }
 
+/* Secondary tool buttons in the tab bar (Queue / EQ / Settings) */
+QPushButton#navToolBtn {
+    background: transparent;
+    color: #8a9ab0;
+    border: none;
+    border-left: 1px solid #1c2430;
+    padding: 8px 12px;
+    min-width: 0;
+    font-size: 8pt;
+}
+QPushButton#navToolBtn:hover {
+    color: #c8d8e8;
+    background: rgba(107,231,255,0.10);
+    border-left: 1px solid #1c2430;
+}
+QPushButton#navToolBtn:pressed {
+    color: #72f4ff;
+    background: rgba(107,231,255,0.18);
+    border-left: 1px solid #1c2430;
+}
+
 /* Sidebar & lists */
 QTreeView, QListView, QTableView {
     background: #0a0e13;
@@ -266,7 +287,7 @@ QFrame#videoControls {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
         stop:0 #1a2030, stop:1 #07090d);
     border-top: 1px solid #000000;
-    min-height: 80px;
+    min-height: 104px;
 }
 
 QFrame#equalizerPanel {
@@ -281,4 +302,5 @@ QLabel#sectionTitle {
     font-size: 14pt;
 }
 QLabel#mutedText { color: #aeb9c4; }
+QLabel#warningLabel { color: #e8a830; font-size: 8pt; }
 """
