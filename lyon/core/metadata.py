@@ -42,6 +42,7 @@ _http_session_lock = threading.Lock()
 # Guards the one-time musicbrainzngs useragent initialisation.
 _init_lock = threading.Lock()
 _initialised = False
+_last_musicbrainz_useragent: tuple[str, str, str] | None = None
 
 # MusicBrainz API ToS requires ≤1 request per second.
 _mb_rate_limit_lock = threading.Lock()
@@ -86,15 +87,27 @@ def _get_http_session() -> requests.Session:
 
 
 def _init() -> None:
-    global _initialised
-    if _initialised:
+    global _initialised, _last_musicbrainz_useragent
+    s = _settings.get_cached_settings()
+    useragent = (s.musicbrainz_app, s.musicbrainz_version, s.musicbrainz_contact)
+    if _initialised and _last_musicbrainz_useragent == useragent:
         return
     with _init_lock:
-        if _initialised:
-            return
         s = _settings.get_cached_settings()
+        useragent = (s.musicbrainz_app, s.musicbrainz_version, s.musicbrainz_contact)
+        if _initialised and _last_musicbrainz_useragent == useragent:
+            return
         musicbrainzngs.set_useragent(s.musicbrainz_app, s.musicbrainz_version, s.musicbrainz_contact)
+        _last_musicbrainz_useragent = useragent
         _initialised = True
+
+
+def reset_musicbrainz_useragent() -> None:
+    """Force the next MusicBrainz lookup to apply the latest saved settings."""
+    global _initialised, _last_musicbrainz_useragent
+    with _init_lock:
+        _initialised = False
+        _last_musicbrainz_useragent = None
 
 
 def _mb_rate_limit() -> None:

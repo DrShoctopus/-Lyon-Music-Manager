@@ -1,3 +1,4 @@
+import io
 import importlib.util
 import sys
 import types
@@ -9,19 +10,23 @@ def _install_dependency_stubs() -> None:
 
     class _Signal:
         def __init__(self, *_, **__):
-            pass
+            self._callbacks = []
 
-        def connect(self, *_):
-            pass
+        def connect(self, callback):
+            self._callbacks.append(callback)
 
-        def emit(self, *_):
-            pass
+        def emit(self, *args):
+            for callback in list(self._callbacks):
+                callback(*args)
 
     class _QObject:
         def __init__(self, *_, **__):
             pass
 
         def moveToThread(self, *_):
+            pass
+
+        def deleteLater(self):
             pass
 
     class _QThread:
@@ -77,6 +82,7 @@ def _install_dependency_stubs() -> None:
     qtcore.Signal = _Signal
     qtcore.Qt = _Qt
     qtcore.QSize = _QSize
+    qtcore.QTimer = _Widget
     qtgui.QColor = _Widget
     qtgui.QPainter = _Widget
     qtgui.QPainter.Antialiasing = 1
@@ -118,6 +124,7 @@ from lyon.core.ripper import (  # noqa: E402
     FfmpegAttemptFailure,
     RipFailure,
     RipRequest,
+    RipWorker,
     _build_libcdio_track_command,
     _build_raw_cdda_ffmpeg_command,
     _ffmpeg_format_listing_has_demuxer,
@@ -148,7 +155,7 @@ def test_libcdio_command_extracts_one_audio_stream_with_toc_timing(tmp_path):
         "ffmpeg",
         "D:",
         out,
-        8,
+        ["-c:a", "flac", "-compression_level", "8"],
         (15000, 30000),
         input_seek=True,
     )
@@ -163,7 +170,11 @@ def test_libcdio_command_extracts_one_audio_stream_with_toc_timing(tmp_path):
 def test_raw_cdda_command_uses_ffmpeg_as_flac_encoder(tmp_path):
     out = tmp_path / "track.flac"
 
-    cmd = _build_raw_cdda_ffmpeg_command("ffmpeg", out, 5)
+    cmd = _build_raw_cdda_ffmpeg_command(
+        "ffmpeg",
+        out,
+        ["-c:a", "flac", "-compression_level", "5"],
+    )
 
     assert cmd[cmd.index("-f") + 1] == "s16le"
     assert cmd[cmd.index("-ar") + 1] == "44100"
@@ -190,6 +201,71 @@ def test_parse_ffmpeg_progress_bounds_before_completion():
 def test_parse_ffmpeg_progress_ignores_lines_without_time():
     assert _parse_progress("ffmpeg diagnostic", 150) is None
     assert _parse_progress("time=00:00:01.00", 0) is None
+
+
+class _FakeFfmpegProcess:
+    def __init__(self, stdout: bytes, returncode: int | None = None):
+        self.stdout = io.BytesIO(stdout)
+        self.returncode = returncode
+        self.terminated = False
+        self.killed = False
+
+    def poll(self):
+        return self.returncode
+
+    def terminate(self):
+        self.terminated = True
+        self.returncode = -15
+
+    def kill(self):
+        self.killed = True
+        self.returncode = -9
+
+    def wait(self, timeout=None):
+        if self.returncode is None:
+            self.returncode = 1
+        return self.returncode
+
+
+def _rip_worker(tmp_path) -> RipWorker:
+    album = AlbumInfo(artist="Artist", album="Album")
+    request = RipRequest("D:", album, tmp_path)
+    return RipWorker(Settings(), request)
+
+
+def test_run_ffmpeg_cancel_terminates_process_and_removes_partial(monkeypatch, tmp_path):
+    proc = _FakeFfmpegProcess(b"size=1kB time=00:00:01.00\r", returncode=None)
+    monkeypatch.setattr("subprocess.Popen", lambda *args, **kwargs: proc)
+    out = tmp_path / "partial.flac"
+    out.write_bytes(b"partial")
+    worker = _rip_worker(tmp_path)
+    worker.cancel()
+
+    failure = worker._run_ffmpeg(["ffmpeg"], 1, out, 10.0)
+
+    assert failure is not None
+    assert failure.reason == "Cancelled by user."
+    assert proc.terminated
+    assert not out.exists()
+
+
+def test_run_ffmpeg_captures_carriage_return_output(monkeypatch, tmp_path):
+    proc = _FakeFfmpegProcess(
+        b"frame=1 time=00:00:01.00\rsize=2kB time=00:00:02.00\r",
+        returncode=None,
+    )
+    monkeypatch.setattr("subprocess.Popen", lambda *args, **kwargs: proc)
+    out = tmp_path / "failed.flac"
+    worker = _rip_worker(tmp_path)
+
+    failure = worker._run_ffmpeg(["ffmpeg"], 1, out, 10.0)
+
+    assert failure is not None
+    assert failure.returncode == 1
+    assert failure.output == [
+        "frame=1 time=00:00:01.00",
+        "size=2kB time=00:00:02.00",
+    ]
 
 
 def test_ffmpeg_format_listing_detects_libcdio_demuxer():

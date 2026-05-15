@@ -1,3 +1,5 @@
+import builtins
+
 from lyon.core.yt_downloader import YtDownloadWorker, _video_postprocessors
 
 
@@ -38,3 +40,24 @@ def test_progress_finished_emits_track_ready_without_postprocessors(tmp_path):
     worker._on_progress({"status": "finished", "filename": str(video)})
 
     assert emitted == [str(video)]
+
+
+def test_import_error_emits_download_finished(monkeypatch, tmp_path):
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "yt_dlp":
+            raise ImportError("missing")
+        return real_import(name, *args, **kwargs)
+
+    worker = YtDownloadWorker("https://example.invalid/video", "video", "mp4", str(tmp_path))
+    errors: list[str] = []
+    finished: list[tuple[int, int]] = []
+    worker.error.connect(errors.append)
+    worker.download_finished.connect(lambda succeeded, failed: finished.append((succeeded, failed)))
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    worker.run()
+
+    assert errors == ["yt-dlp is not installed. Run:  pip install yt-dlp"]
+    assert finished == [(0, 1)]

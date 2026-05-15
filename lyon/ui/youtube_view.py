@@ -59,9 +59,13 @@ class _SearchWorker(QThread):
             opts = {"quiet": True, "no_warnings": True, "extract_flat": "in_playlist"}
             with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(f"ytsearch{_MAX_RESULTS}:{self._query}", download=False)
+            if self.isInterruptionRequested():
+                return
             entries = (info.get("entries") or []) if info else []
             results = []
             for e in entries:
+                if self.isInterruptionRequested():
+                    return
                 thumb = e.get("thumbnail") or ""
                 if not thumb:
                     for t in e.get("thumbnails") or []:
@@ -134,6 +138,7 @@ class YouTubeView(QWidget):
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self._worker: _SearchWorker | None = None
+        self._shutting_down = False
         self._nam = QNetworkAccessManager(self)
 
         layout = QVBoxLayout(self)
@@ -203,11 +208,34 @@ class YouTubeView(QWidget):
         if not text or not HAS_YTDLP:
             return False
         self.search.setText(text)
-        self._run_search(text)
-        return True
+        return self._run_search(text)
 
     def pause_all_videos(self) -> None:
         """No-op — kept for API compatibility with MainWindow."""
+
+    def is_searching(self) -> bool:
+        return self._worker is not None and self._worker.isRunning()
+
+    def shutdown(self, timeout_ms: int = 3000) -> None:
+        """Stop any active search worker before the widget is destroyed."""
+        self._shutting_down = True
+        worker = self._worker
+        if worker is None:
+            return
+        try:
+            worker.results_ready.disconnect(self._on_results)
+        except (RuntimeError, TypeError):
+            pass
+        try:
+            worker.error.disconnect(self._on_error)
+        except (RuntimeError, TypeError):
+            pass
+        worker.requestInterruption()
+        worker.quit()
+        if worker.isRunning() and not worker.wait(timeout_ms):
+            worker.terminate()
+            worker.wait(1000)
+        self._worker = None
 
     # ------------------------------------------------------------------ internals
 
@@ -216,26 +244,32 @@ class YouTubeView(QWidget):
         if text and HAS_YTDLP:
             self._run_search(text)
 
-    def _run_search(self, query: str) -> None:
+    def _run_search(self, query: str) -> bool:
         if self._worker is not None and self._worker.isRunning():
-            self._worker.results_ready.disconnect()
-            self._worker.error.disconnect()
-            self._worker.quit()
+            self._status.setText("Search already in progress…")
+            self._status.show()
+            return False
 
         self._list.clear()
         self._list.hide()
         self._hint.hide()
         self._status.setText("Searching…")
         self._status.show()
+        self.search.setEnabled(False)
         self._search_btn.setEnabled(False)
 
-        self._worker = _SearchWorker(query, self)
-        self._worker.results_ready.connect(self._on_results)
-        self._worker.error.connect(self._on_error)
-        self._worker.finished.connect(lambda: self._search_btn.setEnabled(True))
-        self._worker.start()
+        worker = _SearchWorker(query, self)
+        self._worker = worker
+        worker.results_ready.connect(self._on_results)
+        worker.error.connect(self._on_error)
+        worker.finished.connect(lambda w=worker: self._on_search_finished(w))
+        worker.finished.connect(worker.deleteLater)
+        worker.start()
+        return True
 
     def _on_results(self, results: list) -> None:
+        if self._shutting_down:
+            return
         self._status.hide()
         self._list.clear()
 
@@ -257,9 +291,19 @@ class YouTubeView(QWidget):
         self._list.show()
 
     def _on_error(self, msg: str) -> None:
+        if self._shutting_down:
+            return
         self._status.hide()
         self._hint.setText(f"Search failed:\n{msg}")
         self._hint.show()
+
+    def _on_search_finished(self, worker: _SearchWorker) -> None:
+        if self._worker is worker:
+            self._worker = None
+        if self._shutting_down:
+            return
+        self.search.setEnabled(HAS_YTDLP)
+        self._search_btn.setEnabled(HAS_YTDLP)
 
     def _fetch_thumbnail(self, url: str, row: _ResultRow) -> None:
         req = QNetworkRequest(QUrl(url))
