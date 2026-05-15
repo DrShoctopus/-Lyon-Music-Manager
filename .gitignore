@@ -21,5 +21,6 @@ dist/
 *.sqlite3
 bin/ffmpeg.exe
 bin/libdiscid*.dll
+bin/vlc/
 .DS_Store
 Thumbs.db
