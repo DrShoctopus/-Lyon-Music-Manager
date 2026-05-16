@@ -6,10 +6,8 @@ supports an optional action button (e.g. "Undo").
 """
 from __future__ import annotations
 
-from typing import Callable
-
 from PySide6.QtCore import (
-    Property, QEasingCurve, QPropertyAnimation, QTimer, Qt, Signal,
+    QEasingCurve, QPropertyAnimation, QTimer, Qt, Signal,
 )
 from PySide6.QtWidgets import (
     QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QToolButton, QWidget,
@@ -49,7 +47,7 @@ class Toast(QFrame):
 
         self._label = QLabel(message)
         self._label.setObjectName("toastLabel")
-        self._label.setWordWrap(False)
+        self._label.setWordWrap(True)
         layout.addWidget(self._label, 1)
 
         self._action_btn: QToolButton | None = None
@@ -130,8 +128,12 @@ class Toast(QFrame):
         host = self.parentWidget()
         if host is None:
             return
+        max_width = max(160, min(560, host.width() - 32))
+        if self.maximumWidth() != max_width:
+            self.setMaximumWidth(max_width)
         self.adjustSize()
-        x = max(0, (host.width() - self.width()) // 2)
+        x = max(16, (host.width() - self.width()) // 2)
+        x = min(x, max(0, host.width() - self.width() - 16))
         y = max(0, host.height() - self.height() - bottom_margin)
         self.move(x, y)
 
