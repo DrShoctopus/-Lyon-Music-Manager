@@ -13,6 +13,7 @@ AccurateRip v1 CRC algorithm:
 """
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from collections import deque
 import queue
 import struct
@@ -255,6 +256,7 @@ def verify_rips(
     total_tracks: int,
     *,
     session: Optional[requests.Session] = None,
+    max_workers: int | None = None,
 ) -> list[TrackVerifyResult]:
     """Verify ripped FLACs against CTDB CRCs. Returns one result per track.
 
@@ -274,60 +276,104 @@ def verify_rips(
             for n in sorted(ripped_files)
         ]
 
-    results: list[TrackVerifyResult] = []
     sorted_tracks = sorted(ripped_files)
     disc_total = max(total_tracks, sorted_tracks[-1] if sorted_tracks else 0)
-    for track_no in sorted_tracks:
-        flac_path = ripped_files[track_no]
-        is_first = track_no == 1
-        is_last = track_no == disc_total
+    worker_count = _verify_worker_count(len(sorted_tracks), max_workers)
+    if worker_count <= 1:
+        return [
+            _verify_one_rip(
+                track_no,
+                ripped_files[track_no],
+                ctdb_crcs,
+                ffmpeg,
+                disc_total,
+            )
+            for track_no in sorted_tracks
+        ]
 
-        crc = compute_accuraterip_v1_crc(
-            flac_path,
-            ffmpeg,
-            is_first_track=is_first,
-            is_last_track=is_last,
+    with ThreadPoolExecutor(
+        max_workers=worker_count,
+        thread_name_prefix="ctdb-verify",
+    ) as pool:
+        results = list(
+            pool.map(
+                lambda track_no: _verify_one_rip(
+                    track_no,
+                    ripped_files[track_no],
+                    ctdb_crcs,
+                    ffmpeg,
+                    disc_total,
+                ),
+                sorted_tracks,
+            )
         )
-        if crc is None:
-            results.append(TrackVerifyResult(
-                track_no=track_no,
-                verified=False,
-                message=f"Track {track_no}: could not compute CRC (ffmpeg decode failed).",
-            ))
-            continue
-
-        track_crcs = ctdb_crcs.get(track_no, [])
-        if not track_crcs:
-            results.append(TrackVerifyResult(
-                track_no=track_no,
-                verified=False,
-                computed_crc=crc,
-                message=f"Track {track_no}: not in CUETools DB (no reference CRC available).",
-            ))
-            continue
-
-        # Find the best (highest confidence) matching entry.
-        match_confidence = next(
-            (conf for stored_crc, conf in sorted(track_crcs, key=lambda x: -x[1]) if stored_crc == crc),
-            None,
-        )
-        if match_confidence is not None:
-            results.append(TrackVerifyResult(
-                track_no=track_no,
-                verified=True,
-                confidence=match_confidence,
-                computed_crc=crc,
-                message=f"Track {track_no}: verified OK (confidence {match_confidence}).",
-            ))
-        else:
-            results.append(TrackVerifyResult(
-                track_no=track_no,
-                verified=False,
-                computed_crc=crc,
-                message=f"Track {track_no}: CRC mismatch — rip may contain errors.",
-            ))
 
     return results
+
+
+def _verify_worker_count(track_count: int, requested: int | None) -> int:
+    if track_count <= 1:
+        return 1
+    if requested is None:
+        return min(2, track_count)
+    return max(1, min(int(requested), track_count))
+
+
+def _verify_one_rip(
+    track_no: int,
+    flac_path: object,
+    ctdb_crcs: dict[int, list[tuple[int, int]]],
+    ffmpeg: str,
+    disc_total: int,
+) -> TrackVerifyResult:
+    is_first = track_no == 1
+    is_last = track_no == disc_total
+
+    crc = compute_accuraterip_v1_crc(
+        flac_path,
+        ffmpeg,
+        is_first_track=is_first,
+        is_last_track=is_last,
+    )
+    if crc is None:
+        return TrackVerifyResult(
+            track_no=track_no,
+            verified=False,
+            message=f"Track {track_no}: could not compute CRC (ffmpeg decode failed).",
+        )
+
+    track_crcs = ctdb_crcs.get(track_no, [])
+    if not track_crcs:
+        return TrackVerifyResult(
+            track_no=track_no,
+            verified=False,
+            computed_crc=crc,
+            message=f"Track {track_no}: not in CUETools DB (no reference CRC available).",
+        )
+
+    # Find the best (highest confidence) matching entry.
+    match_confidence = next(
+        (
+            conf
+            for stored_crc, conf in sorted(track_crcs, key=lambda x: -x[1])
+            if stored_crc == crc
+        ),
+        None,
+    )
+    if match_confidence is not None:
+        return TrackVerifyResult(
+            track_no=track_no,
+            verified=True,
+            confidence=match_confidence,
+            computed_crc=crc,
+            message=f"Track {track_no}: verified OK (confidence {match_confidence}).",
+        )
+    return TrackVerifyResult(
+        track_no=track_no,
+        verified=False,
+        computed_crc=crc,
+        message=f"Track {track_no}: CRC mismatch — rip may contain errors.",
+    )
 
 
 def _iter_tag(element: ET.Element, tag: str):

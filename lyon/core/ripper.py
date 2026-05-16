@@ -19,6 +19,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 from ctypes import wintypes
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -43,7 +44,9 @@ CDDA_SECTOR_SIZE = 2352
 CDDA_COOKED_SECTOR_SIZE = 2048
 CDDA_SAMPLE_RATE = 44100
 CDDA_CHANNELS = 2
-WINDOWS_CDDA_READ_CHUNK_SECTORS = 16
+WINDOWS_CDDA_INITIAL_READ_CHUNK_SECTORS = CD_SECTORS_PER_SECOND
+WINDOWS_CDDA_FALLBACK_READ_CHUNK_SECTORS = 16
+WINDOWS_CDDA_READ_CHUNK_SECTORS = WINDOWS_CDDA_INITIAL_READ_CHUNK_SECTORS
 IOCTL_CDROM_RAW_READ = 0x0002403E
 TRACK_MODE_CDDA = 2
 FFMPEG_ERROR_LINES = 8
@@ -347,19 +350,12 @@ def _decode_process_output(data: bytes) -> list[str]:
     return [line.strip() for line in text.splitlines() if line.strip()]
 
 
-def _read_windows_cdda_sectors(
-    drive: str,
-    start_sector: int,
-    sector_count: int,
-    *,
-    chunk_sectors: int = WINDOWS_CDDA_READ_CHUNK_SECTORS,
-):
-    if sys.platform != "win32":
-        raise _WindowsCddaReadError("raw CD reads are only available on Windows")
-    if sector_count <= 0:
-        return
+def _ctypes_last_error() -> int:
+    get_last_error = getattr(ctypes, "get_last_error", None)
+    return int(get_last_error()) if get_last_error is not None else 0
 
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+def _bind_raw_read_kernel32(kernel32) -> None:
     kernel32.CreateFileW.argtypes = [
         wintypes.LPCWSTR,
         wintypes.DWORD,
@@ -384,63 +380,148 @@ def _read_windows_cdda_sectors(
     kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
     kernel32.CloseHandle.restype = wintypes.BOOL
 
-    generic_read = 0x80000000
-    file_share_read = 0x00000001
-    file_share_write = 0x00000002
-    open_existing = 3
-    invalid_handle = wintypes.HANDLE(-1).value
 
-    drive_path = _windows_cdda_drive_path(drive)
-    handle = kernel32.CreateFileW(
-        drive_path,
-        generic_read,
-        file_share_read | file_share_write,
-        None,
-        open_existing,
-        0,
-        None,
-    )
-    if handle == invalid_handle:
-        err = ctypes.get_last_error()
-        raise _WindowsCddaReadError(f"could not open {drive_path}: Windows error {err}")
+class _WindowsCddaReader:
+    """Reusable raw CD-DA sector reader for Windows optical drives."""
 
-    remaining = int(sector_count)
-    next_sector = int(start_sector)
-    try:
+    def __init__(
+        self,
+        drive: str,
+        *,
+        chunk_sectors: int = WINDOWS_CDDA_INITIAL_READ_CHUNK_SECTORS,
+        fallback_chunk_sectors: int = WINDOWS_CDDA_FALLBACK_READ_CHUNK_SECTORS,
+        kernel32=None,
+    ):
+        self.drive = drive
+        self.drive_path = _windows_cdda_drive_path(drive)
+        self.chunk_sectors = max(1, int(chunk_sectors))
+        self.fallback_chunk_sectors = max(1, int(fallback_chunk_sectors))
+        self._kernel32 = kernel32
+        self._handle = None
+        self._using_fallback_chunk = False
+
+    @property
+    def active_chunk_sectors(self) -> int:
+        if self._using_fallback_chunk:
+            return self.fallback_chunk_sectors
+        return self.chunk_sectors
+
+    @property
+    def using_fallback_chunk(self) -> bool:
+        return self._using_fallback_chunk
+
+    def __enter__(self) -> "_WindowsCddaReader":
+        if sys.platform != "win32":
+            raise _WindowsCddaReadError("raw CD reads are only available on Windows")
+        if self._kernel32 is None:
+            self._kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            _bind_raw_read_kernel32(self._kernel32)
+
+        generic_read = 0x80000000
+        file_share_read = 0x00000001
+        file_share_write = 0x00000002
+        open_existing = 3
+        invalid_handle = wintypes.HANDLE(-1).value
+
+        handle = self._kernel32.CreateFileW(
+            self.drive_path,
+            generic_read,
+            file_share_read | file_share_write,
+            None,
+            open_existing,
+            0,
+            None,
+        )
+        if handle == invalid_handle:
+            err = _ctypes_last_error()
+            raise _WindowsCddaReadError(
+                f"could not open {self.drive_path}: Windows error {err}"
+            )
+        self._handle = handle
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
+
+    def close(self) -> None:
+        if self._handle is None or self._kernel32 is None:
+            return
+        try:
+            self._kernel32.CloseHandle(self._handle)
+        finally:
+            self._handle = None
+
+    def read_sectors(self, start_sector: int, sector_count: int):
+        if self._handle is None:
+            raise _WindowsCddaReadError("raw CD reader is not open")
+        remaining = int(sector_count)
+        next_sector = int(start_sector)
         while remaining > 0:
-            count = min(chunk_sectors, remaining)
-            buffer = ctypes.create_string_buffer(count * CDDA_SECTOR_SIZE)
-            info = _RawReadInfo(
-                next_sector * CDDA_COOKED_SECTOR_SIZE,
-                count,
-                TRACK_MODE_CDDA,
+            count = min(self.active_chunk_sectors, remaining)
+            chunk = self._read_chunk(next_sector, count)
+            yield chunk
+            sectors_read = len(chunk) // CDDA_SECTOR_SIZE
+            next_sector += sectors_read
+            remaining -= sectors_read
+
+    def _read_chunk(self, start_sector: int, sector_count: int) -> bytes:
+        try:
+            return self._read_chunk_once(start_sector, sector_count)
+        except _WindowsCddaReadError:
+            if (
+                self._using_fallback_chunk
+                or sector_count <= self.fallback_chunk_sectors
+            ):
+                raise
+            self._using_fallback_chunk = True
+            return self._read_chunk_once(
+                start_sector,
+                min(self.fallback_chunk_sectors, sector_count),
             )
-            bytes_returned = wintypes.DWORD(0)
-            ok = kernel32.DeviceIoControl(
-                handle,
-                IOCTL_CDROM_RAW_READ,
-                ctypes.byref(info),
-                ctypes.sizeof(info),
-                buffer,
-                ctypes.sizeof(buffer),
-                ctypes.byref(bytes_returned),
-                None,
+
+    def _read_chunk_once(self, start_sector: int, sector_count: int) -> bytes:
+        assert self._kernel32 is not None
+        buffer = ctypes.create_string_buffer(sector_count * CDDA_SECTOR_SIZE)
+        info = _RawReadInfo(
+            start_sector * CDDA_COOKED_SECTOR_SIZE,
+            sector_count,
+            TRACK_MODE_CDDA,
+        )
+        bytes_returned = wintypes.DWORD(0)
+        ok = self._kernel32.DeviceIoControl(
+            self._handle,
+            IOCTL_CDROM_RAW_READ,
+            ctypes.byref(info),
+            ctypes.sizeof(info),
+            buffer,
+            ctypes.sizeof(buffer),
+            ctypes.byref(bytes_returned),
+            None,
+        )
+        if not ok:
+            err = _ctypes_last_error()
+            raise _WindowsCddaReadError(
+                f"could not read CD audio sector {start_sector}: Windows error {err}"
             )
-            if not ok:
-                err = ctypes.get_last_error()
-                raise _WindowsCddaReadError(
-                    f"could not read CD audio sector {next_sector}: Windows error {err}"
-                )
-            expected = count * CDDA_SECTOR_SIZE
-            if bytes_returned.value != expected:
-                raise _WindowsCddaReadError(
-                    f"read {bytes_returned.value} bytes from sector {next_sector}; expected {expected}"
-                )
-            yield buffer.raw[:bytes_returned.value]
-            next_sector += count
-            remaining -= count
-    finally:
-        kernel32.CloseHandle(handle)
+        expected = sector_count * CDDA_SECTOR_SIZE
+        if bytes_returned.value != expected:
+            raise _WindowsCddaReadError(
+                f"read {bytes_returned.value} bytes from sector {start_sector}; expected {expected}"
+            )
+        return buffer.raw[:bytes_returned.value]
+
+
+def _read_windows_cdda_sectors(
+    drive: str,
+    start_sector: int,
+    sector_count: int,
+    *,
+    chunk_sectors: int = WINDOWS_CDDA_READ_CHUNK_SECTORS,
+):
+    if sector_count <= 0:
+        return
+    with _WindowsCddaReader(drive, chunk_sectors=chunk_sectors) as reader:
+        yield from reader.read_sectors(start_sector, sector_count)
 
 
 # ---------------------------------------------------------------- worker
@@ -679,31 +760,68 @@ class RipWorker(QObject):
         success = True
         ripped_files: dict[int, Path] = {}
         output_paths = track_output_files(folder, tracks_to_rip, total, ext)
-        for tr, out in zip(tracks_to_rip, output_paths):
-            if self._cancel:
-                self.finished.emit(False, "Cancelled")
+        raw_reader: _WindowsCddaReader | None = None
+        logged_raw_fallback = False
+        if not self._ffmpeg_has_libcdio and sys.platform == "win32":
+            try:
+                raw_reader = _WindowsCddaReader(self.request.drive)
+                raw_reader.__enter__()
+                self.log.emit(
+                    "Raw CD reader opened "
+                    f"({raw_reader.active_chunk_sectors} sectors per read)."
+                )
+            except _WindowsCddaReadError as e:
+                message = f"Windows raw CD reader failed: {e}"
+                failures.append(RipFailure(None, "Rip setup", None, message))
+                self._emit_failure_log(folder, ff, failures, message)
+                self.finished.emit(False, message)
                 return
 
-            self.track_started.emit(tr.number, tr.title)
-            self.log.emit(f"Ripping track {tr.number}: {tr.title}")
-            failure = self._rip_track(ff, tr.number, tr.title, out)
-            if failure is not None:
-                success = False
-                failures.append(failure)
-                self.log.emit(f"Track {tr.number} failed: {failure.reason}")
-                self.track_failed.emit(tr.number, failure.reason)
-                continue
+        try:
+            for tr, out in zip(tracks_to_rip, output_paths):
+                if self._cancel:
+                    self.finished.emit(False, "Cancelled")
+                    return
 
-            from .tagger import write_tags
-            if not write_tags(out, album, tr, art_bytes):
-                success = False
-                reason = "Track ripped but audio tags could not be written."
-                failures.append(RipFailure(tr.number, tr.title, out, reason))
-                self.log.emit(f"Track {tr.number} {reason.lower()}")
-                self.track_failed.emit(tr.number, reason)
-                continue
-            self.track_finished.emit(tr.number, str(out))
-            ripped_files[tr.number] = out
+                self.track_started.emit(tr.number, tr.title)
+                self.log.emit(f"Ripping track {tr.number}: {tr.title}")
+                failure = self._rip_track(
+                    ff,
+                    tr.number,
+                    tr.title,
+                    out,
+                    raw_reader=raw_reader,
+                )
+                if (
+                    raw_reader is not None
+                    and raw_reader.using_fallback_chunk
+                    and not logged_raw_fallback
+                ):
+                    logged_raw_fallback = True
+                    self.log.emit(
+                        "Raw CD reader fell back to "
+                        f"{raw_reader.active_chunk_sectors} sectors per read for compatibility."
+                    )
+                if failure is not None:
+                    success = False
+                    failures.append(failure)
+                    self.log.emit(f"Track {tr.number} failed: {failure.reason}")
+                    self.track_failed.emit(tr.number, failure.reason)
+                    continue
+
+                from .tagger import write_tags
+                if not write_tags(out, album, tr, art_bytes):
+                    success = False
+                    reason = "Track ripped but audio tags could not be written."
+                    failures.append(RipFailure(tr.number, tr.title, out, reason))
+                    self.log.emit(f"Track {tr.number} {reason.lower()}")
+                    self.track_failed.emit(tr.number, reason)
+                    continue
+                self.track_finished.emit(tr.number, str(out))
+                ripped_files[tr.number] = out
+        finally:
+            if raw_reader is not None:
+                raw_reader.close()
 
         if (
             self.settings.ctdb_verify_rips
@@ -726,12 +844,15 @@ class RipWorker(QObject):
     ) -> None:
         from .ctdb_verify import verify_rips
         self.log.emit("Verifying rips against CUETools DB...")
+        started_at = time.perf_counter()
         results = verify_rips(
             ripped_files,
             self.request.ctdb_toc,
             ffmpeg,
             total_tracks,
         )
+        elapsed = time.perf_counter() - started_at
+        self.log.emit(f"CUETools verification finished in {elapsed:.1f}s.")
         for r in results:
             self.log.emit(r.message)
 
@@ -760,6 +881,8 @@ class RipWorker(QObject):
         track_no: int,
         title: str,
         out: Path,
+        *,
+        raw_reader: _WindowsCddaReader | None = None,
     ) -> Optional[RipFailure]:
         drive = self.request.drive
         codec_args = _codec_args(self.settings)
@@ -802,6 +925,7 @@ class RipWorker(QObject):
             out,
             codec_args,
             span,
+            raw_reader=raw_reader,
         )
         if attempt_failure is None:
             return None
@@ -814,10 +938,13 @@ class RipWorker(QObject):
         out: Path,
         codec_args: list[str],
         sector_span: tuple[int, int],
+        *,
+        raw_reader: _WindowsCddaReader | None = None,
     ) -> Optional[FfmpegAttemptFailure]:
         start, end = sector_span
         total_sectors = end - start
         cmd = _build_raw_cdda_ffmpeg_command(ffmpeg, out, codec_args)
+        started_at = time.perf_counter()
         try:
             proc = subprocess.Popen(
                 cmd,
@@ -866,7 +993,12 @@ class RipWorker(QObject):
         try:
             if proc.stdin is None:
                 raise OSError("ffmpeg stdin pipe was not created")
-            for chunk in _read_windows_cdda_sectors(self.request.drive, start, total_sectors):
+            chunks = (
+                raw_reader.read_sectors(start, total_sectors)
+                if raw_reader is not None
+                else _read_windows_cdda_sectors(self.request.drive, start, total_sectors)
+            )
+            for chunk in chunks:
                 if self._cancel:
                     try:
                         proc.stdin.close()
@@ -910,6 +1042,16 @@ class RipWorker(QObject):
 
         if proc.returncode == 0 and out.exists() and out.stat().st_size > 0:
             self.track_progress.emit(track_no, 100)
+            elapsed = time.perf_counter() - started_at
+            chunk_size = (
+                raw_reader.active_chunk_sectors
+                if raw_reader is not None
+                else WINDOWS_CDDA_READ_CHUNK_SECTORS
+            )
+            self.log.emit(
+                f"Track {track_no} raw read and encode finished in "
+                f"{elapsed:.1f}s ({chunk_size}-sector reads)."
+            )
             return None
 
         _cleanup_partial()

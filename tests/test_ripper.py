@@ -132,10 +132,15 @@ from lyon.core.cd_detect import DiscToc  # noqa: E402
 from lyon.core.metadata import AlbumInfo, TrackInfo  # noqa: E402
 from lyon.core.settings import Settings  # noqa: E402
 from lyon.core.ripper import (  # noqa: E402
+    CDDA_SECTOR_SIZE,
     FfmpegAttemptFailure,
     RipFailure,
     RipRequest,
     RipWorker,
+    WINDOWS_CDDA_FALLBACK_READ_CHUNK_SECTORS,
+    WINDOWS_CDDA_INITIAL_READ_CHUNK_SECTORS,
+    _WindowsCddaReadError,
+    _WindowsCddaReader,
     _build_libcdio_track_command,
     _build_raw_cdda_ffmpeg_command,
     _ffmpeg_format_listing_has_demuxer,
@@ -306,6 +311,98 @@ def test_windows_cdda_drive_path_normalises_drive_letters():
     assert _windows_cdda_drive_path("\\\\.\\F:") == "\\\\.\\F:"
 
 
+class _FakeKernel32:
+    def __init__(self, *, max_chunk: int, fail_all: bool = False):
+        self.max_chunk = max_chunk
+        self.fail_all = fail_all
+        self.successful_counts: list[int] = []
+        self.rejected_counts: list[int] = []
+        self.closed_handles: list[int] = []
+
+    def CreateFileW(self, *_):
+        return 123
+
+    def DeviceIoControl(
+        self,
+        _handle,
+        _ioctl,
+        info_ptr,
+        _info_size,
+        _buffer,
+        _buffer_size,
+        bytes_returned_ptr,
+        _overlapped,
+    ):
+        count = int(info_ptr._obj.SectorCount)
+        if self.fail_all or count > self.max_chunk:
+            self.rejected_counts.append(count)
+            return False
+        self.successful_counts.append(count)
+        bytes_returned_ptr._obj.value = count * CDDA_SECTOR_SIZE
+        return True
+
+    def CloseHandle(self, handle):
+        self.closed_handles.append(handle)
+        return True
+
+
+def test_windows_cdda_reader_uses_larger_initial_chunks(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    kernel32 = _FakeKernel32(max_chunk=WINDOWS_CDDA_INITIAL_READ_CHUNK_SECTORS)
+
+    with _WindowsCddaReader("D:", kernel32=kernel32) as reader:
+        chunks = list(reader.read_sectors(0, WINDOWS_CDDA_INITIAL_READ_CHUNK_SECTORS * 2))
+
+    assert [len(chunk) // CDDA_SECTOR_SIZE for chunk in chunks] == [
+        WINDOWS_CDDA_INITIAL_READ_CHUNK_SECTORS,
+        WINDOWS_CDDA_INITIAL_READ_CHUNK_SECTORS,
+    ]
+    assert kernel32.successful_counts == [
+        WINDOWS_CDDA_INITIAL_READ_CHUNK_SECTORS,
+        WINDOWS_CDDA_INITIAL_READ_CHUNK_SECTORS,
+    ]
+    assert kernel32.rejected_counts == []
+    assert kernel32.closed_handles == [123]
+
+
+def test_windows_cdda_reader_falls_back_to_smaller_chunks(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    kernel32 = _FakeKernel32(max_chunk=WINDOWS_CDDA_FALLBACK_READ_CHUNK_SECTORS)
+
+    with _WindowsCddaReader("D:", kernel32=kernel32) as reader:
+        chunks = list(reader.read_sectors(0, WINDOWS_CDDA_INITIAL_READ_CHUNK_SECTORS))
+
+    assert kernel32.rejected_counts == [WINDOWS_CDDA_INITIAL_READ_CHUNK_SECTORS]
+    assert kernel32.successful_counts == [
+        WINDOWS_CDDA_FALLBACK_READ_CHUNK_SECTORS,
+        WINDOWS_CDDA_FALLBACK_READ_CHUNK_SECTORS,
+        WINDOWS_CDDA_FALLBACK_READ_CHUNK_SECTORS,
+        WINDOWS_CDDA_FALLBACK_READ_CHUNK_SECTORS,
+        WINDOWS_CDDA_INITIAL_READ_CHUNK_SECTORS - (WINDOWS_CDDA_FALLBACK_READ_CHUNK_SECTORS * 4),
+    ]
+    assert sum(len(chunk) for chunk in chunks) == WINDOWS_CDDA_INITIAL_READ_CHUNK_SECTORS * CDDA_SECTOR_SIZE
+    assert reader.using_fallback_chunk
+
+
+def test_windows_cdda_reader_raises_when_fallback_chunk_fails(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    kernel32 = _FakeKernel32(max_chunk=0, fail_all=True)
+
+    try:
+        with _WindowsCddaReader("D:", kernel32=kernel32) as reader:
+            list(reader.read_sectors(0, WINDOWS_CDDA_INITIAL_READ_CHUNK_SECTORS))
+    except _WindowsCddaReadError:
+        pass
+    else:
+        raise AssertionError("expected _WindowsCddaReadError")
+
+    assert kernel32.rejected_counts == [
+        WINDOWS_CDDA_INITIAL_READ_CHUNK_SECTORS,
+        WINDOWS_CDDA_FALLBACK_READ_CHUNK_SECTORS,
+    ]
+    assert kernel32.closed_handles == [123]
+
+
 def test_safe_path_component_strips_trailing_dots_and_spaces():
     # Windows silently drops trailing dots/spaces from file/dir names; two
     # albums named "Foo." and "Foo" would otherwise collide on the filesystem.
@@ -430,7 +527,7 @@ def test_rip_worker_filters_retry_tracks_without_shrinking_album_metadata(monkey
     tag_calls: list[tuple[int, int, str]] = []
     finished: list[tuple[bool, str]] = []
 
-    def fake_rip_track(self, ffmpeg, track_no, title, out):
+    def fake_rip_track(self, ffmpeg, track_no, title, out, **_):
         ripped.append((track_no, out.name))
         out.write_bytes(b"audio")
         return None
@@ -474,7 +571,7 @@ def test_rip_worker_reports_tag_failures_as_failed_not_finished(monkeypatch, tmp
     completed: list[tuple[int, str]] = []
     finished: list[tuple[bool, str]] = []
 
-    def fake_rip_track(self, ffmpeg, track_no, title, out):
+    def fake_rip_track(self, ffmpeg, track_no, title, out, **_):
         out.write_bytes(b"audio")
         return None
 
@@ -495,6 +592,71 @@ def test_rip_worker_reports_tag_failures_as_failed_not_finished(monkeypatch, tmp
     assert failed == [(1, "Track ripped but audio tags could not be written.")]
     assert completed == []
     assert finished[-1] == (False, "Rip finished with errors.")
+
+
+def test_rip_worker_reuses_one_raw_reader_for_multiple_tracks(monkeypatch, tmp_path):
+    album = AlbumInfo(artist="Artist", album="Album")
+    album.tracks = [
+        TrackInfo(number=1, title="First"),
+        TrackInfo(number=2, title="Second"),
+    ]
+    request = RipRequest(
+        "D:",
+        album,
+        tmp_path,
+        track_offsets=(150, 15150),
+        leadout_sector=30150,
+    )
+    worker = RipWorker(
+        Settings(download_artwork=False, ctdb_verify_rips=False),
+        request,
+    )
+    opened: list[str] = []
+    closed: list[str] = []
+    reader_ids: list[int] = []
+    finished: list[tuple[bool, str]] = []
+
+    class FakeReader:
+        active_chunk_sectors = 75
+        using_fallback_chunk = False
+
+        def __init__(self, drive):
+            self.drive = drive
+
+        def __enter__(self):
+            opened.append(self.drive)
+            return self
+
+        def close(self):
+            closed.append(self.drive)
+
+    def fake_run_windows(self, ffmpeg, track_no, out, codec_args, sector_span, *, raw_reader=None):
+        reader_ids.append(id(raw_reader))
+        out.write_bytes(b"audio")
+        return None
+
+    def fake_write_tags(*_):
+        return True
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr("lyon.core.ripper.find_ffmpeg", lambda: "ffmpeg")
+    monkeypatch.setattr("lyon.core.ripper._ffmpeg_supports_demuxer", lambda *_: False)
+    monkeypatch.setattr("lyon.core.ripper._WindowsCddaReader", FakeReader)
+    monkeypatch.setattr(RipWorker, "_run_windows_cdda_ffmpeg", fake_run_windows)
+    monkeypatch.setitem(
+        sys.modules,
+        "lyon.core.tagger",
+        types.SimpleNamespace(write_tags=fake_write_tags),
+    )
+    worker.finished.connect(lambda ok, msg: finished.append((ok, msg)))
+
+    worker.run()
+
+    assert opened == ["D:"]
+    assert closed == ["D:"]
+    assert len(reader_ids) == 2
+    assert reader_ids[0] == reader_ids[1]
+    assert finished[-1] == (True, "Rip complete.")
 
 
 def test_libcdio_failure_summary_recommends_supported_ffmpeg():
