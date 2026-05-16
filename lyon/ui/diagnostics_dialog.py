@@ -9,12 +9,13 @@ from PySide6.QtWidgets import (
 )
 
 from ..core.diagnostics import DependencyCheck, DiagnosticStatus, run_dependency_checks, summarize_dependency_checks
+from .theme import STATUS_ERROR, STATUS_OK, STATUS_WARNING
 
 
 _STATUS_COLORS = {
-    DiagnosticStatus.OK: QColor("#5ff59b"),
-    DiagnosticStatus.WARNING: QColor("#ffd166"),
-    DiagnosticStatus.MISSING: QColor("#ff6b6b"),
+    DiagnosticStatus.OK: QColor(STATUS_OK),
+    DiagnosticStatus.WARNING: QColor(STATUS_WARNING),
+    DiagnosticStatus.MISSING: QColor(STATUS_ERROR),
 }
 
 

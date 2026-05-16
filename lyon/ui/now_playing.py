@@ -34,7 +34,7 @@ class NowPlayingView(QWidget):
         f2 = self.artist.font(); f2.setPointSize(12)
         self.artist.setFont(f2)
         self.album = QLabel("")
-        self.album.setStyleSheet("color:#aab3c0;")
+        self.album.setObjectName("mutedText")
 
         info = QVBoxLayout()
         info.addStretch(1)

@@ -301,6 +301,31 @@ QLabel#sectionTitle {
     font-weight: 700;
     font-size: 14pt;
 }
+QLabel#sectionHeading {
+    color: #72f4ff;
+    font-weight: 600;
+    padding: 4px 6px;
+}
 QLabel#mutedText { color: #aeb9c4; }
+QLabel#mutedTextSmall { color: #8a93a0; font-size: 8pt; }
+QLabel#footerText {
+    color: #8a93a0;
+    font-size: 11px;
+    padding: 2px 4px;
+}
+QLabel#emptyStateText {
+    color: #8a93a0;
+    font-size: 13px;
+}
+QLabel#hintText {
+    color: #3a4a5a;
+    font-size: 11pt;
+}
+QLabel#linkLabel { color: #43e7ff; }
+QLabel#resultTitle {
+    color: #72f4ff;
+    font-weight: 600;
+    font-size: 10pt;
+}
 QLabel#warningLabel { color: #e8a830; font-size: 8pt; }
 """

@@ -84,7 +84,7 @@ class LibraryView(QWidget):
             v = QVBoxLayout(box)
             v.setContentsMargins(0, 0, 0, 0)
             heading = QLabel(label)
-            heading.setStyleSheet("color:#72f4ff;font-weight:600;padding:4px 6px;")
+            heading.setObjectName("sectionHeading")
             v.addWidget(heading)
             v.addWidget(w)
             splitter.addWidget(box)
@@ -92,7 +92,7 @@ class LibraryView(QWidget):
         rv = QVBoxLayout(right)
         rv.setContentsMargins(0, 0, 0, 0)
         rh = QLabel("Tracks")
-        rh.setStyleSheet("color:#72f4ff;font-weight:600;padding:4px 6px;")
+        rh.setObjectName("sectionHeading")
         rv.addWidget(rh)
         rv.addWidget(self.tracks)
         splitter.addWidget(right)
@@ -106,7 +106,7 @@ class LibraryView(QWidget):
 
         empty_text = QLabel("No music found.\nAdd a folder to start building your library.")
         empty_text.setAlignment(Qt.AlignCenter)
-        empty_text.setStyleSheet("color:#8a93a0;font-size:13px;")
+        empty_text.setObjectName("emptyStateText")
         empty_layout.addWidget(empty_text)
 
         empty_btns = QHBoxLayout()
@@ -130,7 +130,7 @@ class LibraryView(QWidget):
 
         # Track count / duration footer
         self._footer_label = QLabel("")
-        self._footer_label.setStyleSheet("color:#8a93a0;font-size:11px;padding:2px 4px;")
+        self._footer_label.setObjectName("footerText")
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
