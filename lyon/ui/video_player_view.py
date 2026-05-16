@@ -25,11 +25,12 @@ from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QScrollArea, QSizePolicy, QSlider, QStackedWidget,
-    QToolButton, QVBoxLayout, QWidget,
+    QVBoxLayout, QWidget,
 )
 
 from ..core.equalizer import EQ_BAND_COUNT, normalize_equalizer_bands
 from ..core.playback_backend import _configure_vlc_runtime_path
+from .transport import PlayPauseSideButton, StopButton, VolumeButton
 from .widgets import ElidedLabel, format_duration, format_ms, placeholder_cover
 
 LOG = logging.getLogger(__name__)
@@ -246,9 +247,11 @@ class VideoPlayerView(QWidget):
 
     request_diagnostics = Signal()
 
-    def __init__(self, library: Any = None, parent: QWidget | None = None):
+    def __init__(self, library: Any = None, parent: QWidget | None = None,
+                 initial_volume: int = 80):
         super().__init__(parent)
         self._library = library
+        self._initial_volume = max(0, min(100, int(initial_volume)))
         _configure_vlc_runtime_path()
 
         self._vlc: Any = None
@@ -402,31 +405,26 @@ class VideoPlayerView(QWidget):
         seek_row.addWidget(self._seek, 1)
         seek_row.addWidget(self._total_lbl)
 
-        # Primary transport row: play / stop / volume / mute
-        self._play_btn = self._make_transport_btn("▶")
-        self._play_btn.setToolTip("Play / Pause  [Space]")
-        self._play_btn.setCheckable(True)
+        # Primary transport row: play / stop / volume
+        self._play_btn = PlayPauseSideButton()
         self._play_btn.clicked.connect(self._toggle_play)
 
-        self._stop_btn = self._make_transport_btn("■")
-        self._stop_btn.setToolTip("Stop")
+        self._stop_btn = StopButton()
         self._stop_btn.clicked.connect(self._stop)
 
-        vol_lbl = QLabel("♬")
-        vol_lbl.setObjectName("volumeIcon")
         self._vol_slider = QSlider(Qt.Horizontal)
         self._vol_slider.setObjectName("volumeSlider")
         self._vol_slider.setRange(0, 100)
-        self._vol_slider.setValue(80)
+        self._vol_slider.setValue(self._initial_volume)
         self._vol_slider.setFixedWidth(110)
+        self._vol_slider.setAccessibleName("Volume")
         self._vol_slider.setToolTip("Volume")
         self._vol_slider.valueChanged.connect(self._on_volume_changed)
-        self._player.audio_set_volume(80)
+        self._player.audio_set_volume(self._initial_volume)
 
-        self._mute_btn = self._make_transport_btn("M")
-        self._mute_btn.setToolTip("Mute / Unmute")
-        self._mute_btn.setCheckable(True)
-        self._mute_btn.clicked.connect(self._on_mute_toggled)
+        self._mute_btn = VolumeButton()
+        self._mute_btn.set_state(self._initial_volume, False)
+        self._mute_btn.toggled.connect(self._on_mute_toggled)
 
         transport_row = QHBoxLayout()
         transport_row.setContentsMargins(0, 0, 0, 0)
@@ -434,9 +432,8 @@ class VideoPlayerView(QWidget):
         transport_row.addWidget(self._play_btn)
         transport_row.addWidget(self._stop_btn)
         transport_row.addStretch(1)
-        transport_row.addWidget(vol_lbl)
-        transport_row.addWidget(self._vol_slider)
         transport_row.addWidget(self._mute_btn)
+        transport_row.addWidget(self._vol_slider)
 
         # Secondary options row: speed / audio track / subtitle track
         speed_lbl = self._ctrl_label("Speed:")
@@ -637,14 +634,6 @@ class VideoPlayerView(QWidget):
         lbl.setStyleSheet("color:#aab3c0;")
         return lbl
 
-    @staticmethod
-    def _make_transport_btn(text: str) -> QToolButton:
-        btn = QToolButton()
-        btn.setText(text)
-        btn.setObjectName("transportBtn")
-        btn.setFixedSize(42, 40)
-        return btn
-
     def _set_controls_enabled(self, enabled: bool) -> None:
         for w in (
             self._play_btn, self._stop_btn, self._rate_combo,
@@ -735,8 +724,7 @@ class VideoPlayerView(QWidget):
         self._info_lbl.setText(Path(path).name)
         self._set_controls_enabled(True)
         self._player.play()
-        self._play_btn.setChecked(True)
-        self._play_btn.setText("||")
+        self._play_btn.set_playing(True)
         self._timer.start()
         # Track lists and resolution are only available after the media parses
         QTimer.singleShot(600, self._populate_tracks)
@@ -746,24 +734,21 @@ class VideoPlayerView(QWidget):
 
     def _toggle_play(self) -> None:
         if not self._current_path:
-            self._play_btn.setChecked(False)
+            self._play_btn.set_playing(False)
             return
         if self._player.is_playing():
             self._player.pause()
-            self._play_btn.setText("▶")
-            self._play_btn.setChecked(False)
+            self._play_btn.set_playing(False)
         else:
             self._video_stack.setCurrentIndex(1)
             self._player.play()
             self._timer.start()
-            self._play_btn.setText("||")
-            self._play_btn.setChecked(True)
+            self._play_btn.set_playing(True)
 
     def _stop(self) -> None:
         self._player.stop()
         self._timer.stop()
-        self._play_btn.setText("▶")
-        self._play_btn.setChecked(False)
+        self._play_btn.set_playing(False)
         self._seek.blockSignals(True)
         self._seek.setValue(0)
         self._seek.blockSignals(False)
@@ -777,10 +762,11 @@ class VideoPlayerView(QWidget):
 
     def _on_volume_changed(self, value: int) -> None:
         self._player.audio_set_volume(value)
+        self._mute_btn.set_state(value, bool(self._player.audio_get_mute()))
 
     def _on_mute_toggled(self, checked: bool) -> None:
         self._player.audio_set_mute(checked)
-        self._mute_btn.setText("--" if checked else "M")
+        self._mute_btn.set_state(self._vol_slider.value(), checked)
 
     def apply_equalizer(self, enabled: bool, bands: list[int], preamp: int = 0) -> None:
         """Apply or clear the 10-band equalizer on the video player's VLC instance."""

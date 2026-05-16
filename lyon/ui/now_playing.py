@@ -1,20 +1,26 @@
 """Now Playing view + bottom transport bar."""
 from __future__ import annotations
 
-from PySide6.QtCore import QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QPainterPath
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QSizePolicy,
-    QSlider, QToolButton, QVBoxLayout, QWidget,
+    QAbstractItemView, QFrame, QHBoxLayout, QLabel, QListWidget,
+    QListWidgetItem, QSizePolicy, QSlider, QVBoxLayout, QWidget,
 )
 
 from ..core.library import Track
 from ..core.player import Player, RepeatMode
-from .widgets import ElidedLabel, cover_pixmap, format_ms
+from .transport import (
+    NextButton, PlayPauseButton, PrevButton, RepeatButton, ShuffleButton,
+    StopButton, VolumeButton,
+)
+from .widgets import ElidedLabel, cover_pixmap, format_duration, format_ms
+
+
+_FORMAT_LABELS = ("Codec", "Bitrate", "Sample rate")
 
 
 class NowPlayingView(QWidget):
-    """Big-cover now-playing screen."""
+    """Now Playing screen: cover, metadata, format strip, and queue preview."""
 
     def __init__(self, player: Player, parent: QWidget | None = None):
         super().__init__(parent)
@@ -27,111 +33,136 @@ class NowPlayingView(QWidget):
         self.cover.setPixmap(cover_pixmap(None, 360, "♪"))
 
         self.title = QLabel("Nothing playing")
-        f = self.title.font(); f.setPointSize(20); f.setBold(True)
+        f = self.title.font(); f.setPointSize(22); f.setBold(True)
         self.title.setFont(f)
-        self.title.setStyleSheet("color:#72f4ff;")
+        self.title.setObjectName("nowPlayingHeroTitle")
+        self.title.setWordWrap(True)
+
         self.artist = QLabel("")
-        f2 = self.artist.font(); f2.setPointSize(12)
+        f2 = self.artist.font(); f2.setPointSize(13)
         self.artist.setFont(f2)
+        self.artist.setObjectName("nowPlayingHeroArtist")
+
         self.album = QLabel("")
         self.album.setObjectName("mutedText")
 
+        self.format_strip = QLabel("")
+        self.format_strip.setObjectName("mutedTextSmall")
+
+        self.position_lbl = QLabel("")
+        self.position_lbl.setObjectName("mutedText")
+
         info = QVBoxLayout()
-        info.addStretch(1)
+        info.setSpacing(4)
+        info.addStretch(2)
         info.addWidget(self.title)
         info.addWidget(self.artist)
         info.addWidget(self.album)
-        info.addStretch(1)
+        info.addSpacing(14)
+        info.addWidget(self.format_strip)
+        info.addWidget(self.position_lbl)
+        info.addStretch(3)
 
-        top = QHBoxLayout()
-        top.addStretch(1)
-        top.addWidget(self.cover)
-        top.addSpacing(20)
-        top.addLayout(info, 1)
-        top.addStretch(1)
+        info_w = QWidget()
+        info_w.setLayout(info)
+        info_w.setMinimumWidth(280)
+
+        # Up Next queue preview
+        queue_header = QLabel("Up Next")
+        queue_header.setObjectName("sectionHeading")
+        self.queue_list = QListWidget()
+        self.queue_list.setObjectName("queuePreview")
+        self.queue_list.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.queue_list.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.queue_list.setUniformItemSizes(True)
+        self.queue_list.itemDoubleClicked.connect(self._on_queue_double_clicked)
+
+        queue_box = QVBoxLayout()
+        queue_box.setSpacing(4)
+        queue_box.addWidget(queue_header)
+        queue_box.addWidget(self.queue_list, 1)
+        queue_w = QWidget()
+        queue_w.setLayout(queue_box)
+        queue_w.setMinimumWidth(220)
+        queue_w.setMaximumWidth(340)
+
+        row = QHBoxLayout()
+        row.setSpacing(24)
+        row.addWidget(self.cover, 0, Qt.AlignTop)
+        row.addWidget(info_w, 1)
+        row.addWidget(queue_w, 0)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.addStretch(1)
-        layout.addLayout(top)
-        layout.addStretch(1)
+        layout.setContentsMargins(28, 28, 28, 28)
+        layout.addLayout(row, 1)
 
         player.track_changed.connect(self._on_track)
+        player.queue_changed.connect(self._refresh_queue)
+        player.position_changed.connect(self._on_position)
+        self._refresh_queue()
 
     def _on_track(self, track: Track | None) -> None:
         if track is None:
             self.title.setText("Nothing playing")
             self.artist.setText("")
             self.album.setText("")
+            self.format_strip.setText("")
+            self.position_lbl.setText("")
             self.cover.setPixmap(cover_pixmap(None, 360, "♪"))
         else:
-            self.title.setText(track.title)
+            self.title.setText(track.title or "Untitled")
             self.artist.setText(track.display_artist)
-            self.album.setText(track.album)
+            self.album.setText(track.album or "")
+            self.format_strip.setText(self._format_strip_text(track))
             self.cover.setPixmap(cover_pixmap(track.artwork_path, 360, "♪"))
+        self._refresh_queue()
 
-
-PLAY_BUTTON_SIZE = 62
-SIDE_BUTTON_SIZE = (42, 40)
-
-
-class PlayPauseButton(QToolButton):
-    def __init__(self, parent: QWidget | None = None):
-        super().__init__(parent)
-        self._playing = False
-        self.setText("")
-        self.setAccessibleName("Play")
-        self.setToolTip("Play/Pause")
-
-    def set_playing(self, playing: bool) -> None:
-        if self._playing == playing:
+    def _on_position(self, pos_ms: int, dur_ms: int) -> None:
+        if dur_ms <= 0 and pos_ms <= 0:
+            self.position_lbl.setText("")
             return
-        self._playing = playing
-        self.setAccessibleName("Pause" if playing else "Play")
-        self.update()
+        self.position_lbl.setText(f"{format_ms(pos_ms)} / {format_ms(dur_ms)}")
 
-    def paintEvent(self, ev) -> None:
-        super().paintEvent(ev)
+    @staticmethod
+    def _format_strip_text(track: Track) -> str:
+        from pathlib import Path
+        bits: list[str] = []
+        ext = Path(track.path).suffix.lstrip(".").upper()
+        if ext:
+            bits.append(ext)
+        if getattr(track, "bitrate", 0):
+            kbps = round(track.bitrate / 1000)
+            if kbps > 0:
+                bits.append(f"{kbps} kbps")
+        if getattr(track, "samplerate", 0):
+            sr = track.samplerate
+            bits.append(f"{sr // 1000} kHz" if sr % 1000 == 0 else f"{sr / 1000:g} kHz")
+        return "  ·  ".join(bits)
 
-        r = self.rect()
-        size = min(r.width(), r.height())
-        if size <= 0:
+    def _refresh_queue(self) -> None:
+        self.queue_list.clear()
+        queue = self.player.queue()
+        current = self.player.current_index()
+        upcoming = queue[current + 1:current + 1 + 12] if current >= 0 else queue[:12]
+        if not upcoming:
+            placeholder = QListWidgetItem("Queue is empty.")
+            placeholder.setFlags(Qt.NoItemFlags)
+            self.queue_list.addItem(placeholder)
             return
+        base = current + 1 if current >= 0 else 0
+        for offset, track in enumerate(upcoming):
+            item = QListWidgetItem(f"{track.title}  —  {track.display_artist}")
+            item.setData(Qt.UserRole, base + offset)
+            self.queue_list.addItem(item)
 
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(QColor("#ffffff"))
-
-        cx = r.center().x()
-        cy = r.center().y()
-
-        if self._playing:
-            bar_w = max(6.0, size * 0.14)
-            bar_h = size * 0.44
-            gap = max(3.0, size * 0.06)
-            top = cy - bar_h / 2
-            left_x = cx - gap / 2 - bar_w
-            right_x = cx + gap / 2
-            radius = max(1.0, bar_w * 0.08)
-            painter.drawRoundedRect(QRectF(left_x, top, bar_w, bar_h), radius, radius)
-            painter.drawRoundedRect(QRectF(right_x, top, bar_w, bar_h), radius, radius)
-            return
-
-        icon_w = size * 0.46
-        icon_h = size * 0.52
-        left_x = cx - icon_w * 0.34
-        right_x = cx + icon_w * 0.50
-        path = QPainterPath()
-        path.moveTo(left_x, cy - icon_h / 2)
-        path.lineTo(right_x, cy)
-        path.lineTo(left_x, cy + icon_h / 2)
-        path.closeSubpath()
-        painter.drawPath(path)
+    def _on_queue_double_clicked(self, item: QListWidgetItem) -> None:
+        idx = item.data(Qt.UserRole)
+        if isinstance(idx, int):
+            self.player.play_index(idx)
 
 
 class TransportBar(QWidget):
-    """Bottom playback area with controls contained inside the glossy capsule."""
+    """Persistent bottom transport bar."""
 
     open_now_playing = Signal()
     play_requested = Signal()
@@ -148,6 +179,7 @@ class TransportBar(QWidget):
         self.thumb.setObjectName("transportThumb")
         self.thumb.setFixedSize(68, 68)
         self.thumb.setPixmap(cover_pixmap(None, 68, "♪"))
+        self.thumb.setCursor(Qt.PointingHandCursor)
         self.thumb.mousePressEvent = lambda ev: self.open_now_playing.emit()
 
         self.title_lbl = ElidedLabel("Nothing playing")
@@ -168,39 +200,24 @@ class TransportBar(QWidget):
         meta_w.setMaximumWidth(340)
         meta_w.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
 
-        self.shuffle_btn = self._make_btn("⤨")
-        self.shuffle_btn.setToolTip("Shuffle")
-        self.shuffle_btn.setCheckable(True)
-        self.shuffle_btn.setAccessibleName("Shuffle")
-        self.shuffle_btn.setAccessibleDescription("Toggle shuffle mode")
-        self.repeat_btn = self._make_btn("⟳")
-        self.repeat_btn.setToolTip("Repeat")
-        self.repeat_btn.setCheckable(True)
-        self.repeat_btn.setAccessibleName("Repeat off")
-        self.repeat_btn.setAccessibleDescription("Cycle repeat mode: off, repeat all, repeat one")
-        self.stop_btn = self._make_btn("■")
-        self.stop_btn.setToolTip("Stop")
-        self.stop_btn.setAccessibleName("Stop")
-        self.stop_btn.setAccessibleDescription("Stop playback")
-        self.prev_btn = self._make_btn("◀◀")
-        self.prev_btn.setToolTip("Previous")
-        self.prev_btn.setAccessibleName("Previous")
-        self.prev_btn.setAccessibleDescription("Play previous track")
-        self.next_btn = self._make_btn("▶▶")
-        self.next_btn.setToolTip("Next")
-        self.next_btn.setAccessibleName("Next")
-        self.next_btn.setAccessibleDescription("Play next track")
-
+        self.shuffle_btn = ShuffleButton()
+        self.repeat_btn = RepeatButton()
+        self.stop_btn = StopButton()
+        self.prev_btn = PrevButton()
+        self.next_btn = NextButton()
         self.play_btn = PlayPauseButton()
-        self.play_btn.setObjectName("transportPlay")
-        self.play_btn.setFixedSize(PLAY_BUTTON_SIZE, PLAY_BUTTON_SIZE)
-        self.play_btn.clicked.connect(self.play_requested.emit)
+        self.vol_btn = VolumeButton()
+        self.vol_btn.set_state(player.volume(), player.is_muted())
 
+        self.play_btn.clicked.connect(self.play_requested.emit)
         self.prev_btn.clicked.connect(player.previous)
         self.next_btn.clicked.connect(player.next)
         self.stop_btn.clicked.connect(player.stop)
         self.shuffle_btn.toggled.connect(player.set_shuffle)
-        self.repeat_btn.clicked.connect(self._cycle_repeat)
+        self.shuffle_btn.setChecked(player.shuffle())
+        self.repeat_btn.set_state(self._repeat_to_int(player.repeat()))
+        self.repeat_btn.state_changed.connect(self._on_repeat_clicked)
+        self.vol_btn.toggled.connect(self._on_mute_toggled)
 
         controls = QHBoxLayout()
         controls.setContentsMargins(0, 0, 0, 0)
@@ -208,7 +225,7 @@ class TransportBar(QWidget):
         controls.addWidget(self.shuffle_btn)
         controls.addWidget(self.repeat_btn)
         controls.addWidget(self.stop_btn)
-        controls.addSpacing(4)
+        controls.addSpacing(6)
         controls.addWidget(self.prev_btn)
         controls.addWidget(self.play_btn)
         controls.addWidget(self.next_btn)
@@ -224,6 +241,7 @@ class TransportBar(QWidget):
         self.total_lbl.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.seek = QSlider(Qt.Horizontal)
         self.seek.setRange(0, 0)
+        self.seek.setAccessibleName("Seek position")
         self.seek.sliderPressed.connect(lambda: setattr(self, "_user_dragging", True))
         self.seek.sliderReleased.connect(self._on_seek_release)
 
@@ -251,22 +269,13 @@ class TransportBar(QWidget):
         self.vol.setObjectName("volumeSlider")
         self.vol.setMinimumWidth(100)
         self.vol.setMaximumWidth(150)
-        self.vol.valueChanged.connect(player.set_volume)
-
-        self.mute_btn = self._make_btn("Vol")
-        self.mute_btn.setToolTip("Mute/Unmute")
-        self.mute_btn.setCheckable(True)
-        self.mute_btn.setChecked(player.is_muted())
-        self.mute_btn.setAccessibleName("Mute" if player.is_muted() else "Volume")
-        self.mute_btn.setAccessibleDescription("Toggle mute")
-        self.mute_btn.toggled.connect(self._on_mute_toggled)
-        if player.is_muted():
-            self.mute_btn.setText("Mut")
+        self.vol.setAccessibleName("Volume")
+        self.vol.valueChanged.connect(self._on_volume_slider)
 
         vol_row = QHBoxLayout()
         vol_row.setContentsMargins(0, 0, 0, 0)
         vol_row.setSpacing(4)
-        vol_row.addWidget(self.mute_btn)
+        vol_row.addWidget(self.vol_btn)
         vol_row.addWidget(self.vol)
 
         bar_layout = QHBoxLayout(self.bar)
@@ -288,20 +297,18 @@ class TransportBar(QWidget):
         player.position_changed.connect(self._on_position)
         player.state_changed.connect(self._on_state)
 
-    def _make_btn(self, text: str) -> QToolButton:
-        b = QToolButton()
-        b.setText(text)
-        b.setObjectName("transportBtn")
-        b.setFixedSize(*SIDE_BUTTON_SIZE)
-        return b
+    @staticmethod
+    def _repeat_to_int(mode: RepeatMode) -> int:
+        return {RepeatMode.OFF: 0, RepeatMode.ALL: 1, RepeatMode.ONE: 2}[mode]
 
-    def _cycle_repeat(self) -> None:
+    def _on_repeat_clicked(self, _state: int) -> None:
+        # The user already cycled the visible state; advance the player to match.
         mode = self.player.cycle_repeat()
-        self.repeat_btn.setChecked(mode != RepeatMode.OFF)
-        labels = {RepeatMode.OFF: "⟳", RepeatMode.ALL: "⟳A", RepeatMode.ONE: "⟳1"}
-        accessible = {RepeatMode.OFF: "Repeat off", RepeatMode.ALL: "Repeat all", RepeatMode.ONE: "Repeat one"}
-        self.repeat_btn.setText(labels[mode])
-        self.repeat_btn.setAccessibleName(accessible[mode])
+        self.repeat_btn.set_state(self._repeat_to_int(mode))
+
+    def _on_volume_slider(self, value: int) -> None:
+        self.player.set_volume(value)
+        self.vol_btn.set_state(value, self.player.is_muted())
 
     def _on_track(self, track: Track | None) -> None:
         if track is None:
@@ -324,17 +331,11 @@ class TransportBar(QWidget):
 
     def _on_mute_toggled(self, muted: bool) -> None:
         self.player.set_muted(muted)
-        self.mute_btn.setText("Mut" if muted else "Vol")
-        self.mute_btn.setAccessibleName("Mute" if muted else "Volume")
+        self.vol_btn.set_state(self.vol.value(), muted)
 
     def _on_state(self, state: str) -> None:
         self.play_btn.set_playing(state == "playing")
-        muted = self.player.is_muted()
-        self.mute_btn.blockSignals(True)
-        self.mute_btn.setChecked(muted)
-        self.mute_btn.setText("Mut" if muted else "Vol")
-        self.mute_btn.setAccessibleName("Mute" if muted else "Volume")
-        self.mute_btn.blockSignals(False)
+        self.vol_btn.set_state(self.vol.value(), self.player.is_muted())
 
     def _on_seek_release(self) -> None:
         self.player.seek(self.seek.value())

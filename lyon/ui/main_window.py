@@ -130,7 +130,10 @@ class MainWindow(QMainWindow):
         self._library_refresh_timer.timeout.connect(self.library_view.refresh)
         self.ripper_view = RipperView(self.settings, self.library)
         self.youtube_view = YouTubeView()
-        self.video_player_view = VideoPlayerView(library=self.library)
+        self.video_player_view = VideoPlayerView(
+            library=self.library,
+            initial_volume=self.settings.last_volume,
+        )
         self.video_player_view.apply_equalizer(self.settings.equalizer_enabled, self.settings.equalizer_bands, self.settings.equalizer_preamp)
         self._library_refresh_timer.timeout.connect(self.video_player_view.refresh_catalog)
 
