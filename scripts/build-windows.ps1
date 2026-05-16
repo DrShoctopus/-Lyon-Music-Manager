@@ -172,7 +172,7 @@ $needVlc = -not (Test-Path (Join-Path $vlcDir 'libvlc.dll')) -or
 if ($SkipBinaries) {
     if ($needFfmpeg) { Write-Warning "bin\ffmpeg.exe missing; CD ripping won't work in the built app." }
     if ($needDiscid) { Write-Warning "bin\discid.dll missing; CD detection won't work in the built app." }
-    if ($needVlc) { Write-Warning "bin\vlc runtime missing; packaged playback will fall back to Qt Multimedia without audible EQ." }
+    if ($needVlc) { Write-Warning "bin\vlc runtime missing; packaged audio/video playback and EQ will be disabled." }
 } else {
     if ($needFfmpeg) {
         Write-Host "==> Downloading ffmpeg.exe" -ForegroundColor Cyan

@@ -80,7 +80,6 @@ a = Analysis(
         "urllib3",
         "certifi",
         "yt_dlp",
-        "PySide6.QtMultimedia",
     ],
     hookspath=[],
     runtime_hooks=[],
