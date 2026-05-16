@@ -142,13 +142,17 @@ from lyon.core.ripper import (  # noqa: E402
     _parse_progress,
     _summarize_ffmpeg_failure,
     _track_sector_span,
+    _unique_track_output,
     _windows_cdda_drive_path,
     _write_failure_log,
+    format_extension,
     safe_path_component,
+    target_file,
     target_folder,
+    track_output_files,
     unique_target_folder,
 )
-from lyon.ui.ripper_view import _rip_request_from_toc  # noqa: E402
+from lyon.ui.ripper_view import _existing_target_files, _rip_request_from_toc  # noqa: E402
 
 if _PYSIDE_STUBBED:
     for _module_name in ("PySide6.QtWidgets", "PySide6.QtGui", "PySide6.QtCore", "PySide6"):
@@ -327,6 +331,61 @@ def test_safe_path_component_suffixes_windows_reserved_names():
 def test_safe_path_component_returns_unknown_for_empty_input():
     assert safe_path_component("") == "Unknown"
     assert safe_path_component(" . . ") == "Unknown"
+
+
+def test_format_extension_matches_selected_rip_format():
+    assert format_extension("mp3") == ".mp3"
+    assert format_extension("WAV") == ".wav"
+    assert format_extension("unknown") == ".flac"
+
+
+def test_unique_track_output_suffixes_duplicate_same_run_targets(tmp_path):
+    track = TrackInfo(number=1, title="Intro")
+    used = set()
+
+    first = _unique_track_output(tmp_path, track, 1, ".flac", used)
+    second = _unique_track_output(tmp_path, track, 1, ".flac", used)
+
+    assert first.name == "01 - Intro.flac"
+    assert second.name == "01 - Intro (2).flac"
+
+
+def test_track_output_files_plans_duplicate_same_run_targets(tmp_path):
+    tracks = [
+        TrackInfo(number=1, title="Intro"),
+        TrackInfo(number=1, title="Intro"),
+    ]
+
+    planned = track_output_files(tmp_path, tracks, 2, ".flac")
+
+    assert [path.name for path in planned] == ["01 - Intro.flac", "01 - Intro (2).flac"]
+
+
+def test_existing_target_files_uses_selected_rip_format(tmp_path):
+    settings = Settings(rip_format="mp3")
+    album = AlbumInfo(artist="Artist", album="Album")
+    album.tracks = [TrackInfo(number=1, title="Song")]
+    flac = target_file(tmp_path, album.tracks[0], 1, ".flac")
+    mp3 = target_file(tmp_path, album.tracks[0], 1, ".mp3")
+    flac.write_bytes(b"old flac")
+
+    assert _existing_target_files(settings, album, tmp_path) == []
+
+    mp3.write_bytes(b"old mp3")
+    assert _existing_target_files(settings, album, tmp_path) == [mp3]
+
+
+def test_existing_target_files_checks_duplicate_planned_names(tmp_path):
+    settings = Settings(rip_format="flac")
+    album = AlbumInfo(artist="Artist", album="Album")
+    album.tracks = [
+        TrackInfo(number=1, title="Intro"),
+        TrackInfo(number=1, title="Intro"),
+    ]
+    duplicate = tmp_path / "01 - Intro (2).flac"
+    duplicate.write_bytes(b"old duplicate")
+
+    assert _existing_target_files(settings, album, tmp_path) == [duplicate]
 
 
 def test_rip_request_reuses_detected_disc_toc(tmp_path):

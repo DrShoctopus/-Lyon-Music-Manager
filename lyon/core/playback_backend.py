@@ -10,18 +10,18 @@ from typing import Any, Optional
 
 from PySide6.QtCore import QObject, QUrl, Signal
 
-from .equalizer import EQ_BAND_COUNT, normalize_equalizer_bands
+from .equalizer import EQ_BAND_COUNT
 from .settings import bundled_bin_dir
+from .vlc_equalizer import (
+    EQ_FADE_INTERVAL_MS,
+    VlcEqualizerController,
+)
 
 
 LOG = logging.getLogger(__name__)
 # Lyon now exposes libVLC's complete native ten-band equalizer, so the
 # UI band order maps directly to VLC's band indexes.
 VLC_EQ_BAND_INDEXES = tuple(range(EQ_BAND_COUNT))
-# Fade band gains over this many timer ticks when toggling the EQ on/off
-# to avoid the filter-state transient that causes audible distortion.
-_EQ_FADE_STEPS = 16
-_EQ_FADE_INTERVAL_MS = 16  # total transition ≈ 256 ms
 _DLL_DIRECTORY_HANDLES: list[Any] = []
 _CONFIGURED_VLC_DIRS: set[Path] = set()
 
@@ -216,18 +216,15 @@ class VlcPlaybackBackend(PlaybackBackend):
         self._last_state = "stopped"
         self._last_position = (-1, -1)
         self._ended = False
-        self._equalizer = None
-        self._eq_live_bands: list[float] = [0.0] * EQ_BAND_COUNT
-        self._eq_live_preamp: float = 0.0
-        self._eq_fade_start_bands: list[float] = [0.0] * EQ_BAND_COUNT
-        self._eq_fade_start_preamp: float = 0.0
-        self._eq_fade_target_bands: list[float] = [0.0] * EQ_BAND_COUNT
-        self._eq_fade_target_preamp: float = 0.0
-        self._eq_remove_after_fade: bool = False
-        self._eq_fade_steps_left: int = 0
+        self._eq = VlcEqualizerController(
+            vlc_module,
+            self._player,
+            VLC_EQ_BAND_INDEXES,
+            context="VLC playback equalizer",
+        )
 
         self._eq_fade_timer = QTimer(self)
-        self._eq_fade_timer.setInterval(_EQ_FADE_INTERVAL_MS)
+        self._eq_fade_timer.setInterval(EQ_FADE_INTERVAL_MS)
         self._eq_fade_timer.timeout.connect(self._eq_fade_step)
 
         self._timer = QTimer(self)
@@ -242,8 +239,7 @@ class VlcPlaybackBackend(PlaybackBackend):
         self._last_position = (-1, -1)
         self._player.audio_set_volume(self._volume)
         self._player.audio_set_mute(self._muted)
-        if self._equalizer is not None:
-            self._player.set_equalizer(self._equalizer)
+        self._eq.attach_to_player()
 
     def play(self) -> None:
         self._player.play()
@@ -290,92 +286,12 @@ class VlcPlaybackBackend(PlaybackBackend):
 
     def apply_equalizer(self, enabled: bool, bands: list[int], preamp: int = 0) -> None:
         self._eq_fade_timer.stop()
-
-        if not enabled:
-            if self._equalizer is None:
-                return
-            # Fade current live gains → flat, then remove the filter to avoid
-            # the abrupt frequency-response change that causes audible distortion.
-            self._eq_fade_start_bands = list(self._eq_live_bands)
-            self._eq_fade_start_preamp = self._eq_live_preamp
-            self._eq_fade_target_bands = [0.0] * EQ_BAND_COUNT
-            self._eq_fade_target_preamp = 0.0
-            self._eq_remove_after_fade = True
-            self._eq_fade_steps_left = _EQ_FADE_STEPS
+        if self._eq.apply(enabled, bands, preamp):
             self._eq_fade_timer.start()
-            return
-
-        try:
-            normalized = [float(b) for b in normalize_equalizer_bands(bands)]
-            target_preamp = float(preamp)
-            if self._equalizer is None:
-                # Insert the filter at flat (0 dB on every band) so its internal
-                # biquad state initialises on silence rather than on a cold jump
-                # to the target gains, which would cause a transient pop/distortion.
-                eq = self._vlc.AudioEqualizer()
-                if eq is None:
-                    raise RuntimeError("VLC did not create an AudioEqualizer instance")
-                eq.set_preamp(0.0)
-                for vlc_index in VLC_EQ_BAND_INDEXES:
-                    eq.set_amp_at_index(0.0, vlc_index)
-                self._player.set_equalizer(eq)
-                self._equalizer = eq
-                self._eq_live_bands = [0.0] * EQ_BAND_COUNT
-                self._eq_live_preamp = 0.0
-            self._eq_fade_start_bands = list(self._eq_live_bands)
-            self._eq_fade_start_preamp = self._eq_live_preamp
-            self._eq_fade_target_bands = normalized
-            self._eq_fade_target_preamp = target_preamp
-            self._eq_remove_after_fade = False
-            # Skip the fade if VLC is already at the requested gains.
-            # Avoids 16 redundant API calls on every track change.
-            if (self._eq_fade_start_bands == self._eq_fade_target_bands
-                    and self._eq_fade_start_preamp == self._eq_fade_target_preamp):
-                return
-            self._eq_fade_steps_left = _EQ_FADE_STEPS
-            self._eq_fade_timer.start()
-        except (AttributeError, OSError, RuntimeError) as exc:
-            self._equalizer = None
-            try:
-                self._player.set_equalizer(None)
-            except (AttributeError, OSError, RuntimeError):
-                pass
-            LOG.warning("Could not apply VLC equalizer; continuing with flat playback: %s", exc)
 
     def _eq_fade_step(self) -> None:
-        if self._equalizer is None:
+        if not self._eq.fade_step():
             self._eq_fade_timer.stop()
-            return
-
-        self._eq_fade_steps_left -= 1
-        t = 1.0 - self._eq_fade_steps_left / _EQ_FADE_STEPS  # 0.0 → 1.0
-        try:
-            new_preamp = self._eq_fade_start_preamp + (self._eq_fade_target_preamp - self._eq_fade_start_preamp) * t
-            new_bands = [
-                self._eq_fade_start_bands[i] + (self._eq_fade_target_bands[i] - self._eq_fade_start_bands[i]) * t
-                for i in range(EQ_BAND_COUNT)
-            ]
-            self._equalizer.set_preamp(new_preamp)
-            for i, gain in enumerate(new_bands):
-                self._equalizer.set_amp_at_index(gain, VLC_EQ_BAND_INDEXES[i])
-            self._player.set_equalizer(self._equalizer)
-            self._eq_live_preamp = new_preamp
-            self._eq_live_bands = new_bands
-        except (AttributeError, OSError, RuntimeError) as exc:
-            LOG.warning("EQ fade step failed: %s", exc)
-            self._eq_fade_timer.stop()
-            return
-
-        if self._eq_fade_steps_left <= 0:
-            self._eq_fade_timer.stop()
-            if self._eq_remove_after_fade:
-                try:
-                    self._player.set_equalizer(None)
-                except (AttributeError, OSError, RuntimeError) as exc:
-                    LOG.warning("Could not clear VLC equalizer after fade: %s", exc)
-                self._equalizer = None
-                self._eq_live_bands = [0.0] * EQ_BAND_COUNT
-                self._eq_live_preamp = 0.0
 
     def _emit_state(self, state: str) -> None:
         if state != self._last_state:

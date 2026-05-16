@@ -330,22 +330,25 @@ class Library:
     def all_tracks(self, media_type: str | None = None) -> Iterator[Track]:
         """Yield every track in id order, paging to avoid loading the full table at once."""
         filter_sql = "" if media_type is None else "AND media_type = ?"
-        params_base = (media_type,) if media_type is not None else ()
-        offset = 0
+        last_id = 0
         while True:
-            params = params_base + (_PAGE_SIZE, offset)
+            params = (
+                (last_id, _PAGE_SIZE)
+                if media_type is None
+                else (last_id, media_type, _PAGE_SIZE)
+            )
             with self._lock:
                 rows = self.conn.execute(
-                    f"SELECT * FROM tracks WHERE 1=1 {filter_sql} ORDER BY id LIMIT ? OFFSET ?",
+                    f"SELECT * FROM tracks WHERE id > ? {filter_sql} ORDER BY id LIMIT ?",
                     params,
                 ).fetchall()
             if not rows:
                 break
             for r in rows:
+                last_id = int(r["id"])
                 yield _row_to_track(r)
             if len(rows) < _PAGE_SIZE:
                 break
-            offset += len(rows)
 
     def has_disc(self, disc_id: str, min_tracks: int = 1) -> bool:
         """Return True if at least *min_tracks* library tracks carry this disc ID."""

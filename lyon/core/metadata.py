@@ -7,7 +7,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Optional
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 try:
     import defusedxml.ElementTree as ET
@@ -26,6 +26,7 @@ CTDB_TIMEOUT_SECONDS = 20
 THEAUDIODB_API_BASE = "https://www.theaudiodb.com/api/v1/json"
 THEAUDIODB_DEFAULT_API_KEY = "123"
 HTTP_TIMEOUT_SECONDS = 15
+MAX_ARTWORK_BYTES = 5 * 1024 * 1024
 DISC_METADATA_PROVIDER_ORDER = ("cuetools_db", "musicbrainz")
 ALBUM_METADATA_PROVIDER_ORDER = ("musicbrainz", "theaudiodb")
 ARTWORK_PROVIDER_ORDER = ("cover_art_archive", "album_artwork_url", "theaudiodb")
@@ -144,15 +145,15 @@ def shutdown() -> None:
     if _http_session is not None:
         try:
             _http_session.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            LOG.debug("Could not close metadata HTTP session: %s", exc)
         _http_session = None
     if _metadata_file_handler is not None:
         try:
             LOG.removeHandler(_metadata_file_handler)
             _metadata_file_handler.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            LOG.debug("Could not close metadata diagnostics handler: %s", exc)
         _metadata_file_handler = None
 
 
@@ -776,20 +777,62 @@ def _merge_album_info(primary: AlbumInfo, fallback: AlbumInfo) -> AlbumInfo:
 
 
 def _fetch_artwork_url(url: str) -> bytes | None:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        _log_metadata_diagnostic("Artwork request skipped for unsupported URL: %s", url)
+        return None
     try:
-        response = _http_get(url, timeout=HTTP_TIMEOUT_SECONDS)
-        if response.status_code == 200 and response.content:
-            return response.content
+        response = _http_get(url, timeout=HTTP_TIMEOUT_SECONDS, stream=True)
+        byte_count = 0
+        if response.status_code == 200:
+            content_length = response.headers.get("Content-Length") if hasattr(response, "headers") else None
+            if content_length and _safe_int(content_length, 0) > MAX_ARTWORK_BYTES:
+                _log_metadata_diagnostic(
+                    "Artwork request skipped for %s: Content-Length exceeds %s bytes",
+                    url,
+                    MAX_ARTWORK_BYTES,
+                )
+                return None
+            content = _limited_response_content(response, MAX_ARTWORK_BYTES)
+            byte_count = len(content)
+            if content:
+                return content
         _log_metadata_diagnostic(
             "Artwork request failed for %s: HTTP %s %s (bytes=%s)",
             url,
             response.status_code,
             _text(getattr(response, "reason", "")),
-            len(response.content or b""),
+            byte_count,
         )
     except requests.RequestException as exc:
         _log_metadata_diagnostic("Artwork request failed for %s: %s", url, exc)
     return None
+
+
+def _limited_response_content(response: requests.Response, limit: int) -> bytes:
+    """Read response bytes with an upper bound; supports simple test doubles too."""
+    if hasattr(response, "iter_content"):
+        data = bytearray()
+        for chunk in response.iter_content(chunk_size=64 * 1024):
+            if not chunk:
+                continue
+            data.extend(chunk)
+            if len(data) > limit:
+                _log_metadata_diagnostic(
+                    "Artwork response exceeded %s bytes and was discarded",
+                    limit,
+                )
+                return b""
+        return bytes(data)
+
+    content = getattr(response, "content", b"") or b""
+    if len(content) <= limit:
+        return content
+    _log_metadata_diagnostic(
+        "Artwork response exceeded %s bytes and was discarded",
+        limit,
+    )
+    return b""
 
 
 def _get_json(

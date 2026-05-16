@@ -35,6 +35,7 @@ CTDB_TIMEOUT_SECONDS = 20
 _SKIP_SAMPLES = 2940  # 5 CD frames * 588 samples/frame
 _DECODE_TIMEOUT_SECONDS = 180
 _DECODE_CHUNK_SIZE = 64 * 1024
+_DECODE_QUEUE_CHUNKS = 8
 
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
@@ -97,7 +98,7 @@ def _crc_from_pcm_stream(
     is_first_track: bool,
     is_last_track: bool,
 ) -> Optional[int]:
-    chunks: queue.Queue[bytes | None] = queue.Queue()
+    chunks: queue.Queue[bytes | None] = queue.Queue(maxsize=_DECODE_QUEUE_CHUNKS)
     assert proc.stdout is not None
 
     def _read_stdout() -> None:
@@ -147,7 +148,7 @@ def _crc_from_pcm_stream(
                 if len(trailing) > _SKIP_SAMPLES:
                     crc = _accumulate_sample(crc, trailing.popleft(), skip_start)
             elif sample_index >= skip_start:
-                crc += sample * (sample_index + 1)
+                crc = (crc + sample * (sample_index + 1)) & 0xFFFFFFFF
             sample_index += 1
 
     try:
@@ -172,7 +173,7 @@ def _accumulate_sample(crc: int, indexed_sample: tuple[int, int], skip_start: in
     index, sample = indexed_sample
     if index < skip_start:
         return crc
-    return crc + sample * (index + 1)
+    return (crc + sample * (index + 1)) & 0xFFFFFFFF
 
 
 def _terminate_decode_process(proc: subprocess.Popen) -> None:

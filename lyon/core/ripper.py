@@ -81,8 +81,12 @@ class _WindowsCddaReadError(OSError):
     """Raised when Windows cannot return raw CD-DA sectors."""
 
 
-def _format_ext(fmt: str) -> str:
+def format_extension(fmt: str) -> str:
     return _FORMAT_INFO.get(fmt.lower(), _FORMAT_INFO["flac"])[0]
+
+
+def _format_ext(fmt: str) -> str:
+    return format_extension(fmt)
 
 
 def _codec_args(settings: Settings) -> list[str]:
@@ -674,13 +678,13 @@ class RipWorker(QObject):
         ext = _format_ext(self.settings.rip_format)
         success = True
         ripped_files: dict[int, Path] = {}
-        for tr in tracks_to_rip:
+        output_paths = track_output_files(folder, tracks_to_rip, total, ext)
+        for tr, out in zip(tracks_to_rip, output_paths):
             if self._cancel:
                 self.finished.emit(False, "Cancelled")
                 return
 
             self.track_started.emit(tr.number, tr.title)
-            out = target_file(folder, tr, total, ext)
             self.log.emit(f"Ripping track {tr.number}: {tr.title}")
             failure = self._rip_track(ff, tr.number, tr.title, out)
             if failure is not None:
@@ -1018,6 +1022,38 @@ def _parse_progress(line: str, total_seconds: float) -> Optional[int]:
     h, mn, s = m.groups()
     seconds = int(h) * 3600 + int(mn) * 60 + float(s)
     return max(0, min(99, int(seconds * 100 / total_seconds)))
+
+
+def _unique_track_output(
+    folder: Path,
+    track: TrackInfo,
+    total: int,
+    ext: str,
+    used_outputs: set[Path],
+) -> Path:
+    """Return a same-run unique target path for a track."""
+    base = target_file(folder, track, total, ext)
+    candidate = base
+    suffix = 2
+    while candidate in used_outputs:
+        candidate = base.with_name(f"{base.stem} ({suffix}){base.suffix}")
+        suffix += 1
+    used_outputs.add(candidate)
+    return candidate
+
+
+def track_output_files(
+    folder: Path,
+    tracks: Sequence[TrackInfo],
+    total: int,
+    ext: str,
+) -> list[Path]:
+    """Return target paths with duplicate same-run filenames made unique."""
+    used_outputs: set[Path] = set()
+    return [
+        _unique_track_output(folder, track, total, ext, used_outputs)
+        for track in tracks
+    ]
 
 
 # ---------------------------------------------------------------- runner

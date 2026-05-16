@@ -444,6 +444,69 @@ def test_fetch_artwork_uses_theaudiodb_after_primary_urls_fail(monkeypatch):
     assert calls == ["https://example.test/primary.jpg", "https://example.test/provider.jpg"]
 
 
+def test_fetch_artwork_skips_unsupported_url_without_request(monkeypatch):
+    calls = []
+    monkeypatch.setattr(metadata, "_http_get", lambda *args, **kwargs: calls.append((args, kwargs)))
+
+    assert metadata._fetch_artwork_url("file:///tmp/cover.jpg") is None
+    assert calls == []
+
+
+def test_fetch_artwork_rejects_oversized_content_length(monkeypatch):
+    captured = {}
+
+    class FakeResponse:
+        status_code = 200
+        headers = {"Content-Length": str(metadata.MAX_ARTWORK_BYTES + 1)}
+        content = b""
+
+    def fake_get(url, **kwargs):
+        captured["url"] = url
+        captured["kwargs"] = kwargs
+        return FakeResponse()
+
+    monkeypatch.setattr(metadata, "_http_get", fake_get)
+
+    assert metadata._fetch_artwork_url("https://example.test/huge.jpg") is None
+    assert captured["kwargs"]["stream"] is True
+
+
+def test_fetch_artwork_rejects_stream_that_exceeds_limit(monkeypatch):
+    class FakeResponse:
+        status_code = 200
+        headers = {}
+        content = b""
+
+        def iter_content(self, chunk_size):
+            assert chunk_size > 0
+            yield b"abc"
+            yield b"def"
+
+    monkeypatch.setattr(metadata, "MAX_ARTWORK_BYTES", 4)
+    monkeypatch.setattr(metadata, "_http_get", lambda *args, **kwargs: FakeResponse())
+
+    assert metadata._fetch_artwork_url("https://example.test/too-large.jpg") is None
+
+
+def test_fetch_artwork_stream_failure_does_not_read_unbounded_content(monkeypatch):
+    class FakeResponse:
+        status_code = 200
+        headers = {}
+        reason = "OK"
+
+        @property
+        def content(self):
+            raise AssertionError("streaming artwork fetch should not read response.content")
+
+        def iter_content(self, chunk_size):
+            assert chunk_size > 0
+            return iter(())
+
+    monkeypatch.setattr(metadata, "_http_get", lambda *args, **kwargs: FakeResponse())
+
+    assert metadata._fetch_artwork_url("https://example.test/empty.jpg") is None
+
+
 def test_search_album_continues_past_incomplete_metadata(monkeypatch):
     incomplete = metadata.AlbumInfo(artist="Artist", album="Album", metadata_source="musicbrainz")
     complete = metadata.AlbumInfo(
