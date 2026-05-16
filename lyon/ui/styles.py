@@ -126,6 +126,7 @@ QLineEdit, QComboBox, QSpinBox {
 QLineEdit:focus, QComboBox:focus { border: 1px solid #4eefff; }
 
 /* Sliders (transport bar + volume) */
+QSlider:horizontal { min-height: 22px; }
 QSlider::groove:horizontal {
     height: 8px;
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
@@ -136,16 +137,17 @@ QSlider::groove:horizontal {
 QSlider::sub-page:horizontal {
     background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
         stop:0 #102c83, stop:0.5 #1b8dff, stop:1 #68f3ff);
-    border: 1px solid rgba(126,245,255,0.45);
+    border: none;
     border-radius: 4px;
 }
 QSlider::handle:horizontal {
     background: qradialgradient(cx:0.45, cy:0.28, radius:0.78,
         stop:0 #ffffff, stop:0.24 #9ff4ff, stop:0.58 #267fe9, stop:1 #07142d);
     border: 1px solid #02050a;
-    width: 18px;
-    margin: -6px 0;
-    border-radius: 9px;
+    width: 20px;
+    height: 20px;
+    margin: -7px 0;
+    border-radius: 10px;
 }
 QSlider::handle:horizontal:hover {
     border: 1px solid #79fbff;

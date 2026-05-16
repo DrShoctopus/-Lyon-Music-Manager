@@ -354,7 +354,7 @@ class VideoPlayerView(QWidget):
         controls.setObjectName("videoControls")
         cl = QVBoxLayout(controls)
         cl.setContentsMargins(12, 6, 12, 8)
-        cl.setSpacing(4)
+        cl.setSpacing(8)
 
         # Seek row
         self._elapsed_lbl = QLabel("0:00")
