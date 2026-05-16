@@ -66,6 +66,9 @@ class FakeBackend(QObject):
     def apply_equalizer(self, enabled: bool, bands: list[int], preamp: int = 0) -> None:
         self.equalizer_calls.append((enabled, list(bands), preamp))
 
+    def cleanup(self) -> None:
+        self._playing = False
+
 
 def _track(path: str = "C:/Music/test.flac") -> Track:
     return Track(
@@ -197,3 +200,31 @@ def test_unavailable_backend_preserves_volume_mute_and_equalizer_state():
     assert player.volume() == 33
     assert player.is_muted()
     assert player.equalizer() == (True, [1, 2, 3, 0, 0, 0, 0, 0, 0, 0], 4)
+
+
+def test_crossfade_starts_next_backend_before_stopping_current():
+    backends: list[FakeBackend] = []
+
+    def factory(parent=None):
+        backend = FakeBackend()
+        backends.append(backend)
+        return backend
+
+    player = Player(backend_factory=factory)
+    player.set_crossfade(5)
+    player.set_queue([
+        _track("C:/Music/one.flac"),
+        _track("C:/Music/two.flac"),
+    ])
+
+    assert len(backends) == 1
+    assert backends[0].is_playing()
+
+    backends[0].position_changed.emit(115_000, 120_000)
+
+    assert len(backends) == 2
+    assert player.current_index() == 1
+    assert backends[0].is_playing()
+    assert backends[1].is_playing()
+    assert backends[1].sources == ["C:/Music/two.flac"]
+    assert backends[1].volume() == 0

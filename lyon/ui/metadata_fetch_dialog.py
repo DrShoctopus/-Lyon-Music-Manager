@@ -8,7 +8,7 @@ from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QCheckBox, QDialog, QDialogButtonBox, QFrame, QHBoxLayout, QLabel,
-    QListWidget, QListWidgetItem, QPushButton, QScrollArea, QSizePolicy,
+    QListWidget, QListWidgetItem, QMessageBox, QPushButton, QScrollArea, QSizePolicy,
     QStackedWidget, QVBoxLayout, QWidget,
 )
 
@@ -212,7 +212,7 @@ class MetadataFetchDialog(QDialog):
             "Filling all fields may overwrite data previously fetched by CTDB."
         )
         self._warn_label.setWordWrap(True)
-        self._warn_label.setStyleSheet("color: #c0822a; font-style: italic;")
+        self._warn_label.setObjectName("warningLabel")
         self._warn_label.setVisible(False)
         diff_vl.addWidget(self._warn_label)
 
@@ -389,15 +389,15 @@ class MetadataFetchDialog(QDialog):
         lbl_w.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         row.addWidget(lbl_w)
 
-        cur_w = QLabel(current if current else "<em>empty</em>")
+        cur_w = QLabel(current if current else "(empty)")
         cur_w.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        cur_w.setTextFormat(Qt.RichText)
+        cur_w.setTextFormat(Qt.PlainText)
         cur_w.setWordWrap(True)
         row.addWidget(cur_w, 1)
 
-        prop_w = QLabel(proposed if proposed else "<em>empty</em>")
+        prop_w = QLabel(proposed if proposed else "(empty)")
         prop_w.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        prop_w.setTextFormat(Qt.RichText)
+        prop_w.setTextFormat(Qt.PlainText)
         prop_w.setWordWrap(True)
         row.addWidget(prop_w, 1)
 
@@ -439,9 +439,9 @@ class MetadataFetchDialog(QDialog):
             if not cur_pix.isNull():
                 cur_art.setPixmap(cur_pix.scaled(80, 80, Qt.KeepAspectRatio, Qt.SmoothTransformation))
             else:
-                cur_art.setText("<em>none</em>")
+                cur_art.setText("(none)")
         else:
-            cur_art.setText("<em>none</em>")
+            cur_art.setText("(none)")
         row.addWidget(cur_art, 1)
 
         prop_art = QLabel()
@@ -510,8 +510,6 @@ class MetadataFetchDialog(QDialog):
             tracks=self._proposed.tracks,
         )
 
-        proposed_by_num = {ti.number: ti for ti in self._proposed.tracks}
-
         # Track title overrides
         title_overrides: dict[int, str] = {}
         for tr, prop_title, cb in self._track_rows:
@@ -548,25 +546,37 @@ class MetadataFetchDialog(QDialog):
                 artwork_bytes = None
 
         # Apply to each track
+        failed_tags: list[str] = []
         for tr in self._tracks:
             db_fields = dict(db_base)
             if tr.id in title_overrides:
                 db_fields["title"] = title_overrides[tr.id]
-            if db_fields:
-                self._library.update_track(tr.id, db_fields)
 
             # Write audio tags
             track_num = tr.track_no or 0
             title = title_overrides.get(tr.id, tr.title)
-            pti = proposed_by_num.get(track_num)
             tr_info = TrackInfo(
                 number=track_num,
                 title=title,
                 artist=album_info.artist or tr.artist,
                 disc_number=tr.disc_no or 1,
             )
-            write_tags(Path(tr.path), album_info, tr_info, artwork_bytes)
+            if not write_tags(Path(tr.path), album_info, tr_info, artwork_bytes):
+                failed_tags.append(tr.title or Path(tr.path).name)
+                continue
+            if db_fields:
+                self._library.update_track(tr.id, db_fields)
 
+        if failed_tags:
+            shown = "\n".join(failed_tags[:6])
+            if len(failed_tags) > 6:
+                shown += f"\n...and {len(failed_tags) - 6} more"
+            QMessageBox.warning(
+                self,
+                "Some Tags Were Not Updated",
+                "The library database was left unchanged for tracks whose audio tags "
+                f"could not be written:\n\n{shown}",
+            )
         self.accept()
 
     def closeEvent(self, event) -> None:

@@ -92,6 +92,7 @@ class _LyricsPanel(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._synced: list[tuple[int, str]] = []   # (ms, text) — empty = not synced
+        self._timestamps: list[int] = []
         self._current_line = -1
         self._labels: list[QLabel] = []
 
@@ -118,6 +119,7 @@ class _LyricsPanel(QWidget):
         self._labels.clear()
         self._current_line = -1
         self._synced = synced
+        self._timestamps = [ms for ms, _ in synced]
 
         if synced:
             lines_text = [t for _, t in synced]
@@ -148,20 +150,23 @@ class _LyricsPanel(QWidget):
     def update_position(self, pos_ms: int) -> None:
         if not self._synced or not self._labels:
             return
-        timestamps = [ms for ms, _ in self._synced]
-        idx = bisect.bisect_right(timestamps, pos_ms) - 1
+        idx = bisect.bisect_right(self._timestamps, pos_ms) - 1
         idx = max(0, min(idx, len(self._labels) - 1))
         if idx == self._current_line:
             return
         if 0 <= self._current_line < len(self._labels):
             self._labels[self._current_line].setObjectName("lyricsLine")
-            self._labels[self._current_line].setStyleSheet("")
+            self._repolish_label(self._labels[self._current_line])
         self._current_line = idx
         self._labels[idx].setObjectName("lyricsLineCurrent")
-        self._labels[idx].setStyleSheet(
-            "font-weight: bold; color: #e0e0e0; font-size: 14pt;"
-        )
+        self._repolish_label(self._labels[idx])
         self._scroll.ensureWidgetVisible(self._labels[idx])
+
+    @staticmethod
+    def _repolish_label(label: QLabel) -> None:
+        label.style().unpolish(label)
+        label.style().polish(label)
+        label.update()
 
 
 # ---- Info panel --------------------------------------------------------
@@ -317,6 +322,7 @@ class NowPlayingView(QWidget):
 
         # Queue panel
         self._queue_list = QListWidget()
+        self.queue_list = self._queue_list  # public compatibility for tests and older callers
         self._queue_list.setObjectName("queuePreview")
         self._queue_list.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self._queue_list.setSelectionMode(QAbstractItemView.SingleSelection)
@@ -480,24 +486,18 @@ class NowPlayingView(QWidget):
         self._queue_list.clear()
         queue = self.player.queue()
         current = self.player.current_index()
-        if not queue:
+        upcoming = queue[current + 1:current + 1 + 12] if current >= 0 else queue[:12]
+        if not upcoming:
             placeholder = QListWidgetItem("Queue is empty.")
             placeholder.setFlags(Qt.NoItemFlags)
             self._queue_list.addItem(placeholder)
             self._queue_list.blockSignals(False)
             return
-        for i, track in enumerate(queue):
-            prefix = "▶ " if i == current else f"{i + 1}. "
-            item = QListWidgetItem(f"{prefix}{track.title}  —  {track.display_artist}")
-            item.setData(Qt.UserRole, i)
-            if i == current:
-                f = item.font(); f.setBold(True); item.setFont(f)
+        base = current + 1 if current >= 0 else 0
+        for offset, track in enumerate(upcoming):
+            item = QListWidgetItem(f"{track.title}  —  {track.display_artist}")
+            item.setData(Qt.UserRole, base + offset)
             self._queue_list.addItem(item)
-        # Scroll to current track
-        if 0 <= current < self._queue_list.count():
-            self._queue_list.scrollToItem(
-                self._queue_list.item(current), QAbstractItemView.PositionAtCenter
-            )
         self._queue_list.blockSignals(False)
 
     def _on_queue_double_clicked(self, item: QListWidgetItem) -> None:
@@ -527,8 +527,10 @@ class NowPlayingView(QWidget):
     ) -> None:
         # QListWidget drag-drop fires rowsMoved; sync to player queue
         # dest_row is the row *before* which items are inserted after the move
+        current = self.player.current_index()
+        base = current + 1 if current >= 0 else 0
         dst = dest_row if dest_row < src_first else dest_row - 1
-        self.player.move_queue_item(src_first, dst)
+        self.player.move_queue_item(base + src_first, base + dst)
 
     # ---- Helpers -------------------------------------------------------
 

@@ -507,12 +507,52 @@ class LibraryView(QWidget):
     def _media_type_filter(self) -> str | None:
         return None if self._show_videos else "audio"
 
+    def _library_all_artists(
+        self,
+        media_type: str | None = None,
+        *,
+        genre: str | None = None,
+    ) -> list[str]:
+        fn = getattr(self.library, "all_artists", None)
+        if not callable(fn):
+            return []
+        try:
+            return list(fn(media_type, genre=genre))
+        except TypeError:
+            return list(fn(media_type))
+
+    def _library_all_genres(self, media_type: str | None = None) -> list[str]:
+        fn = getattr(self.library, "all_genres", None)
+        if not callable(fn):
+            return []
+        try:
+            return list(fn(media_type))
+        except TypeError:
+            return list(fn())
+
+    def _library_all_playlists(self) -> list:
+        fn = getattr(self.library, "all_playlists", None)
+        return list(fn()) if callable(fn) else []
+
+    def _available_virtual_collections(self) -> list[tuple[str, str]]:
+        required = {
+            _RECENTLY_ADDED_KEY: "recently_added",
+            _RECENTLY_PLAYED_KEY: "recently_played",
+            _MOST_PLAYED_KEY: "most_played",
+            _TOP_RATED_KEY: "top_rated",
+        }
+        return [
+            (key, label)
+            for key, label in _VIRTUAL_COLLECTIONS
+            if callable(getattr(self.library, required[key], None))
+        ]
+
     def _on_show_videos_toggled(self, checked: bool) -> None:
         self._show_videos = checked
         self.refresh()
 
     def refresh(self) -> None:
-        has_tracks = bool(self.library.all_artists())
+        has_tracks = bool(self._library_all_artists(self._media_type_filter))
         active_pl = self._active_playlist_id
         self._refresh_playlists()
 
@@ -522,7 +562,7 @@ class LibraryView(QWidget):
         ag_item.setData(_ALL_GENRES_KEY, Qt.UserRole)
         f = ag_item.font(); f.setItalic(True); ag_item.setFont(f)
         self.genres_model.appendRow(ag_item)
-        for g in self.library.all_genres(self._media_type_filter):
+        for g in self._library_all_genres(self._media_type_filter):
             it = QStandardItem(g); it.setData(g, Qt.UserRole)
             self.genres_model.appendRow(it)
 
@@ -546,20 +586,9 @@ class LibraryView(QWidget):
             self._current_tracks = []
             self._update_footer()
 
-        # Re-run active smart playlist query after library changes
+        # Re-run active playlist query after library changes.
         if active_pl is not None:
-            found = False
-            for row in range(self.playlists_model.rowCount()):
-                mi = self.playlists_model.index(row, 0)
-                if mi.data(Qt.UserRole) == active_pl:
-                    found = True
-                    if mi.data(self._PL_IS_SMART_ROLE):
-                        rules_json = mi.data(self._PL_RULES_ROLE)
-                        if rules_json:
-                            self._current_tracks = self.library.smart_playlist_tracks(rules_json)
-                            self._populate_tracks(self._current_tracks)
-                    break
-            if not found:
+            if not self._restore_active_playlist(active_pl):
                 # Playlist was deleted — clear stale state
                 self._active_playlist_id = None
                 self._current_tracks = []
@@ -573,19 +602,20 @@ class LibraryView(QWidget):
         genre = None if genre_key == _ALL_GENRES_KEY else genre_key
 
         self.artists_model.clear()
-        for key, label in _VIRTUAL_COLLECTIONS:
+        virtual_collections = self._available_virtual_collections()
+        for key, label in virtual_collections:
             item = QStandardItem(label)
             item.setData(key, Qt.UserRole)
             fnt = item.font(); fnt.setItalic(True); item.setFont(fnt)
             self.artists_model.appendRow(item)
-        real_artists = self.library.all_artists(self._media_type_filter, genre=genre)
+        real_artists = self._library_all_artists(self._media_type_filter, genre=genre)
         for a in real_artists:
             it = QStandardItem(a); it.setData(a, Qt.UserRole)
             self.artists_model.appendRow(it)
 
         if real_artists:
             self.artists.setCurrentIndex(
-                self.artists_model.index(len(_VIRTUAL_COLLECTIONS), 0)
+                self.artists_model.index(len(virtual_collections), 0)
             )
         else:
             self.artists.setCurrentIndex(self.artists_model.index(0, 0))
@@ -638,13 +668,13 @@ class LibraryView(QWidget):
 
     def _populate_virtual_collection(self, key: str) -> None:
         mt = self._media_type_filter
-        if key == _RECENTLY_ADDED_KEY:
+        if key == _RECENTLY_ADDED_KEY and callable(getattr(self.library, "recently_added", None)):
             tracks = self.library.recently_added(50, mt)
-        elif key == _RECENTLY_PLAYED_KEY:
+        elif key == _RECENTLY_PLAYED_KEY and callable(getattr(self.library, "recently_played", None)):
             tracks = self.library.recently_played(50, mt)
-        elif key == _MOST_PLAYED_KEY:
+        elif key == _MOST_PLAYED_KEY and callable(getattr(self.library, "most_played", None)):
             tracks = self.library.most_played(50, mt)
-        elif key == _TOP_RATED_KEY:
+        elif key == _TOP_RATED_KEY and callable(getattr(self.library, "top_rated", None)):
             tracks = self.library.top_rated(4, 100, mt)
         else:
             return
@@ -663,7 +693,7 @@ class LibraryView(QWidget):
             self._browser_stack.setCurrentIndex(2)
             self._refresh_grid_albums()
         else:
-            has_tracks = bool(self.library.all_artists())
+            has_tracks = bool(self._library_all_artists(self._media_type_filter))
             self._browser_stack.setCurrentIndex(1 if has_tracks else 0)
 
     def _refresh_grid_albums(self) -> None:
@@ -934,7 +964,7 @@ class LibraryView(QWidget):
         menu.addSeparator()
 
         # "Add to Playlist" submenu
-        playlists = self.library.all_playlists()
+        playlists = self._library_all_playlists()
         add_pl_menu = menu.addMenu("Add to Playlist")
         pl_act_map: dict = {}
         for pl in playlists:
@@ -945,17 +975,17 @@ class LibraryView(QWidget):
             add_pl_menu.addSeparator()
         new_pl_act = add_pl_menu.addAction("New Playlist…")
 
+        go_to_album = None
+        if self.search.text().strip():
+            menu.addSeparator()
+            go_to_album = menu.addAction("Go to Album in Library")
+
         menu.addSeparator()
         open_folder = menu.addAction("Open Containing Folder")
         edit_metadata = menu.addAction("Edit Metadata")
         youtube_search = menu.addAction("Search YouTube for Artist, Album, and Track")
         properties = menu.addAction("Properties")
         action = menu.exec(self.tracks.viewport().mapToGlobal(pos))
-
-        go_to_album = None
-        if self.search.text().strip():
-            menu.addSeparator()
-            go_to_album = menu.addAction("Go to Album in Library")
 
         if action is None:
             return
@@ -1228,7 +1258,7 @@ class LibraryView(QWidget):
             self._grid_mode_btn.blockSignals(True)
             self._grid_mode_btn.setChecked(False)
             self._grid_mode_btn.blockSignals(False)
-            has_tracks = bool(self.library.all_artists())
+            has_tracks = bool(self._library_all_artists(self._media_type_filter))
             self._browser_stack.setCurrentIndex(1 if has_tracks else 0)
         self._navigate_to_album(track.display_artist, track.album or "Unknown Album")
         row = self._row_for_track(track)
@@ -1328,13 +1358,52 @@ class LibraryView(QWidget):
 
     def _refresh_playlists(self) -> None:
         self.playlists_model.clear()
-        for pl in self.library.all_playlists():
+        for pl in self._library_all_playlists():
             prefix = "⚡ " if pl.is_smart else ""
             it = QStandardItem(f"{prefix}{pl.name}")
             it.setData(pl.id, Qt.UserRole)
             it.setData(pl.is_smart, self._PL_IS_SMART_ROLE)
             it.setData(pl.rules, self._PL_RULES_ROLE)
             self.playlists_model.appendRow(it)
+
+    @staticmethod
+    def _playlist_display_name(name: str | None) -> str:
+        return (name or "").removeprefix("⚡ ")
+
+    def _playlist_row_for_id(self, playlist_id: int) -> int:
+        for row in range(self.playlists_model.rowCount()):
+            if self.playlists_model.index(row, 0).data(Qt.UserRole) == playlist_id:
+                return row
+        return -1
+
+    def _tracks_for_playlist_index(self, idx: QModelIndex) -> list[Track]:
+        playlist_id = idx.data(Qt.UserRole)
+        if not isinstance(playlist_id, int):
+            return []
+        is_smart = bool(idx.data(self._PL_IS_SMART_ROLE))
+        rules_json = idx.data(self._PL_RULES_ROLE)
+        if is_smart and rules_json:
+            return self.library.smart_playlist_tracks(rules_json)
+        return self.library.playlist_tracks(playlist_id)
+
+    def _restore_active_playlist(self, playlist_id: int) -> bool:
+        row = self._playlist_row_for_id(playlist_id)
+        if row < 0:
+            return False
+        idx = self.playlists_model.index(row, 0)
+        tracks = self._tracks_for_playlist_index(idx)
+        self.playlists_view.blockSignals(True)
+        self.playlists_view.setCurrentIndex(idx)
+        self.playlists_view.blockSignals(False)
+        self._active_playlist_id = playlist_id
+        self._current_tracks = tracks
+        self._populate_tracks(tracks)
+        if self._browser_stack.currentIndex() == 2:
+            self._grid_mode_btn.blockSignals(True)
+            self._grid_mode_btn.setChecked(False)
+            self._grid_mode_btn.blockSignals(False)
+            self._browser_stack.setCurrentIndex(1)
+        return True
 
     def _clear_playlist_selection(self) -> None:
         self._active_playlist_id = None
@@ -1349,12 +1418,7 @@ class LibraryView(QWidget):
         if not isinstance(playlist_id, int):
             return
         self._active_playlist_id = playlist_id
-        is_smart = bool(idx.data(self._PL_IS_SMART_ROLE))
-        rules_json = idx.data(self._PL_RULES_ROLE)
-        if is_smart and rules_json:
-            tracks = self.library.smart_playlist_tracks(rules_json)
-        else:
-            tracks = self.library.playlist_tracks(playlist_id)
+        tracks = self._tracks_for_playlist_index(idx)
         self._current_tracks = tracks
         self._populate_tracks(tracks)
         # Ensure list-mode browser is showing
@@ -1398,7 +1462,10 @@ class LibraryView(QWidget):
         elif action == new_smart_act:
             self._new_smart_playlist_dialog()
         elif action == rename_act and playlist_id is not None:
-            self._rename_playlist_dialog(playlist_id, idx.data(Qt.DisplayRole))
+            self._rename_playlist_dialog(
+                playlist_id,
+                self._playlist_display_name(idx.data(Qt.DisplayRole)),
+            )
         elif action == edit_rules_act and playlist_id is not None:
             raw_name = idx.data(Qt.DisplayRole) or ""
             pl_name = raw_name.removeprefix("⚡ ")
@@ -1407,7 +1474,10 @@ class LibraryView(QWidget):
         elif action == export_act and playlist_id is not None:
             self._export_playlist_m3u(playlist_id)
         elif action == remove_act and playlist_id is not None:
-            self._delete_playlist_confirm(playlist_id, idx.data(Qt.DisplayRole))
+            self._delete_playlist_confirm(
+                playlist_id,
+                self._playlist_display_name(idx.data(Qt.DisplayRole)),
+            )
 
     def _new_playlist_dialog(self, initial_track_ids: list[int] | None = None) -> None:
         name, ok = QInputDialog.getText(self, "New Playlist", "Playlist name:")
@@ -1477,6 +1547,7 @@ class LibraryView(QWidget):
             self._populate_tracks(tracks)
 
     def _rename_playlist_dialog(self, playlist_id: int, current_name: str) -> None:
+        current_name = self._playlist_display_name(current_name)
         name, ok = QInputDialog.getText(
             self, "Rename Playlist", "New name:", text=current_name or ""
         )

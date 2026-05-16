@@ -274,6 +274,15 @@ QListWidget#queuePreview::item:selected {
     color: #ffffff;
 }
 
+QLabel#lyricsLine {
+    color: #9aa5b1;
+}
+QLabel#lyricsLineCurrent {
+    color: #e0e0e0;
+    font-size: 14pt;
+    font-weight: 700;
+}
+
 /* Status bar */
 QStatusBar {
     background: #06080b;

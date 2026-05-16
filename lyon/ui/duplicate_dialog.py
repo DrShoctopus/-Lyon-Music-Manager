@@ -89,11 +89,9 @@ class DuplicateDialog(QDialog):
                     if track.bitrate > 0
                     else "?"
                 )
-                try:
-                    size_kb = Path(track.path).stat().st_size // 1024
-                    size = f"{size_kb} KB"
-                except OSError:
-                    size = "?"
+                # Avoid touching every duplicate path during dialog population;
+                # those paths may live on slow or offline network volumes.
+                size = "—"
                 child = QTreeWidgetItem(parent_item, [track.path, fmt, kbps, size])
                 child.setData(0, Qt.UserRole, track)
 

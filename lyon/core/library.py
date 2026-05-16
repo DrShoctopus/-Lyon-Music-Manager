@@ -128,6 +128,7 @@ class Library:
         self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         with self._lock:
+            self.conn.execute("PRAGMA foreign_keys = ON")
             self.conn.executescript(_SCHEMA_V0)
             self._migrate()
             self.conn.commit()
@@ -144,7 +145,9 @@ class Library:
             try:
                 self.conn.execute(sql)
             except sqlite3.OperationalError as exc:
-                # Index/column already exists from a previous partial run — safe to skip.
+                if not _is_safe_migration_skip(exc):
+                    raise
+                # Index/column already exists from a previous partial run.
                 LOG.debug("Migration v%d skipped (%s): %s", version, sql[:60], exc)
         # Write outside the per-statement loop so the stamp is atomic with commit().
         self.conn.execute(f"PRAGMA user_version = {target}")
@@ -516,21 +519,40 @@ class Library:
     def find_duplicates(self) -> list[list[Track]]:
         """Return groups of tracks sharing the same display_artist + normalised title."""
         with self._lock:
-            dupe_keys = self.conn.execute(
-                f"""SELECT {DISPLAY_ARTIST_SQL} AS a, LOWER(TRIM(title)) AS t
-                    FROM tracks WHERE title IS NOT NULL AND title != ''
-                    GROUP BY a, t HAVING COUNT(*) > 1""",
+            rows = self.conn.execute(
+                f"""WITH dupe_keys AS (
+                        SELECT {DISPLAY_ARTIST_SQL} AS display_artist,
+                               LOWER(TRIM(title)) AS norm_title
+                        FROM tracks
+                        WHERE title IS NOT NULL AND TRIM(title) != ''
+                        GROUP BY display_artist, norm_title
+                        HAVING COUNT(*) > 1
+                    )
+                    SELECT tracks.*,
+                           {DISPLAY_ARTIST_SQL} AS display_artist,
+                           LOWER(TRIM(tracks.title)) AS norm_title
+                    FROM tracks
+                    JOIN dupe_keys
+                      ON dupe_keys.display_artist = {DISPLAY_ARTIST_SQL}
+                     AND dupe_keys.norm_title = LOWER(TRIM(tracks.title))
+                    ORDER BY dupe_keys.display_artist COLLATE NOCASE,
+                             dupe_keys.norm_title COLLATE NOCASE,
+                             tracks.bitrate DESC,
+                             tracks.samplerate DESC,
+                             tracks.duration DESC"""
             ).fetchall()
         groups: list[list[Track]] = []
-        for row in dupe_keys:
-            with self._lock:
-                dupes = self.conn.execute(
-                    f"""SELECT * FROM tracks
-                        WHERE {DISPLAY_ARTIST_SQL} = ? AND LOWER(TRIM(title)) = ?
-                        ORDER BY bitrate DESC""",
-                    (row["a"], row["t"]),
-                ).fetchall()
-            groups.append([_row_to_track(r) for r in dupes])
+        current_key: tuple[str, str] | None = None
+        current_group: list[Track] = []
+        for row in rows:
+            key = (row["display_artist"], row["norm_title"])
+            if current_key is not None and key != current_key:
+                groups.append(current_group)
+                current_group = []
+            current_key = key
+            current_group.append(_row_to_track(row))
+        if current_group:
+            groups.append(current_group)
         return groups
 
     # ------------------------------------------------------------------ playlist CRUD
@@ -697,6 +719,12 @@ def _row_to_track(r: sqlite3.Row) -> Track:
         liked=bool(r["liked"]) if "liked" in keys else False,
         disc_id=r["disc_id"] if "disc_id" in keys else None,
     )
+
+
+def _is_safe_migration_skip(exc: sqlite3.OperationalError) -> bool:
+    """Return True for idempotent migration reruns after a partial previous run."""
+    msg = str(exc).lower()
+    return "duplicate column name" in msg or "already exists" in msg
 
 
 def _read_tags(path: str) -> dict | None:
