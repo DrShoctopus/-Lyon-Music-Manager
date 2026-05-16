@@ -8,9 +8,9 @@ from PySide6.QtGui import (
     QDesktopServices, QKeySequence, QShortcut, QStandardItem, QStandardItemModel,
 )
 from PySide6.QtWidgets import (
-    QAbstractItemView, QDialog, QDialogButtonBox, QFormLayout,
+    QAbstractItemView, QCheckBox, QDialog, QDialogButtonBox, QFormLayout,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListView, QMenu, QPushButton,
-    QSplitter, QStackedWidget, QTableView, QVBoxLayout, QWidget,
+    QSpinBox, QSplitter, QStackedWidget, QTableView, QVBoxLayout, QWidget,
 )
 
 from ..core.library import Library, Track
@@ -42,6 +42,7 @@ class LibraryView(QWidget):
         self.library = library
         self._current_tracks: list[Track] = []
         self._currently_playing: Track | None = None
+        self._show_videos: bool = False
 
         # ---- Top toolbar
         top = QHBoxLayout()
@@ -59,15 +60,16 @@ class LibraryView(QWidget):
         self.play_btn.clicked.connect(self._play_selected)
         self.enqueue_btn = QPushButton("Enqueue")
         self.enqueue_btn.clicked.connect(self._enqueue_selected)
-        add_btn = QPushButton("Add Folder")
-        add_btn.clicked.connect(self.request_add_folder.emit)
         rescan_btn = QPushButton("Rescan")
         rescan_btn.clicked.connect(self.request_rescan.emit)
+        self._show_videos_cb = QCheckBox("Show Videos")
+        self._show_videos_cb.setChecked(False)
+        self._show_videos_cb.toggled.connect(self._on_show_videos_toggled)
         top.addWidget(self.search, 1)
         top.addWidget(self.play_btn)
         top.addWidget(self.enqueue_btn)
-        top.addWidget(add_btn)
         top.addWidget(rescan_btn)
+        top.addWidget(self._show_videos_cb)
 
         # ---- Artists / Albums lists
         self.artists = QListView()
@@ -188,9 +190,17 @@ class LibraryView(QWidget):
         self.refresh()
 
     # ------------------------------------------------------------------ data
+    @property
+    def _media_type_filter(self) -> str | None:
+        return None if self._show_videos else "audio"
+
+    def _on_show_videos_toggled(self, checked: bool) -> None:
+        self._show_videos = checked
+        self.refresh()
+
     def refresh(self) -> None:
         self.artists_model.clear()
-        for a in self.library.all_artists(None):
+        for a in self.library.all_artists(self._media_type_filter):
             self.artists_model.appendRow(QStandardItem(a))
         if self.artists_model.rowCount():
             self._browser_stack.setCurrentIndex(1)
@@ -211,7 +221,7 @@ class LibraryView(QWidget):
             self._update_footer()
             return
         artist = idx.data(Qt.DisplayRole)
-        albums = list(self.library.albums_for_artist(artist, None))
+        albums = list(self.library.albums_for_artist(artist, self._media_type_filter))
         # When the artist has multiple albums, offer an "All Albums" view.
         if len(albums) >= 2:
             all_item = QStandardItem("All Albums")
@@ -242,10 +252,10 @@ class LibraryView(QWidget):
         artist = ai.data(Qt.DisplayRole)
         album_key = bi.data(Qt.UserRole)
         if album_key == _ALL_ALBUMS_KEY:
-            self._current_tracks = self.library.tracks_for_artist(artist, None)
+            self._current_tracks = self.library.tracks_for_artist(artist, self._media_type_filter)
         else:
             album = album_key if isinstance(album_key, str) else bi.data(Qt.DisplayRole)
-            self._current_tracks = self.library.tracks_for_album(artist, album, None)
+            self._current_tracks = self.library.tracks_for_album(artist, album, self._media_type_filter)
         self._populate_tracks(self._current_tracks)
 
     def _populate_tracks(self, tracks: list[Track]) -> None:
@@ -373,6 +383,7 @@ class LibraryView(QWidget):
         enqueue = menu.addAction("Enqueue")
         menu.addSeparator()
         open_folder = menu.addAction("Open Containing Folder")
+        edit_metadata = menu.addAction("Edit Metadata")
         properties = menu.addAction("Properties")
         youtube_search = menu.addAction("Search YouTube for Artist, Album, and Track")
         action = menu.exec(self.tracks.viewport().mapToGlobal(pos))
@@ -383,6 +394,8 @@ class LibraryView(QWidget):
             self._enqueue_selected()
         elif action == open_folder:
             self._open_containing_folder(track)
+        elif action == edit_metadata:
+            self._show_edit_metadata_dialog(track)
         elif action == properties:
             self._show_track_properties(track)
         elif action == youtube_search:
@@ -417,6 +430,64 @@ class LibraryView(QWidget):
         dialog.resize(520, 260)
         dialog.exec()
 
+    def _show_edit_metadata_dialog(self, track: Track) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Edit Metadata - {track.title}")
+        layout = QVBoxLayout(dialog)
+        form = QFormLayout()
+        form.setLabelAlignment(Qt.AlignRight)
+
+        title_edit = QLineEdit(track.title)
+        artist_edit = QLineEdit(track.artist)
+        album_artist_edit = QLineEdit(track.album_artist)
+        album_edit = QLineEdit(track.album)
+        genre_edit = QLineEdit(track.genre)
+
+        track_no_spin = QSpinBox()
+        track_no_spin.setRange(0, 9999)
+        track_no_spin.setValue(track.track_no or 0)
+
+        disc_no_spin = QSpinBox()
+        disc_no_spin.setRange(0, 999)
+        disc_no_spin.setValue(track.disc_no or 0)
+
+        year_spin = QSpinBox()
+        year_spin.setRange(0, 9999)
+        year_spin.setValue(track.year or 0)
+
+        form.addRow("Title:", title_edit)
+        form.addRow("Artist:", artist_edit)
+        form.addRow("Album Artist:", album_artist_edit)
+        form.addRow("Album:", album_edit)
+        form.addRow("Track #:", track_no_spin)
+        form.addRow("Disc #:", disc_no_spin)
+        form.addRow("Year:", year_spin)
+        form.addRow("Genre:", genre_edit)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+
+        layout.addLayout(form)
+        layout.addWidget(buttons)
+        dialog.resize(480, 320)
+
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        self.library.update_track(track.id, {
+            "title": title_edit.text().strip(),
+            "artist": artist_edit.text().strip(),
+            "album_artist": album_artist_edit.text().strip(),
+            "album": album_edit.text().strip(),
+            "track_no": track_no_spin.value(),
+            "disc_no": disc_no_spin.value(),
+            "year": year_spin.value(),
+            "genre": genre_edit.text().strip(),
+        })
+        self.status_message.emit(f"Metadata saved for \"{title_edit.text().strip()}\"")
+        self.refresh()
+
     @staticmethod
     def _youtube_query_for_track(track: Track) -> str:
         parts = (track.display_artist, track.album, track.title)
@@ -435,7 +506,7 @@ class LibraryView(QWidget):
         if not q:
             self._refresh_tracks()
             return
-        self._current_tracks = self.library.search(q, None)
+        self._current_tracks = self.library.search(q, self._media_type_filter)
         self._populate_tracks(self._current_tracks)
         self._browser_stack.setCurrentIndex(1)
 
