@@ -231,11 +231,11 @@ class SettingsDialog(QDialog):
         layout.setSpacing(6)
 
         name_label = QLabel(__app_name__)
-        name_label.setStyleSheet("font-size:18px;font-weight:700;")
+        name_label.setObjectName("dialogTitle")
         layout.addWidget(name_label)
 
         version_label = QLabel(f"Version {__version__}")
-        version_label.setStyleSheet("font-size:12px;color:#888;")
+        version_label.setObjectName("dialogSubtitle")
         layout.addWidget(version_label)
 
         layout.addSpacing(12)
@@ -250,7 +250,7 @@ class SettingsDialog(QDialog):
         layout.addSpacing(12)
 
         license_label = QLabel("Released under the MIT License.")
-        license_label.setStyleSheet("color:#888;")
+        license_label.setObjectName("mutedText")
         layout.addWidget(license_label)
 
         layout.addStretch(1)

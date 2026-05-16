@@ -346,6 +346,32 @@ QLabel#resultTitle {
 }
 QLabel#warningLabel { color: #e8a830; font-size: 8pt; }
 
+/* Dialog typography (used across Settings, First Run, Queue, Diagnostics, YT) */
+QLabel#dialogTitle {
+    color: #eef7ff;
+    font-size: 16pt;
+    font-weight: 700;
+}
+QLabel#dialogSubtitle {
+    color: #8a93a0;
+    font-size: 9pt;
+}
+QLabel#dialogSummary {
+    color: #cfd6e2;
+    font-weight: 600;
+}
+QLabel#formLabel {
+    color: #dce8f4;
+    font-weight: 600;
+}
+QPlainTextEdit#monoLog {
+    font-family: "Consolas", "Menlo", "DejaVu Sans Mono", monospace;
+    font-size: 9pt;
+    background: #07090f;
+    border: 1px solid #27313b;
+    border-radius: 4px;
+}
+
 /* Toast notifications (floating, bottom-center) */
 QFrame#toast {
     background: #15181d;

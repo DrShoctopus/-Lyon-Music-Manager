@@ -23,7 +23,7 @@ class QueueDialog(QDialog):
         self.resize(720, 420)
 
         self.summary = QLabel("")
-        self.summary.setStyleSheet("color:#cfd6e2;font-weight:600;")
+        self.summary.setObjectName("dialogSummary")
 
         self.table = QTableWidget(0, 4, self)
         self.table.setHorizontalHeaderLabels(["#", "Title", "Artist", "Time"])

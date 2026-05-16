@@ -30,7 +30,7 @@ class DiagnosticsDialog(QDialog):
 
         summary = QLabel(summarize_dependency_checks(self.checks))
         summary.setWordWrap(True)
-        summary.setStyleSheet("color:#cfd6e2;font-weight:600;")
+        summary.setObjectName("dialogSummary")
 
         self.table = QTableWidget(len(self.checks), 4, self)
         self.table.setHorizontalHeaderLabels(["Component", "Status", "Details", "How to fix"])
