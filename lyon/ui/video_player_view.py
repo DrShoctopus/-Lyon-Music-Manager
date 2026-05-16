@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
 
 from ..core.equalizer import EQ_BAND_COUNT, normalize_equalizer_bands
 from ..core.playback_backend import _configure_vlc_runtime_path
+from .osd import OSDOverlay
 from .transport import PlayPauseSideButton, StopButton, VolumeButton
 from .widgets import ElidedLabel, format_duration, format_ms, placeholder_cover
 
@@ -179,11 +180,21 @@ class _VideoSurface(QWidget):
 class _FullscreenWindow(QWidget):
     """Borderless fullscreen window used for VLC video output during fullscreen mode."""
 
-    def __init__(self, on_exit_cb, on_toggle_play_cb) -> None:
+    def __init__(
+        self,
+        on_exit_cb,
+        on_toggle_play_cb,
+        on_seek_relative_cb=None,
+        on_volume_step_cb=None,
+        on_mute_toggle_cb=None,
+    ) -> None:
         super().__init__(None, Qt.Window | Qt.FramelessWindowHint)
         self.setStyleSheet("background:#000000;")
         self._on_exit = on_exit_cb
         self._on_toggle_play = on_toggle_play_cb
+        self._on_seek_relative = on_seek_relative_cb
+        self._on_volume_step = on_volume_step_cb
+        self._on_mute_toggle = on_mute_toggle_cb
 
         # VLC must render into a *child* native sub-window, not into this
         # top-level window directly.  Qt's backing-store blit targets the
@@ -197,17 +208,32 @@ class _FullscreenWindow(QWidget):
         layout.addWidget(self._vlc_surface)
 
     def keyPressEvent(self, ev) -> None:
-        if ev.key() == Qt.Key_Escape:
+        key = ev.key()
+        mod = ev.modifiers()
+        if key in (Qt.Key_Escape, Qt.Key_F):
             self._on_exit()
-            ev.accept()
-        elif ev.key() == Qt.Key_Space:
+        elif key == Qt.Key_Space:
             self._on_toggle_play()
-            ev.accept()
-        elif ev.key() == Qt.Key_F:
-            self._on_exit()
-            ev.accept()
+        elif key == Qt.Key_Left and self._on_seek_relative:
+            self._on_seek_relative(-30_000 if mod & Qt.ShiftModifier else -5_000)
+        elif key == Qt.Key_Right and self._on_seek_relative:
+            self._on_seek_relative(30_000 if mod & Qt.ShiftModifier else 5_000)
+        elif key == Qt.Key_Up and self._on_volume_step:
+            self._on_volume_step(5)
+        elif key == Qt.Key_Down and self._on_volume_step:
+            self._on_volume_step(-5)
+        elif key == Qt.Key_M and self._on_mute_toggle:
+            self._on_mute_toggle()
         else:
             super().keyPressEvent(ev)
+            return
+        ev.accept()
+
+    def mousePressEvent(self, ev) -> None:
+        # Single click toggles play/pause (like every other video player).
+        if ev.button() == Qt.LeftButton:
+            self._on_toggle_play()
+        super().mousePressEvent(ev)
 
     def mouseDoubleClickEvent(self, ev) -> None:
         self._on_exit()
@@ -262,6 +288,7 @@ class VideoPlayerView(QWidget):
         self._current_path = ""
         self._fs_window: _FullscreenWindow | None = None
         self._surface_attached = False  # deferred until first showEvent
+        self._osd: OSDOverlay | None = None
         self._eq_enabled = False
         self._eq_bands: list[int] = []
         self._eq_preamp: int = 0
@@ -291,6 +318,7 @@ class VideoPlayerView(QWidget):
 
         if self._available:
             self._build_player_ui()
+            self._osd = OSDOverlay()
         else:
             self._build_unavailable_ui()
 
@@ -305,7 +333,7 @@ class VideoPlayerView(QWidget):
         f.setPointSize(14)
         f.setBold(True)
         title.setFont(f)
-        title.setStyleSheet("color:#72f4ff;")
+        title.setObjectName("sectionTitle")
         title.setAlignment(Qt.AlignCenter)
 
         body = QLabel(
@@ -314,7 +342,7 @@ class VideoPlayerView(QWidget):
             "and restart the app."
         )
         body.setAlignment(Qt.AlignCenter)
-        body.setStyleSheet("color:#cfd6e2;")
+        body.setObjectName("mutedText")
 
         diag_btn = QPushButton("Run Diagnostics")
         diag_btn.setToolTip("Open the diagnostics panel to verify your runtime environment")
@@ -339,7 +367,7 @@ class VideoPlayerView(QWidget):
         self._open_btn.clicked.connect(self._open_file)
 
         self._info_lbl = QLabel("No file loaded")
-        self._info_lbl.setStyleSheet("color:#aab3c0;")
+        self._info_lbl.setObjectName("mutedText")
         self._info_lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
 
         self._screenshot_btn = QPushButton("Screenshot")
@@ -631,7 +659,7 @@ class VideoPlayerView(QWidget):
     @staticmethod
     def _ctrl_label(text: str) -> QLabel:
         lbl = QLabel(text)
-        lbl.setStyleSheet("color:#aab3c0;")
+        lbl.setObjectName("mutedText")
         return lbl
 
     def _set_controls_enabled(self, enabled: bool) -> None:
@@ -934,6 +962,9 @@ class VideoPlayerView(QWidget):
         self._fs_window = _FullscreenWindow(
             on_exit_cb=self._exit_fullscreen,
             on_toggle_play_cb=self._toggle_play,
+            on_seek_relative_cb=self._seek_relative,
+            on_volume_step_cb=self._step_volume,
+            on_mute_toggle_cb=self._toggle_mute,
         )
         self._fs_window.showFullScreen()
         self._fs_window.raise_()
@@ -993,21 +1024,54 @@ class VideoPlayerView(QWidget):
             self._elapsed_lbl.setText(format_ms(pos))
             self._total_lbl.setText(format_ms(dur))
 
-            is_playing = bool(self._player.is_playing())
-            self._play_btn.setChecked(is_playing)
-            self._play_btn.setText("||" if is_playing else "▶")
+            self._play_btn.set_playing(bool(self._player.is_playing()))
         except Exception as exc:
             LOG.debug("Video poll error: %s", exc)
 
     def _on_ended(self) -> None:
         self._timer.stop()
-        self._play_btn.setText("▶")
-        self._play_btn.setChecked(False)
+        self._play_btn.set_playing(False)
         self._seek.blockSignals(True)
         dur = max(0, int(self._player.get_length()))
         self._seek.setValue(dur)
         self._seek.blockSignals(False)
         self._video_stack.setCurrentIndex(0)
+
+    # ---------------------------------------------------------------- shortcuts / OSD
+
+    def _show_osd(self, text: str) -> None:
+        if self._osd is None:
+            return
+        host = self._fs_window if self._fs_window is not None else self.window()
+        self._osd.show_message(text, host)
+
+    def _seek_relative(self, ms_delta: int) -> None:
+        """Skip forward/backward by ms_delta milliseconds, showing OSD feedback."""
+        if not self._available or self._player is None or not self._player.get_media():
+            return
+        dur = max(0, int(self._player.get_length()))
+        if dur <= 0:
+            return
+        new_pos = max(0, min(dur, int(self._player.get_time()) + int(ms_delta)))
+        self._player.set_time(new_pos)
+        seconds = abs(ms_delta) // 1000
+        sign = "+" if ms_delta >= 0 else "−"
+        self._show_osd(f"{sign}{seconds}s")
+
+    def _step_volume(self, step: int) -> None:
+        """Adjust volume by `step` percent; clamps to 0–100 and updates the slider."""
+        if not self._available:
+            return
+        new = max(0, min(100, self._vol_slider.value() + int(step)))
+        self._vol_slider.setValue(new)  # triggers _on_volume_changed
+        self._show_osd(f"Volume {new}")
+
+    def _toggle_mute(self) -> None:
+        if not self._available:
+            return
+        muted = not self._mute_btn.isChecked()
+        self._mute_btn.setChecked(muted)  # triggers _on_mute_toggled
+        self._show_osd("Muted" if muted else f"Volume {self._vol_slider.value()}")
 
     # ---------------------------------------------------------------- lifecycle
 
@@ -1020,6 +1084,10 @@ class VideoPlayerView(QWidget):
         if self._fs_window is not None:
             self._fs_window.close()
             self._fs_window = None
+        if self._osd is not None:
+            self._osd.hide()
+            self._osd.deleteLater()
+            self._osd = None
         try:
             self._player.stop()
             self._player.release()
@@ -1037,8 +1105,7 @@ class VideoPlayerView(QWidget):
         """Pause video when the user navigates away from this tab."""
         if self._available and self._player and self._player.is_playing():
             self._player.pause()
-            self._play_btn.setText("▶")
-            self._play_btn.setChecked(False)
+            self._play_btn.set_playing(False)
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
@@ -1055,19 +1122,30 @@ class VideoPlayerView(QWidget):
         if not self._available:
             super().keyPressEvent(ev)
             return
-        if ev.key() == Qt.Key_Space:
+        key = ev.key()
+        mod = ev.modifiers()
+        if key == Qt.Key_Space:
             self._toggle_play()
-            ev.accept()
-        elif ev.key() == Qt.Key_F:
+        elif key == Qt.Key_F:
             if self._fs_window:
                 self._exit_fullscreen()
             else:
                 self._enter_fullscreen()
-            ev.accept()
-        elif ev.key() == Qt.Key_B and ev.modifiers() & Qt.ControlModifier:
+        elif key == Qt.Key_B and mod & Qt.ControlModifier:
             checked = not self._sidebar_btn.isChecked()
             self._sidebar_btn.setChecked(checked)
             self._toggle_sidebar(checked)
-            ev.accept()
+        elif key == Qt.Key_Left:
+            self._seek_relative(-30_000 if mod & Qt.ShiftModifier else -5_000)
+        elif key == Qt.Key_Right:
+            self._seek_relative(30_000 if mod & Qt.ShiftModifier else 5_000)
+        elif key == Qt.Key_Up:
+            self._step_volume(5)
+        elif key == Qt.Key_Down:
+            self._step_volume(-5)
+        elif key == Qt.Key_M:
+            self._toggle_mute()
         else:
             super().keyPressEvent(ev)
+            return
+        ev.accept()

@@ -385,4 +385,17 @@ QToolButton#toastClose {
     min-width: 18px;
 }
 QToolButton#toastClose:hover { color: #ffffff; }
+
+/* On-screen display (transient overlay for video playback feedback) */
+QFrame#osdFrame {
+    background: rgba(8, 12, 18, 220);
+    border: 1px solid #43e7ff;
+    border-radius: 10px;
+}
+QLabel#osdLabel {
+    color: #eef7ff;
+    font-size: 18pt;
+    font-weight: 600;
+    padding: 0 4px;
+}
 """
