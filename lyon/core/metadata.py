@@ -34,6 +34,8 @@ METADATA_DIAGNOSTICS_LOG_NAME = "metadata-diagnostics.log"
 
 LOG = logging.getLogger(__name__)
 _metadata_file_handler: logging.Handler | None = None
+_DEFAULT_REQUESTS_GET = requests.get
+_DEFAULT_SETTINGS_LOAD = getattr(_settings.Settings.load, "__func__", _settings.Settings.load)
 
 # Shared HTTP session — reuses TCP connections and avoids repeated TLS handshakes.
 _http_session: requests.Session | None = None
@@ -84,6 +86,21 @@ def _get_http_session() -> requests.Session:
             if _http_session is None:
                 _http_session = requests.Session()
     return _http_session
+
+
+def _http_get(url: str, **kwargs: Any) -> requests.Response:
+    """Use the shared session unless tests replace the module-level requests hook."""
+    if requests.get is not _DEFAULT_REQUESTS_GET:
+        return requests.get(url, **kwargs)
+    return _get_http_session().get(url, **kwargs)
+
+
+def _current_settings() -> Any:
+    loader = _settings.Settings.load
+    loader_func = getattr(loader, "__func__", loader)
+    if loader_func is not _DEFAULT_SETTINGS_LOAD:
+        return _settings.Settings.load()
+    return _settings.get_cached_settings()
 
 
 def _init() -> None:
@@ -267,7 +284,7 @@ def lookup_cuetools_db_layout(ctdb_toc: str | None, *, fuzzy: bool = False) -> O
         return None
 
     try:
-        response = _get_http_session().get(
+        response = _http_get(
             CTDB_LOOKUP_URL,
             params={
                 "version": "3",
@@ -444,7 +461,7 @@ def metadata_diagnostics_log_path() -> str:
 
 
 def _metadata_diagnostics_enabled() -> bool:
-    settings = _settings.get_cached_settings()
+    settings = _current_settings()
     enabled = bool(getattr(settings, "metadata_diagnostics_enabled", False))
     if enabled:
         _ensure_metadata_diagnostics_logging()
@@ -457,7 +474,11 @@ def _ensure_metadata_diagnostics_logging() -> None:
         return
 
     path = _settings.app_data_dir() / METADATA_DIAGNOSTICS_LOG_NAME
-    handler = logging.FileHandler(path, encoding="utf-8")
+    try:
+        handler = logging.FileHandler(path, encoding="utf-8")
+    except OSError:
+        LOG.setLevel(logging.INFO)
+        return
     handler.setLevel(logging.INFO)
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
     LOG.addHandler(handler)
@@ -756,7 +777,7 @@ def _merge_album_info(primary: AlbumInfo, fallback: AlbumInfo) -> AlbumInfo:
 
 def _fetch_artwork_url(url: str) -> bytes | None:
     try:
-        response = _get_http_session().get(url, timeout=HTTP_TIMEOUT_SECONDS)
+        response = _http_get(url, timeout=HTTP_TIMEOUT_SECONDS)
         if response.status_code == 200 and response.content:
             return response.content
         _log_metadata_diagnostic(
@@ -777,7 +798,7 @@ def _get_json(
     headers: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     try:
-        response = _get_http_session().get(
+        response = _http_get(
             url, params=params, headers=headers, timeout=HTTP_TIMEOUT_SECONDS
         )
         if response.status_code != 200:
@@ -897,14 +918,14 @@ def _theaudiodb_url(endpoint: str) -> str:
 
 
 def _theaudiodb_api_key() -> str:
-    settings = _settings.get_cached_settings()
+    settings = _current_settings()
     return getattr(settings, "theaudiodb_api_key", "") or THEAUDIODB_DEFAULT_API_KEY
 
 
 def _use_cuetools_db(value: bool | None) -> bool:
     if value is not None:
         return value
-    settings = _settings.get_cached_settings()
+    settings = _current_settings()
     return bool(getattr(settings, "cuetools_db_metadata_enabled", True))
 
 
@@ -921,7 +942,7 @@ def _has_track_metadata(info: AlbumInfo | None) -> bool:
 
 
 def _user_agent() -> str:
-    s = _settings.get_cached_settings()
+    s = _current_settings()
     return f"{s.musicbrainz_app}/{s.musicbrainz_version} ({s.musicbrainz_contact})"
 
 
