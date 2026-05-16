@@ -7,7 +7,7 @@ from typing import Optional
 
 from PySide6.QtCore import QObject, Signal
 
-from .library import Track
+from .library import Library, Track
 from .equalizer import clamp_preamp, flat_equalizer_bands, normalize_equalizer_bands
 from .playback_backend import PlaybackBackend, create_playback_backend
 
@@ -25,8 +25,14 @@ class Player(QObject):
     queue_changed = Signal()
     playback_unavailable = Signal(str)
 
-    def __init__(self, parent: Optional[QObject] = None, backend: PlaybackBackend | None = None):
+    def __init__(
+        self,
+        parent: Optional[QObject] = None,
+        backend: PlaybackBackend | None = None,
+        library: Library | None = None,
+    ):
         super().__init__(parent)
+        self._library = library
         self._backend = backend or create_playback_backend(self)
         backend_parent = getattr(self._backend, "parent", None)
         if callable(backend_parent) and backend_parent() is None:
@@ -42,7 +48,7 @@ class Player(QObject):
 
         self._backend.position_changed.connect(self.position_changed.emit)
         self._backend.state_changed.connect(self.state_changed.emit)
-        self._backend.end_reached.connect(self.next)
+        self._backend.end_reached.connect(self._on_track_ended)
 
     # --------------------------------------------------------------- queue
     def set_queue(self, tracks: list[Track], start_index: int = 0) -> None:
@@ -233,6 +239,11 @@ class Player(QObject):
         return self._repeat
 
     # --------------------------------------------------------------- internals
+    def _on_track_ended(self) -> None:
+        if self._library is not None and 0 <= self._index < len(self._queue):
+            self._library.increment_play_count(self._queue[self._index].id)
+        self.next()
+
     def _next_index(self) -> Optional[int]:
         if self._shuffle:
             candidates = [i for i in range(len(self._queue)) if i != self._index]

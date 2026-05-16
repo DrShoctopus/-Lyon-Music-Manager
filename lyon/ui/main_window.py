@@ -73,7 +73,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.settings = Settings.load()
         self.library = Library()
-        self.player = Player(self)
+        self.player = Player(self, library=self.library)
         self.player.set_volume(self.settings.last_volume)
         self.player.set_equalizer(self.settings.equalizer_enabled, self.settings.equalizer_bands, self.settings.equalizer_preamp)
         self._scan_thread: _LibraryScanThread | None = None
@@ -129,7 +129,7 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
         self.library_view = LibraryView(self.library)
         self._library_refresh_timer.timeout.connect(self.library_view.refresh)
-        self.now_playing = NowPlayingView(self.player)
+        self.now_playing = NowPlayingView(self.player, library=self.library)
         self.video_player_view = VideoPlayerView(
             library=self.library,
             initial_volume=self.settings.last_volume,
