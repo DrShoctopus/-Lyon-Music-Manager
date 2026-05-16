@@ -214,7 +214,6 @@ QLabel#nowPlayingArtist      { color: #d4e2ee; font-size: 10pt; }
 QLabel#nowPlayingHeroTitle   { color: #72f4ff; }
 QLabel#nowPlayingHeroArtist  { color: #d4e2ee; }
 QLabel#timeLabel             { color: #aeb9c4; font-size: 9.5pt; }
-QLabel#volumeIcon            { color: #e9f7ff; font-size: 18pt; padding-left: 2px; }
 
 /* Transport buttons — flat dark base, cyan rim on hover/checked */
 QToolButton#transportBtn {
@@ -359,7 +358,6 @@ QLabel#hintText {
     color: #3a4a5a;
     font-size: 11pt;
 }
-QLabel#linkLabel { color: #43e7ff; }
 QLabel#resultTitle {
     color: #72f4ff;
     font-weight: 600;
