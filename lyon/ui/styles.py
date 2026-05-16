@@ -172,7 +172,7 @@ QSlider::groove:horizontal {
 QSlider::sub-page:horizontal {
     background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
         stop:0 #102c83, stop:0.5 #1b8dff, stop:1 #68f3ff);
-    border: 1px solid rgba(126,245,255,0.45);
+    border: none;
     border-radius: 4px;
 }
 QSlider::handle:horizontal {
@@ -180,7 +180,7 @@ QSlider::handle:horizontal {
         stop:0 #ffffff, stop:0.24 #9ff4ff, stop:0.58 #267fe9, stop:1 #07142d);
     border: 1px solid #02050a;
     width: 18px;
-    margin: -6px 0;
+    margin: -5px 0;
     border-radius: 9px;
 }
 QSlider::handle:horizontal:hover {
@@ -188,11 +188,6 @@ QSlider::handle:horizontal:hover {
 }
 QSlider:focus {
     outline: none;
-}
-QSlider:focus::handle:horizontal {
-    border: 1px solid #79fbff;
-    background: qradialgradient(cx:0.45, cy:0.28, radius:0.85,
-        stop:0 #ffffff, stop:0.24 #c5fbff, stop:0.58 #49a4ff, stop:1 #0a1f44);
 }
 QLineEdit:focus, QComboBox:focus, QSpinBox:focus {
     border: 1px solid #79fbff;
