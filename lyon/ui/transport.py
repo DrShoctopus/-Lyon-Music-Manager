@@ -133,6 +133,32 @@ def _draw_glyph(painter: QPainter, name: str, rect, color: QColor) -> None:
             painter.setFont(f)
             painter.drawText(QRectF(cx - r, cy - r, r * 2, r * 2), Qt.AlignCenter, "1")
 
+    elif name in ("heart-empty", "heart-filled"):
+        path = QPainterPath()
+        # Drawn from the bottom tip, left arc, right arc, close.
+        # All offsets are proportional to `size` so the glyph scales with button size.
+        path.moveTo(cx, cy + size * 0.32)
+        path.cubicTo(cx - size * 0.50, cy + size * 0.08,
+                     cx - size * 0.56, cy - size * 0.24,
+                     cx - size * 0.24, cy - size * 0.24)
+        path.cubicTo(cx - size * 0.08, cy - size * 0.30,
+                     cx, cy - size * 0.10,
+                     cx, cy - size * 0.10)
+        path.cubicTo(cx, cy - size * 0.10,
+                     cx + size * 0.08, cy - size * 0.30,
+                     cx + size * 0.24, cy - size * 0.24)
+        path.cubicTo(cx + size * 0.56, cy - size * 0.24,
+                     cx + size * 0.50, cy + size * 0.08,
+                     cx, cy + size * 0.32)
+        path.closeSubpath()
+        if name == "heart-filled":
+            painter.drawPath(path)
+        else:
+            painter.setBrush(Qt.NoBrush)
+            pen_w = max(1.6, size * 0.07)
+            painter.setPen(QPen(color, pen_w, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+            painter.drawPath(path)
+
     elif name == "volume-muted":
         _draw_speaker(painter, cx, cy, size, color, arcs=0)
         pen_w = max(1.6, size * 0.08)
@@ -388,3 +414,25 @@ class VolumeButton(TransportButton):
         if self._volume < 66:
             return "volume-mid"
         return "volume-high"
+
+
+class HeartButton(TransportButton):
+    """Toggle button that shows an empty/filled heart to mark a track as liked."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setCheckable(True)
+        self.setAccessibleName("Like")
+        self.setAccessibleDescription("Toggle liked status for current track")
+        self.setToolTip("Like / Unlike")
+        self.toggled.connect(lambda _: self.update())
+
+    def _glyph_color(self) -> QColor:
+        if not self.isEnabled():
+            return _GLYPH_DISABLED
+        if self.isChecked():
+            return QColor("#e05c73")  # pink/red for liked state
+        return _GLYPH_COLOR
+
+    def _glyph_name(self) -> str:
+        return "heart-filled" if self.isChecked() else "heart-empty"

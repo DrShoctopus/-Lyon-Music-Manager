@@ -15,8 +15,8 @@ from PySide6.QtWidgets import (
 from ..core.library import Library, Track
 from ..core.player import Player, RepeatMode
 from .transport import (
-    NextButton, PlayPauseButton, PrevButton, RepeatButton, ShuffleButton,
-    StopButton, VolumeButton,
+    HeartButton, NextButton, PlayPauseButton, PrevButton, RepeatButton,
+    ShuffleButton, StopButton, VolumeButton,
 )
 from .widgets import ElidedLabel, StarRatingWidget, cover_pixmap, format_duration, format_ms
 
@@ -556,9 +556,15 @@ class TransportBar(QWidget):
     open_now_playing = Signal()
     play_requested = Signal()
 
-    def __init__(self, player: Player, parent: QWidget | None = None):
+    def __init__(
+        self,
+        player: Player,
+        library: Library | None = None,
+        parent: QWidget | None = None,
+    ):
         super().__init__(parent)
         self.player = player
+        self._library = library
         self._user_dragging = False
 
         self.bar = QFrame(self)
@@ -589,6 +595,10 @@ class TransportBar(QWidget):
         meta_w.setMinimumWidth(180)
         meta_w.setMaximumWidth(340)
         meta_w.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+
+        self.heart_btn = HeartButton()
+        self.heart_btn.setEnabled(False)
+        self.heart_btn.toggled.connect(self._on_heart_toggled)
 
         self.shuffle_btn = ShuffleButton()
         self.repeat_btn = RepeatButton()
@@ -673,6 +683,7 @@ class TransportBar(QWidget):
         bar_layout.setSpacing(12)
         bar_layout.addWidget(self.thumb)
         bar_layout.addWidget(meta_w)
+        bar_layout.addWidget(self.heart_btn)
         bar_layout.addStretch(1)
         bar_layout.addWidget(center_w, 3)
         bar_layout.addStretch(1)
@@ -704,10 +715,18 @@ class TransportBar(QWidget):
             self.title_lbl.setText("Nothing playing")
             self.artist_lbl.setText("")
             self.thumb.setPixmap(cover_pixmap(None, 68, "♪"))
+            self.heart_btn.blockSignals(True)
+            self.heart_btn.setChecked(False)
+            self.heart_btn.blockSignals(False)
+            self.heart_btn.setEnabled(False)
         else:
             self.title_lbl.setText(track.title)
             self.artist_lbl.setText(f"{track.display_artist} - {track.album}")
             self.thumb.setPixmap(cover_pixmap(track.artwork_path, 68, "♪"))
+            self.heart_btn.blockSignals(True)
+            self.heart_btn.setChecked(track.liked)
+            self.heart_btn.blockSignals(False)
+            self.heart_btn.setEnabled(self._library is not None)
 
     def _on_position(self, pos_ms: int, dur_ms: int) -> None:
         if not self._user_dragging:
@@ -721,6 +740,12 @@ class TransportBar(QWidget):
     def _on_mute_toggled(self, muted: bool) -> None:
         self.player.set_muted(muted)
         self.vol_btn.set_state(self.vol.value(), muted)
+
+    def _on_heart_toggled(self, liked: bool) -> None:
+        track = self.player.current()
+        if track is not None and self._library is not None:
+            track.liked = liked
+            self._library.update_liked(track.id, liked)
 
     def _on_state(self, state: str) -> None:
         self.play_btn.set_playing(state == "playing")

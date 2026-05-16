@@ -6,8 +6,8 @@ from collections.abc import Callable
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QAction, QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
-    QAbstractSpinBox, QFileDialog, QHBoxLayout, QLabel,
-    QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar,
+    QAbstractSpinBox, QFileDialog, QHBoxLayout, QInputDialog, QLabel,
+    QLineEdit, QMainWindow, QMenu, QMessageBox, QPlainTextEdit, QProgressBar,
     QStackedWidget, QStatusBar, QTabBar, QTextEdit, QToolButton,
     QVBoxLayout, QWidget,
 )
@@ -21,6 +21,7 @@ from ..core.player import Player
 from ..core.settings import Settings
 from .branding import app_icon
 from .diagnostics_dialog import DiagnosticsDialog
+from .duplicate_dialog import DuplicateDialog
 from .equalizer_dialog import EqualizerDialog
 from .first_run_dialog import FirstRunDialog
 from .library_view import LibraryView
@@ -76,6 +77,7 @@ class MainWindow(QMainWindow):
         self.player = Player(self, library=self.library)
         self.player.set_volume(self.settings.last_volume)
         self.player.set_equalizer(self.settings.equalizer_enabled, self.settings.equalizer_bands, self.settings.equalizer_preamp)
+        self.player.set_crossfade(self.settings.crossfade_seconds)
         self._scan_thread: _LibraryScanThread | None = None
         self._equalizer_dialog: EqualizerDialog | None = None
         self._queue_dialog: QueueDialog | None = None
@@ -84,6 +86,11 @@ class MainWindow(QMainWindow):
         self._library_refresh_timer = QTimer(self)
         self._library_refresh_timer.setSingleShot(True)
         self._library_refresh_timer.setInterval(300)
+        # Sleep timer
+        self._sleep_remaining_s = 0
+        self._sleep_timer = QTimer(self)
+        self._sleep_timer.setInterval(1000)
+        self._sleep_timer.timeout.connect(self._on_sleep_tick)
 
         self.setWindowTitle(__app_name__)
         self.setWindowIcon(app_icon())
@@ -123,6 +130,25 @@ class MainWindow(QMainWindow):
             btn.clicked.connect(handler)
             hlayout.addWidget(btn)
 
+        self._sleep_btn = QToolButton()
+        self._sleep_btn.setText("Sleep")
+        self._sleep_btn.setToolTip("Sleep timer — stop playback after a set time")
+        self._sleep_btn.setObjectName("navToolBtn")
+        self._sleep_menu = QMenu(self._sleep_btn)
+        for mins in (15, 30, 45, 60):
+            act = self._sleep_menu.addAction(f"{mins} minutes")
+            act.setData(mins * 60)
+        self._sleep_menu.addSeparator()
+        custom_act = self._sleep_menu.addAction("Custom…")
+        custom_act.setData(-1)
+        self._sleep_menu.addSeparator()
+        self._sleep_cancel_act = self._sleep_menu.addAction("Cancel Timer")
+        self._sleep_cancel_act.setEnabled(False)
+        self._sleep_menu.triggered.connect(self._on_sleep_menu)
+        self._sleep_btn.setMenu(self._sleep_menu)
+        self._sleep_btn.setPopupMode(QToolButton.InstantPopup)
+        hlayout.addWidget(self._sleep_btn)
+
         layout.addWidget(header)
 
         # ---- stacked content (order must match _TAB_ORDER)
@@ -158,7 +184,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.stack, 1)
 
         # ---- transport bar
-        self.transport = TransportBar(self.player)
+        self.transport = TransportBar(self.player, library=self.library)
         self.transport.open_now_playing.connect(
             lambda: self.tab_bar.setCurrentIndex(self._tab_index["Now Playing"]))
         self.transport.play_requested.connect(self._on_transport_play_requested)
@@ -211,6 +237,19 @@ class MainWindow(QMainWindow):
         # Ensure transport visibility matches initial tab (Library, index 0).
         self._on_view_changed(0)
 
+        # Restore previous queue (no auto-play)
+        if self.settings.queue_track_paths:
+            restored = self.library.tracks_for_paths(self.settings.queue_track_paths)
+            if restored:
+                self.player.load_queue(
+                    restored,
+                    min(self.settings.queue_current_index, len(restored) - 1),
+                )
+
+        # macOS global media keys (PyObjC optional dep — no-op on other platforms)
+        from ..core.media_keys import register_media_key_handler
+        self._media_key_handler = register_media_key_handler(self.player)
+
         QTimer.singleShot(0, self._maybe_show_first_run)
         backup_path = getattr(self.settings, "_corrupt_backup_path", None)
         if backup_path:
@@ -234,6 +273,8 @@ class MainWindow(QMainWindow):
         file_menu.addAction(QAction("Rescan Library", self, triggered=self.rescan))
         file_menu.addAction(QAction("Remove Missing Files", self,
                                     triggered=self.remove_missing))
+        file_menu.addAction(QAction("Find Duplicates…", self,
+                                    triggered=self.show_duplicates))
         file_menu.addSeparator()
         exit_act = QAction("Exit", self, triggered=self.close)
         exit_act.setMenuRole(QAction.MenuRole.QuitRole)
@@ -255,6 +296,9 @@ class MainWindow(QMainWindow):
         search_action = QAction("Focus Library Search", self, triggered=self._focus_library_search)
         search_action.setShortcut("Ctrl+F")
         playback_menu.addAction(search_action)
+        jump_action = QAction("Jump to Now Playing", self, triggered=self._jump_to_now_playing)
+        jump_action.setShortcut("Ctrl+L")
+        playback_menu.addAction(jump_action)
 
         # View menu with Ctrl+1..5 tab shortcuts
         view_menu = m.addMenu("&View")
@@ -371,6 +415,8 @@ class MainWindow(QMainWindow):
         is_rip = current is self.ripper_view
         is_video = current is self.video_player_view
         self.transport.setVisible(not is_rip and not is_video)
+        if current is self.library_view:
+            self.library_view.refresh_playlists()
         if is_rip:
             self.player.stop()
         if not is_video:
@@ -485,6 +531,7 @@ class MainWindow(QMainWindow):
                 self.settings.equalizer_bands,
                 self.settings.equalizer_preamp,
             )
+            self.player.set_crossfade(self.settings.crossfade_seconds)
             self.video_player_view.apply_equalizer(
                 self.settings.equalizer_enabled,
                 self.settings.equalizer_bands,
@@ -512,8 +559,9 @@ class MainWindow(QMainWindow):
 
     def open_queue(self) -> None:
         if self._queue_dialog is None:
-            self._queue_dialog = QueueDialog(self.player, self)
+            self._queue_dialog = QueueDialog(self.player, self.library, self)
             self._queue_dialog.finished.connect(self._clear_queue_dialog)
+            self._queue_dialog.playlist_saved.connect(self._on_playlist_saved_from_queue)
         self._queue_dialog.show()
         self._queue_dialog.raise_()
         self._queue_dialog.activateWindow()
@@ -521,10 +569,63 @@ class MainWindow(QMainWindow):
     def _clear_queue_dialog(self, *_args) -> None:
         self._queue_dialog = None
 
+    def _on_playlist_saved_from_queue(self, name: str) -> None:
+        self.library_view.refresh_playlists()
+        self.show_toast(f'Saved queue as playlist "{name}".', level="success")
+
     def _focus_library_search(self) -> None:
         self.tab_bar.setCurrentIndex(self._tab_index["Library"])
         self.library_view.search.setFocus()
         self.library_view.search.selectAll()
+
+    def _jump_to_now_playing(self) -> None:
+        track = self.player.current()
+        if track is None:
+            return
+        self.tab_bar.setCurrentIndex(self._tab_index["Library"])
+        self.library_view.reveal_track(track)
+
+    def _on_sleep_menu(self, action: QAction) -> None:
+        if action is self._sleep_cancel_act:
+            self._cancel_sleep_timer()
+            return
+        seconds = action.data()
+        if seconds == -1:  # Custom
+            mins, ok = QInputDialog.getInt(self, "Custom Sleep Timer", "Minutes:", 30, 1, 240)
+            if not ok:
+                return
+            seconds = mins * 60
+        self._sleep_remaining_s = int(seconds)
+        self._sleep_cancel_act.setEnabled(True)
+        self._sleep_timer.start()
+        self._update_sleep_btn()
+        self.show_toast(f"Sleep timer set for {self._sleep_remaining_s // 60} min.", level="info")
+
+    def _on_sleep_tick(self) -> None:
+        self._sleep_remaining_s -= 1
+        if self._sleep_remaining_s <= 0:
+            self._cancel_sleep_timer()
+            self.player.stop()
+            self.show_toast("Sleep timer: playback stopped.", level="info", duration_ms=4000)
+            return
+        self._update_sleep_btn()
+
+    def _cancel_sleep_timer(self) -> None:
+        self._sleep_timer.stop()
+        self._sleep_remaining_s = 0
+        self._sleep_cancel_act.setEnabled(False)
+        self._update_sleep_btn()
+
+    def _update_sleep_btn(self) -> None:
+        if self._sleep_remaining_s > 0:
+            mins, secs = divmod(self._sleep_remaining_s, 60)
+            self._sleep_btn.setText(f"Sleep {mins}:{secs:02d}")
+        else:
+            self._sleep_btn.setText("Sleep")
+
+    def show_duplicates(self) -> None:
+        DuplicateDialog(self.library, self).exec()
+        self.library_view.refresh()
 
     def open_equalizer(self) -> None:
         if self._equalizer_dialog is None:
@@ -619,6 +720,9 @@ class MainWindow(QMainWindow):
         self.youtube_view.shutdown()
         self.ripper_view.shutdown()
         self.settings.last_volume = self.player.volume()
+        queue = self.player.queue()
+        self.settings.queue_track_paths = [t.path for t in queue]
+        self.settings.queue_current_index = max(0, self.player.current_index())
         self.settings.save()
         self.video_player_view.cleanup()
         self.player.cleanup()

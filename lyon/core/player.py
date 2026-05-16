@@ -5,7 +5,7 @@ import random
 from enum import Enum
 from typing import Optional
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, QTimer, Signal
 
 from .library import Library, Track
 from .equalizer import clamp_preamp, flat_equalizer_bands, normalize_equalizer_bands
@@ -46,11 +46,26 @@ class Player(QObject):
         self._equalizer_preamp = 0
         self._equalizer_bands = flat_equalizer_bands()
 
+        self._crossfade_seconds = 0
+        self._fade_timer: QTimer | None = None
+        self._user_volume = 80   # tracks the volume the user actually wants
+        self._fade_target = 80
+        self._fade_step = 0
+        self._fade_total_steps = 1
+
         self._backend.position_changed.connect(self.position_changed.emit)
         self._backend.state_changed.connect(self.state_changed.emit)
         self._backend.end_reached.connect(self._on_track_ended)
 
     # --------------------------------------------------------------- queue
+    def load_queue(self, tracks: list[Track], current_index: int = 0) -> None:
+        """Restore a saved queue without starting playback."""
+        self._queue = list(tracks)
+        self._index = max(-1, min(current_index, len(tracks) - 1)) if tracks else -1
+        self.queue_changed.emit()
+        if 0 <= self._index < len(self._queue):
+            self.track_changed.emit(self._queue[self._index])
+
     def set_queue(self, tracks: list[Track], start_index: int = 0) -> None:
         self._queue = list(tracks)
         self._index = -1
@@ -150,6 +165,8 @@ class Player(QObject):
         self._backend.set_source(track.path)
         self._backend.apply_equalizer(self._equalizer_enabled, self._equalizer_bands, self._equalizer_preamp)
         self._backend.play()
+        if self._crossfade_seconds > 0:
+            self._start_crossfade()
         self.track_changed.emit(track)
 
     def play(self) -> None:
@@ -170,10 +187,17 @@ class Player(QObject):
             self.play()
 
     def stop(self) -> None:
+        if self._fade_timer is not None:
+            self._fade_timer.stop()
+            self._fade_timer = None
+            self._backend.set_volume(self._user_volume)
         self._backend.stop()
 
     def cleanup(self) -> None:
         """Release native backend resources. Call before the application exits."""
+        if self._fade_timer is not None:
+            self._fade_timer.stop()
+            self._fade_timer = None
         self._backend.cleanup()
 
     def next(self) -> None:
@@ -201,7 +225,14 @@ class Player(QObject):
         self._backend.set_position(ms)
 
     # --------------------------------------------------------------- modes
+    def set_crossfade(self, seconds: int) -> None:
+        self._crossfade_seconds = max(0, int(seconds))
+
     def set_volume(self, percent: int) -> None:
+        if self._fade_timer is not None:
+            self._fade_timer.stop()
+            self._fade_timer = None
+        self._user_volume = percent
         self._backend.set_volume(percent)
 
     def volume(self) -> int:
@@ -255,6 +286,27 @@ class Player(QObject):
         if self._repeat == RepeatMode.ALL:
             return 0
         return None
+
+    def _start_crossfade(self) -> None:
+        if self._fade_timer is not None:
+            self._fade_timer.stop()
+        self._fade_target = self._user_volume
+        self._fade_step = 0
+        self._fade_total_steps = max(1, self._crossfade_seconds * 1000 // 50)
+        self._backend.set_volume(0)
+        self._fade_timer = QTimer(self)
+        self._fade_timer.setInterval(50)
+        self._fade_timer.timeout.connect(self._on_fade_tick)
+        self._fade_timer.start()
+
+    def _on_fade_tick(self) -> None:
+        self._fade_step += 1
+        vol = int(self._fade_target * self._fade_step / self._fade_total_steps)
+        self._backend.set_volume(vol)
+        if self._fade_step >= self._fade_total_steps:
+            self._fade_timer.stop()
+            self._fade_timer = None
+            self._backend.set_volume(self._fade_target)
 
     def _ensure_playback_available(self) -> bool:
         if self.playback_available():

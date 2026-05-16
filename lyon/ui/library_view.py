@@ -9,13 +9,16 @@ from PySide6.QtGui import (
     QStandardItem, QStandardItemModel,
 )
 from PySide6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QDialog, QDialogButtonBox, QFormLayout,
-    QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListView, QMenu, QPushButton,
-    QSpinBox, QSplitter, QStackedWidget, QStyledItemDelegate, QStyleOptionViewItem,
-    QTableView, QVBoxLayout, QWidget,
+    QAbstractItemView, QCheckBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
+    QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QListView, QMenu,
+    QMessageBox, QPushButton, QSpinBox, QSplitter, QStackedWidget,
+    QStyledItemDelegate, QStyleOptionViewItem, QTableView, QVBoxLayout, QWidget,
 )
 
 from ..core.library import Library, Track
+from ..core.smart_playlist import spec_to_json
+from .metadata_fetch_dialog import MetadataFetchDialog
+from .smart_playlist_dialog import SmartPlaylistDialog
 from .widgets import StarRatingWidget, format_duration
 
 
@@ -62,6 +65,78 @@ _FORMAT_COLORS: dict[str, str] = {
     "WAV": "#e65100", "AIFF": "#e65100",
     "WMA": "#4527a0",
 }
+
+
+_TRACK_MIME_TYPE = "application/x-lyon-track-ids"
+
+
+class _TrackListModel(QStandardItemModel):
+    """QStandardItemModel that embeds track IDs in drag MIME data."""
+
+    def mimeTypes(self) -> list[str]:
+        return [_TRACK_MIME_TYPE, *super().mimeTypes()]
+
+    def mimeData(self, indexes):
+        mime = super().mimeData(indexes)
+        seen: set[int] = set()
+        ids: list[str] = []
+        for idx in indexes:
+            if idx.column() == _COL_NUM and idx.row() not in seen:
+                seen.add(idx.row())
+                item = self.item(idx.row(), _COL_NUM)
+                if item:
+                    track = item.data(_TRACK_REF_ROLE)
+                    if isinstance(track, Track):
+                        ids.append(str(track.id))
+        if ids:
+            mime.setData(_TRACK_MIME_TYPE, ",".join(ids).encode())
+        return mime
+
+    def supportedDragActions(self):
+        return Qt.CopyAction
+
+
+class _PlaylistListView(QListView):
+    """QListView that accepts track-ID drops to add tracks to a playlist."""
+
+    tracks_dropped = Signal(int, list)  # (playlist_id, [track_id, ...])
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+        self.setDropIndicatorShown(True)
+
+    def dragEnterEvent(self, ev) -> None:
+        if ev.mimeData().hasFormat(_TRACK_MIME_TYPE):
+            ev.acceptProposedAction()
+        else:
+            super().dragEnterEvent(ev)
+
+    def dragMoveEvent(self, ev) -> None:
+        if ev.mimeData().hasFormat(_TRACK_MIME_TYPE):
+            ev.acceptProposedAction()
+        else:
+            super().dragMoveEvent(ev)
+
+    def dropEvent(self, ev) -> None:
+        if not ev.mimeData().hasFormat(_TRACK_MIME_TYPE):
+            super().dropEvent(ev)
+            return
+        idx = self.indexAt(ev.position().toPoint())
+        if not idx.isValid():
+            ev.ignore()
+            return
+        playlist_id = idx.data(Qt.UserRole)
+        if not isinstance(playlist_id, int):
+            ev.ignore()
+            return
+        raw = bytes(ev.mimeData().data(_TRACK_MIME_TYPE)).decode()
+        track_ids = [int(x) for x in raw.split(",") if x.strip().isdigit()]
+        if track_ids:
+            self.tracks_dropped.emit(playlist_id, track_ids)
+            ev.acceptProposedAction()
+        else:
+            ev.ignore()
 
 
 class _StarDelegate(QStyledItemDelegate):
@@ -169,6 +244,7 @@ class LibraryView(QWidget):
         self._current_tracks: list[Track] = []
         self._currently_playing: Track | None = None
         self._show_videos: bool = False
+        self._active_playlist_id: int | None = None
 
         # ---- Top toolbar
         top = QHBoxLayout()
@@ -209,6 +285,12 @@ class LibraryView(QWidget):
         self.genres_model = QStandardItemModel()
         self.genres.setModel(self.genres_model)
 
+        self.playlists_model = QStandardItemModel()
+        self.playlists_view = _PlaylistListView()
+        self.playlists_view.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.playlists_view.setModel(self.playlists_model)
+        self.playlists_view.setContextMenuPolicy(Qt.CustomContextMenu)
+
         self.artists = QListView()
         self.artists.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.artists_model = QStandardItemModel()
@@ -219,6 +301,8 @@ class LibraryView(QWidget):
         self.albums.setIconSize(QSize(48, 48))
         self.albums_model = QStandardItemModel()
         self.albums.setModel(self.albums_model)
+        self.albums.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.albums.customContextMenuRequested.connect(self._show_album_context_menu)
 
         # ---- Tracks table (sortable)
         self.tracks = QTableView()
@@ -231,7 +315,7 @@ class LibraryView(QWidget):
         self.tracks.customContextMenuRequested.connect(self._show_track_context_menu)
         self.tracks.verticalHeader().setVisible(False)
 
-        self.tracks_model = QStandardItemModel(0, _NUM_COLS)
+        self.tracks_model = _TrackListModel(0, _NUM_COLS)
         self.tracks_model.setHorizontalHeaderLabels(
             ["#", "Title", "Artist", "Album", "Time", "Rating", "Format"]
         )
@@ -264,6 +348,8 @@ class LibraryView(QWidget):
         self.tracks.setColumnWidth(_COL_FORMAT, 62)
         header.setContextMenuPolicy(Qt.CustomContextMenu)
         header.customContextMenuRequested.connect(self._show_header_context_menu)
+        self.tracks.setDragEnabled(True)
+        self.tracks.setDragDropMode(QAbstractItemView.DragOnly)
 
         # Keyboard shortcuts scoped to the tracks table
         QShortcut(QKeySequence(Qt.Key_Return), self.tracks,
@@ -273,10 +359,29 @@ class LibraryView(QWidget):
         QShortcut(QKeySequence("Ctrl+E"), self.tracks,
                   activated=self._enqueue_selected, context=Qt.WidgetShortcut)
 
-        # ---- List-mode browser: 4-pane splitter (Genres | Artists | Albums | Tracks)
+        # ---- List-mode browser: 4-pane splitter (Genres+Playlists | Artists | Albums | Tracks)
         splitter = QSplitter(Qt.Horizontal)
+
+        # Left column: Genres (top) + Playlists (bottom) in a vertical sub-splitter
+        genres_box = QWidget()
+        gb_vl = QVBoxLayout(genres_box)
+        gb_vl.setContentsMargins(0, 0, 0, 0)
+        gb_lbl = QLabel("Genres"); gb_lbl.setObjectName("sectionHeading")
+        gb_vl.addWidget(gb_lbl); gb_vl.addWidget(self.genres)
+
+        playlists_box = QWidget()
+        pb_vl = QVBoxLayout(playlists_box)
+        pb_vl.setContentsMargins(0, 0, 0, 0)
+        pb_lbl = QLabel("Playlists"); pb_lbl.setObjectName("sectionHeading")
+        pb_vl.addWidget(pb_lbl); pb_vl.addWidget(self.playlists_view)
+
+        left_vsplit = QSplitter(Qt.Vertical)
+        left_vsplit.addWidget(genres_box)
+        left_vsplit.addWidget(playlists_box)
+        left_vsplit.setSizes([200, 200])
+        splitter.addWidget(left_vsplit)
+
         for w, label in (
-            (self.genres,  "Genres"),
             (self.artists, "Artists"),
             (self.albums,  "Albums"),
         ):
@@ -391,6 +496,9 @@ class LibraryView(QWidget):
             lambda *_: self._refresh_grid_albums()
         )
         self._grid_albums_view.doubleClicked.connect(self._on_grid_album_activated)
+        self.playlists_view.selectionModel().currentChanged.connect(self._on_playlist_selected)
+        self.playlists_view.tracks_dropped.connect(self._on_playlist_tracks_dropped)
+        self.playlists_view.customContextMenuRequested.connect(self._on_playlist_context_menu)
 
         self.refresh()
 
@@ -405,6 +513,8 @@ class LibraryView(QWidget):
 
     def refresh(self) -> None:
         has_tracks = bool(self.library.all_artists())
+        active_pl = self._active_playlist_id
+        self._refresh_playlists()
 
         # Populate genres pane (both list and grid share genres_model)
         self.genres_model.clear()
@@ -436,6 +546,26 @@ class LibraryView(QWidget):
             self._current_tracks = []
             self._update_footer()
 
+        # Re-run active smart playlist query after library changes
+        if active_pl is not None:
+            found = False
+            for row in range(self.playlists_model.rowCount()):
+                mi = self.playlists_model.index(row, 0)
+                if mi.data(Qt.UserRole) == active_pl:
+                    found = True
+                    if mi.data(self._PL_IS_SMART_ROLE):
+                        rules_json = mi.data(self._PL_RULES_ROLE)
+                        if rules_json:
+                            self._current_tracks = self.library.smart_playlist_tracks(rules_json)
+                            self._populate_tracks(self._current_tracks)
+                    break
+            if not found:
+                # Playlist was deleted — clear stale state
+                self._active_playlist_id = None
+                self._current_tracks = []
+                self.tracks_model.removeRows(0, self.tracks_model.rowCount())
+                self._update_footer()
+
     def _refresh_artists(self) -> None:
         """Repopulate artist list filtered by current genre selection."""
         genre_idx = self.genres.currentIndex()
@@ -463,6 +593,7 @@ class LibraryView(QWidget):
     _VIRTUAL_KEYS = frozenset(k for k, _ in _VIRTUAL_COLLECTIONS)
 
     def _refresh_albums(self) -> None:
+        self._clear_playlist_selection()
         self.albums_model.clear()
         idx = self.artists.currentIndex()
         if not idx.isValid():
@@ -750,6 +881,38 @@ class LibraryView(QWidget):
             return f"{sample_rate // 1000} kHz"
         return f"{sample_rate / 1000:g} kHz"
 
+    # ------------------------------------------------------------------ album context menu
+    def _show_album_context_menu(self, pos) -> None:
+        idx = self.albums.indexAt(pos)
+        if not idx.isValid():
+            return
+        album_key = idx.data(Qt.UserRole)
+        if album_key == _ALL_ALBUMS_KEY or album_key in self._VIRTUAL_KEYS:
+            return
+
+        ai = self.artists.currentIndex()
+        if not ai.isValid():
+            return
+        artist = ai.data(Qt.DisplayRole)
+        album = idx.data(Qt.DisplayRole)
+
+        menu = QMenu(self)
+        fetch_act = menu.addAction("Fetch Metadata…")
+        action = menu.exec(self.albums.viewport().mapToGlobal(pos))
+
+        if action == fetch_act:
+            self._fetch_album_metadata(artist, album)
+
+    def _fetch_album_metadata(self, artist: str, album: str) -> None:
+        tracks = self.library.tracks_for_album(artist, album, "audio")
+        if not tracks:
+            self.status_message.emit("No audio tracks found for this album.")
+            return
+        dlg = MetadataFetchDialog(tracks, artist, album, self.library, self)
+        if dlg.exec() == QDialog.Accepted:
+            self.status_message.emit(f"Metadata updated for \"{album}\".")
+            self.refresh()
+
     # ------------------------------------------------------------------ context menu
     def _show_track_context_menu(self, pos) -> None:
         idx = self.tracks.indexAt(pos)
@@ -758,12 +921,30 @@ class LibraryView(QWidget):
         track = self._track_at_row(idx.row())
         if track is None:
             return
-        self.tracks.selectRow(idx.row())
-        self.tracks.setCurrentIndex(idx)
+        # If the right-clicked row isn't in the current selection, narrow to just that row.
+        selected = self._selected_tracks()
+        if not any(t.id == track.id or t.path == track.path for t in selected):
+            self.tracks.selectRow(idx.row())
+            self.tracks.setCurrentIndex(idx)
+            selected = [track]
 
         menu = QMenu(self)
         play_now = menu.addAction("Play")
         enqueue = menu.addAction("Enqueue")
+        menu.addSeparator()
+
+        # "Add to Playlist" submenu
+        playlists = self.library.all_playlists()
+        add_pl_menu = menu.addMenu("Add to Playlist")
+        pl_act_map: dict = {}
+        for pl in playlists:
+            if not pl.is_smart:
+                act = add_pl_menu.addAction(pl.name)
+                pl_act_map[act] = pl.id
+        if playlists:
+            add_pl_menu.addSeparator()
+        new_pl_act = add_pl_menu.addAction("New Playlist…")
+
         menu.addSeparator()
         open_folder = menu.addAction("Open Containing Folder")
         edit_metadata = menu.addAction("Edit Metadata")
@@ -771,18 +952,34 @@ class LibraryView(QWidget):
         properties = menu.addAction("Properties")
         action = menu.exec(self.tracks.viewport().mapToGlobal(pos))
 
+        go_to_album = None
+        if self.search.text().strip():
+            menu.addSeparator()
+            go_to_album = menu.addAction("Go to Album in Library")
+
+        if action is None:
+            return
         if action == play_now:
             self._play_selected()
         elif action == enqueue:
             self._enqueue_selected()
+        elif action == new_pl_act:
+            self._add_to_new_playlist([t.id for t in selected])
+        elif action in pl_act_map:
+            self._add_tracks_to_playlist([t.id for t in selected], pl_act_map[action])
         elif action == open_folder:
             self._open_containing_folder(track)
         elif action == edit_metadata:
-            self._show_edit_metadata_dialog(track)
+            if len(selected) >= 2:
+                self._show_batch_metadata_dialog(selected)
+            else:
+                self._show_edit_metadata_dialog(track)
         elif action == properties:
             self._show_track_properties(track)
         elif action == youtube_search:
             self.request_youtube_search.emit(self._youtube_query_for_track(track))
+        elif go_to_album is not None and action == go_to_album:
+            self.reveal_track(track)
 
     def _open_containing_folder(self, track: Track) -> None:
         folder = Path(track.path).expanduser().parent
@@ -1016,3 +1213,321 @@ class LibraryView(QWidget):
             if model.index(row, 0).data(Qt.DisplayRole) == value:
                 return row
         return -1
+
+    # ------------------------------------------------------------------ P6 tools
+    def reveal_track(self, track: Track | None) -> None:
+        """Navigate library panes to show and select the given track."""
+        if track is None:
+            return
+        if self.search.text().strip():
+            self.search.blockSignals(True)
+            self.search.clear()
+            self.search.blockSignals(False)
+        # Ensure list mode is active
+        if self._browser_stack.currentIndex() != 1:
+            self._grid_mode_btn.blockSignals(True)
+            self._grid_mode_btn.setChecked(False)
+            self._grid_mode_btn.blockSignals(False)
+            has_tracks = bool(self.library.all_artists())
+            self._browser_stack.setCurrentIndex(1 if has_tracks else 0)
+        self._navigate_to_album(track.display_artist, track.album or "Unknown Album")
+        row = self._row_for_track(track)
+        if row >= 0:
+            self._select_track_row(row)
+
+    def _show_batch_metadata_dialog(self, tracks: list[Track]) -> None:
+        _MIXED = "(multiple values)"
+
+        def _common(field: str) -> str:
+            vals = {getattr(t, field, "") or "" for t in tracks}
+            return next(iter(vals)) if len(vals) == 1 else ""
+
+        def _common_int(field: str) -> int | None:
+            vals = {getattr(t, field, 0) or 0 for t in tracks}
+            return next(iter(vals)) if len(vals) == 1 else None
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Edit Metadata for {len(tracks)} Tracks")
+        layout = QVBoxLayout(dialog)
+        form = QFormLayout()
+        form.setLabelAlignment(Qt.AlignRight)
+
+        artist_edit = QLineEdit()
+        artist_edit.setPlaceholderText(_MIXED)
+        if v := _common("artist"):
+            artist_edit.setText(v)
+
+        album_artist_edit = QLineEdit()
+        album_artist_edit.setPlaceholderText(_MIXED)
+        if v := _common("album_artist"):
+            album_artist_edit.setText(v)
+
+        album_edit = QLineEdit()
+        album_edit.setPlaceholderText(_MIXED)
+        if v := _common("album"):
+            album_edit.setText(v)
+
+        genre_edit = QLineEdit()
+        genre_edit.setPlaceholderText(_MIXED)
+        if v := _common("genre"):
+            genre_edit.setText(v)
+
+        year_spin = QSpinBox()
+        year_spin.setRange(0, 9999)
+        year_spin.setSpecialValueText(_MIXED)
+        if v_int := _common_int("year"):
+            year_spin.setValue(v_int)
+
+        form.addRow("Artist:", artist_edit)
+        form.addRow("Album Artist:", album_artist_edit)
+        form.addRow("Album:", album_edit)
+        form.addRow("Year:", year_spin)
+        form.addRow("Genre:", genre_edit)
+
+        note = QLabel(f"Empty fields are not changed. Applies to {len(tracks)} tracks.")
+        note.setObjectName("mutedText")
+        note.setWordWrap(True)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addLayout(form)
+        layout.addWidget(note)
+        layout.addWidget(buttons)
+        dialog.resize(480, 300)
+
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        fields: dict = {}
+        if artist_edit.text().strip():
+            fields["artist"] = artist_edit.text().strip()
+        if album_artist_edit.text().strip():
+            fields["album_artist"] = album_artist_edit.text().strip()
+        if album_edit.text().strip():
+            fields["album"] = album_edit.text().strip()
+        if genre_edit.text().strip():
+            fields["genre"] = genre_edit.text().strip()
+        if year_spin.value() > 0:
+            fields["year"] = year_spin.value()
+
+        if not fields:
+            return
+        for t in tracks:
+            self.library.update_track(t.id, fields)
+        n = len(tracks)
+        self.status_message.emit(f"Updated metadata for {n} track{'s' if n != 1 else ''}.")
+        self.refresh()
+
+    # ------------------------------------------------------------------ playlists
+    def refresh_playlists(self) -> None:
+        self._refresh_playlists()
+
+    _PL_IS_SMART_ROLE = Qt.UserRole + 1
+    _PL_RULES_ROLE    = Qt.UserRole + 2
+
+    def _refresh_playlists(self) -> None:
+        self.playlists_model.clear()
+        for pl in self.library.all_playlists():
+            prefix = "⚡ " if pl.is_smart else ""
+            it = QStandardItem(f"{prefix}{pl.name}")
+            it.setData(pl.id, Qt.UserRole)
+            it.setData(pl.is_smart, self._PL_IS_SMART_ROLE)
+            it.setData(pl.rules, self._PL_RULES_ROLE)
+            self.playlists_model.appendRow(it)
+
+    def _clear_playlist_selection(self) -> None:
+        self._active_playlist_id = None
+        self.playlists_view.blockSignals(True)
+        self.playlists_view.selectionModel().clearSelection()
+        self.playlists_view.blockSignals(False)
+
+    def _on_playlist_selected(self, idx: QModelIndex, _prev: QModelIndex) -> None:
+        if not idx.isValid():
+            return
+        playlist_id = idx.data(Qt.UserRole)
+        if not isinstance(playlist_id, int):
+            return
+        self._active_playlist_id = playlist_id
+        is_smart = bool(idx.data(self._PL_IS_SMART_ROLE))
+        rules_json = idx.data(self._PL_RULES_ROLE)
+        if is_smart and rules_json:
+            tracks = self.library.smart_playlist_tracks(rules_json)
+        else:
+            tracks = self.library.playlist_tracks(playlist_id)
+        self._current_tracks = tracks
+        self._populate_tracks(tracks)
+        # Ensure list-mode browser is showing
+        if self._browser_stack.currentIndex() == 2:
+            self._grid_mode_btn.blockSignals(True)
+            self._grid_mode_btn.setChecked(False)
+            self._grid_mode_btn.blockSignals(False)
+            self._browser_stack.setCurrentIndex(1)
+
+    def _on_playlist_tracks_dropped(self, playlist_id: int, track_ids: list) -> None:
+        for row in range(self.playlists_model.rowCount()):
+            idx = self.playlists_model.index(row, 0)
+            if idx.data(Qt.UserRole) == playlist_id and idx.data(self._PL_IS_SMART_ROLE):
+                self.status_message.emit("Cannot add tracks to a smart playlist.")
+                return
+        self._add_tracks_to_playlist(track_ids, playlist_id)
+
+    def _on_playlist_context_menu(self, pos) -> None:
+        menu = QMenu(self)
+        new_act = menu.addAction("New Playlist…")
+        new_smart_act = menu.addAction("New Smart Playlist…")
+        rename_act = edit_rules_act = remove_act = export_act = None
+        playlist_id: int | None = None
+        is_smart = False
+        idx = self.playlists_view.indexAt(pos)
+        if idx.isValid():
+            playlist_id = idx.data(Qt.UserRole)
+            is_smart = bool(idx.data(self._PL_IS_SMART_ROLE))
+            if isinstance(playlist_id, int):
+                rename_act = menu.addAction("Rename…")
+                if is_smart:
+                    edit_rules_act = menu.addAction("Edit Rules…")
+                export_act = menu.addAction("Export as M3U…")
+                menu.addSeparator()
+                remove_act = menu.addAction("Delete Playlist")
+        action = menu.exec(self.playlists_view.mapToGlobal(pos))
+        if action is None:
+            return
+        if action == new_act:
+            self._new_playlist_dialog()
+        elif action == new_smart_act:
+            self._new_smart_playlist_dialog()
+        elif action == rename_act and playlist_id is not None:
+            self._rename_playlist_dialog(playlist_id, idx.data(Qt.DisplayRole))
+        elif action == edit_rules_act and playlist_id is not None:
+            raw_name = idx.data(Qt.DisplayRole) or ""
+            pl_name = raw_name.removeprefix("⚡ ")
+            rules_json = idx.data(self._PL_RULES_ROLE) or ""
+            self._edit_smart_playlist_rules(playlist_id, pl_name, rules_json)
+        elif action == export_act and playlist_id is not None:
+            self._export_playlist_m3u(playlist_id)
+        elif action == remove_act and playlist_id is not None:
+            self._delete_playlist_confirm(playlist_id, idx.data(Qt.DisplayRole))
+
+    def _new_playlist_dialog(self, initial_track_ids: list[int] | None = None) -> None:
+        name, ok = QInputDialog.getText(self, "New Playlist", "Playlist name:")
+        if not ok or not name.strip():
+            return
+        try:
+            pl_id = self.library.create_playlist(name.strip())
+        except Exception as exc:
+            self.status_message.emit(f"Could not create playlist: {exc}")
+            return
+        if initial_track_ids:
+            self.library.add_to_playlist(pl_id, initial_track_ids)
+        self._refresh_playlists()
+        for row in range(self.playlists_model.rowCount()):
+            if self.playlists_model.index(row, 0).data(Qt.UserRole) == pl_id:
+                self.playlists_view.setCurrentIndex(self.playlists_model.index(row, 0))
+                break
+
+    def _new_smart_playlist_dialog(self) -> None:
+        dlg = SmartPlaylistDialog(parent=self)
+        if not dlg.exec() or dlg.spec is None:
+            return
+        try:
+            pl_id = self.library.create_smart_playlist(dlg.playlist_name, spec_to_json(dlg.spec))
+        except Exception as exc:
+            self.status_message.emit(f"Could not create smart playlist: {exc}")
+            return
+        self._refresh_playlists()
+        for row in range(self.playlists_model.rowCount()):
+            if self.playlists_model.index(row, 0).data(Qt.UserRole) == pl_id:
+                self.playlists_view.setCurrentIndex(self.playlists_model.index(row, 0))
+                break
+
+    def _edit_smart_playlist_rules(
+        self, playlist_id: int, pl_name: str, rules_json: str
+    ) -> None:
+        dlg = SmartPlaylistDialog(name=pl_name, rules_json=rules_json, parent=self)
+        if not dlg.exec() or dlg.spec is None:
+            return
+        new_rules = spec_to_json(dlg.spec)
+        try:
+            # Update rules first; if it fails, the name is untouched.
+            self.library.update_playlist_rules(playlist_id, new_rules)
+            if dlg.playlist_name != pl_name:
+                self.library.rename_playlist(playlist_id, dlg.playlist_name)
+        except Exception as exc:
+            self.status_message.emit(f"Could not update smart playlist: {exc}")
+            return
+        self._refresh_playlists()
+        # Re-select and re-run the query
+        for row in range(self.playlists_model.rowCount()):
+            idx = self.playlists_model.index(row, 0)
+            if idx.data(Qt.UserRole) == playlist_id:
+                self.playlists_view.setCurrentIndex(idx)
+                break
+
+    def _add_to_new_playlist(self, track_ids: list[int]) -> None:
+        self._new_playlist_dialog(initial_track_ids=track_ids)
+
+    def _add_tracks_to_playlist(self, track_ids: list[int], playlist_id: int) -> None:
+        self.library.add_to_playlist(playlist_id, track_ids)
+        n = len(track_ids)
+        self.status_message.emit(f"Added {n} track{'s' if n != 1 else ''} to playlist.")
+        if self._active_playlist_id == playlist_id:
+            tracks = self.library.playlist_tracks(playlist_id)
+            self._current_tracks = tracks
+            self._populate_tracks(tracks)
+
+    def _rename_playlist_dialog(self, playlist_id: int, current_name: str) -> None:
+        name, ok = QInputDialog.getText(
+            self, "Rename Playlist", "New name:", text=current_name or ""
+        )
+        if not ok or not name.strip():
+            return
+        try:
+            self.library.rename_playlist(playlist_id, name.strip())
+        except Exception as exc:
+            self.status_message.emit(f"Rename failed: {exc}")
+            return
+        self._refresh_playlists()
+        for row in range(self.playlists_model.rowCount()):
+            if self.playlists_model.index(row, 0).data(Qt.UserRole) == playlist_id:
+                self.playlists_view.setCurrentIndex(self.playlists_model.index(row, 0))
+                break
+
+    def _delete_playlist_confirm(self, playlist_id: int, name: str) -> None:
+        r = QMessageBox.question(
+            self, "Delete Playlist",
+            f'Delete playlist "{name}"? This cannot be undone.',
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if r != QMessageBox.Yes:
+            return
+        self.library.delete_playlist(playlist_id)
+        if self._active_playlist_id == playlist_id:
+            self._active_playlist_id = None
+            self._current_tracks = []
+            self.tracks_model.removeRows(0, self.tracks_model.rowCount())
+            self._update_footer()
+        self._refresh_playlists()
+
+    def _export_playlist_m3u(self, playlist_id: int) -> None:
+        tracks = self.library.playlist_tracks(playlist_id)
+        if not tracks:
+            self.status_message.emit("Playlist is empty — nothing to export.")
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export Playlist", "", "M3U Playlist (*.m3u8 *.m3u)"
+        )
+        if not path:
+            return
+        try:
+            lines = ["#EXTM3U"]
+            for t in tracks:
+                dur = int(t.duration or -1)
+                lines.append(f"#EXTINF:{dur},{t.display_artist} - {t.title}")
+                lines.append(t.path)
+            Path(path).write_text("\n".join(lines), encoding="utf-8")
+            self.status_message.emit(
+                f"Exported {len(tracks)} tracks to {Path(path).name}"
+            )
+        except OSError as exc:
+            self.status_message.emit(f"Export failed: {exc}")

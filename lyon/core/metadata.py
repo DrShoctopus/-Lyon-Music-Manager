@@ -420,6 +420,61 @@ def search_musicbrainz_album(artist: str, album: str) -> Optional[AlbumInfo]:
     return _release_to_album(full)
 
 
+def search_musicbrainz_releases(artist: str, album: str, limit: int = 5) -> list[AlbumInfo]:
+    """Search MusicBrainz and return up to *limit* release candidates (basic info only)."""
+    _init()
+    _mb_rate_limit()
+    try:
+        result = musicbrainzngs.search_releases(artist=artist, release=album, limit=limit)
+    except (musicbrainzngs.ResponseError, musicbrainzngs.NetworkError) as exc:
+        _log_metadata_diagnostic(
+            "MusicBrainz release search failed for artist=%s album=%s: %s",
+            _diagnostic_value(artist),
+            _diagnostic_value(album),
+            exc,
+        )
+        return []
+    rels = result.get("release-list") or []
+    infos: list[AlbumInfo] = []
+    for rel in rels[:limit]:
+        infos.append(AlbumInfo(
+            artist=_musicbrainz_artist(rel),
+            album=rel.get("title", ""),
+            date=rel.get("date", ""),
+            musicbrainz_albumid=rel.get("id", ""),
+            metadata_source="musicbrainz",
+        ))
+    return infos
+
+
+def fetch_musicbrainz_release(mbid: str) -> Optional[AlbumInfo]:
+    """Fetch a full MusicBrainz release (with track listing) by release ID."""
+    if not mbid:
+        return None
+    _init()
+    _mb_rate_limit()
+    try:
+        full = musicbrainzngs.get_release_by_id(
+            mbid, includes=["recordings", "artists"]
+        )["release"]
+    except (musicbrainzngs.ResponseError, musicbrainzngs.NetworkError) as exc:
+        _log_metadata_diagnostic(
+            "MusicBrainz release detail fetch failed for mbid=%s: %s",
+            _diagnostic_value(mbid),
+            exc,
+        )
+        return None
+    return _release_to_album(full)
+
+
+def download_cover_art(mbid: str) -> bytes | None:
+    """Fetch front cover art from the Cover Art Archive for the given release MBID."""
+    if not mbid:
+        return None
+    url = f"https://coverartarchive.org/release/{mbid}/front-500"
+    return _fetch_artwork_url(url)
+
+
 def search_theaudiodb_album(artist: str, album: str) -> Optional[AlbumInfo]:
     """Search TheAudioDB by album and optional artist name."""
     artist = artist.strip()

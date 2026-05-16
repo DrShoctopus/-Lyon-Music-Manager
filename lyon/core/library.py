@@ -69,6 +69,9 @@ _MIGRATIONS: list[tuple[int, str]] = [
     (4, "CREATE TABLE IF NOT EXISTS playlists (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL, created_at REAL NOT NULL DEFAULT (strftime('%s','now')), rules TEXT)"),
     (4, "CREATE TABLE IF NOT EXISTS playlist_tracks (playlist_id INTEGER NOT NULL, track_id INTEGER NOT NULL, position INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (playlist_id, track_id), FOREIGN KEY (playlist_id) REFERENCES playlists(id) ON DELETE CASCADE, FOREIGN KEY (track_id) REFERENCES tracks(id) ON DELETE CASCADE)"),
     (4, "CREATE INDEX IF NOT EXISTS idx_pt_playlist ON playlist_tracks(playlist_id, position)"),
+    # v5 — user-liked flag (heart toggle)
+    (5, "ALTER TABLE tracks ADD COLUMN liked INTEGER NOT NULL DEFAULT 0"),
+    (5, "CREATE INDEX IF NOT EXISTS idx_tracks_liked ON tracks(liked)"),
 ]
 
 _PAGE_SIZE = 500  # rows per page in streaming queries
@@ -94,6 +97,8 @@ class Track:
     rating: int = 0
     play_count: int = 0
     last_played: float | None = None
+    liked: bool = False
+    disc_id: str | None = None
 
     @property
     def display_artist(self) -> str:
@@ -403,7 +408,7 @@ class Library:
         return (row["a"], row["b"]) if row else None
 
     def update_track(self, track_id: int, fields: dict) -> None:
-        allowed = {"title", "artist", "album_artist", "album", "track_no", "disc_no", "year", "genre"}
+        allowed = {"title", "artist", "album_artist", "album", "track_no", "disc_no", "year", "genre", "artwork_path"}
         safe = {k: v for k, v in fields.items() if k in allowed}
         if not safe:
             return
@@ -412,6 +417,13 @@ class Library:
             self.conn.execute(
                 f"UPDATE tracks SET {set_clause} WHERE id = ?",
                 [*safe.values(), track_id],
+            )
+            self.conn.commit()
+
+    def update_liked(self, track_id: int, liked: bool) -> None:
+        with self._lock:
+            self.conn.execute(
+                "UPDATE tracks SET liked = ? WHERE id = ?", (int(liked), track_id)
             )
             self.conn.commit()
 
@@ -532,6 +544,38 @@ class Library:
             for r in rows
         ]
 
+    def smart_playlist_tracks(self, rules_json: str) -> list[Track]:
+        from .smart_playlist import spec_from_json, spec_to_where, spec_order_and_limit
+        spec = spec_from_json(rules_json)
+        where, params = spec_to_where(spec)
+        order, limit = spec_order_and_limit(spec)
+        query = (
+            f"SELECT * FROM tracks "
+            f"WHERE media_type = 'audio' AND ({where}) "
+            f"ORDER BY {order}"
+            + (f" {limit}" if limit else "")
+        )
+        with self._lock:
+            rows = self.conn.execute(query, params).fetchall()
+        return [_row_to_track(r) for r in rows]
+
+    def create_smart_playlist(self, name: str, rules_json: str) -> int:
+        now = time.time()
+        with self._lock:
+            cur = self.conn.execute(
+                "INSERT INTO playlists (name, created_at, rules) VALUES (?, ?, ?)",
+                (name.strip(), now, rules_json),
+            )
+            self.conn.commit()
+            return cur.lastrowid  # type: ignore[return-value]
+
+    def update_playlist_rules(self, playlist_id: int, rules_json: str) -> None:
+        with self._lock:
+            self.conn.execute(
+                "UPDATE playlists SET rules = ? WHERE id = ?", (rules_json, playlist_id)
+            )
+            self.conn.commit()
+
     def create_playlist(self, name: str) -> int:
         now = time.time()
         with self._lock:
@@ -596,6 +640,24 @@ class Library:
                 )
             self.conn.commit()
 
+    def delete_track(self, track_id: int) -> None:
+        """Remove a single track record from the library (does not delete the file)."""
+        with self._lock:
+            self.conn.execute("DELETE FROM tracks WHERE id = ?", (track_id,))
+            self.conn.commit()
+
+    def tracks_for_paths(self, paths: list[str]) -> list[Track]:
+        """Return Track objects for the given file paths, preserving order, skipping unknowns."""
+        if not paths:
+            return []
+        placeholders = ",".join("?" * len(paths))
+        with self._lock:
+            rows = self.conn.execute(
+                f"SELECT * FROM tracks WHERE path IN ({placeholders})", paths
+            ).fetchall()
+        path_to_track = {r["path"]: _row_to_track(r) for r in rows}
+        return [path_to_track[p] for p in paths if p in path_to_track]
+
     def remove_missing(self) -> int:
         with self._lock:
             rows = self.conn.execute("SELECT id, path FROM tracks").fetchall()
@@ -632,6 +694,8 @@ def _row_to_track(r: sqlite3.Row) -> Track:
         rating=int(r["rating"] or 0) if "rating" in keys else 0,
         play_count=int(r["play_count"] or 0) if "play_count" in keys else 0,
         last_played=r["last_played"] if "last_played" in keys else None,
+        liked=bool(r["liked"]) if "liked" in keys else False,
+        disc_id=r["disc_id"] if "disc_id" in keys else None,
     )
 
 
