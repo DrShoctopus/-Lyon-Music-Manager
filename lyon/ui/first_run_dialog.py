@@ -27,8 +27,7 @@ class FirstRunDialog(QDialog):
         self._checks = run_dependency_checks()
 
         title = QLabel("Let’s finish setting up Sea Lyon Media Manager")
-        font = title.font(); font.setPointSize(15); font.setBold(True); title.setFont(font)
-        title.setStyleSheet("color:#72f4ff;")
+        title.setObjectName("sectionTitle")
 
         intro = QLabel(
             "Choose where ripped music should go, add any existing music folders, "
@@ -44,10 +43,10 @@ class FirstRunDialog(QDialog):
         root_row.addWidget(browse_root)
 
         root_label = QLabel("Music folder for new rips:")
-        root_label.setStyleSheet("font-weight:600;")
+        root_label.setObjectName("formLabel")
 
         folders_label = QLabel("Library folders to scan:")
-        folders_label.setStyleSheet("font-weight:600;")
+        folders_label.setObjectName("formLabel")
         self.library_paths = QListWidget()
         for folder in normalize_library_paths(settings.library_paths):
             self.library_paths.addItem(folder)
@@ -63,7 +62,7 @@ class FirstRunDialog(QDialog):
 
         diag_summary = QLabel(summarize_dependency_checks(self._checks))
         diag_summary.setWordWrap(True)
-        diag_summary.setStyleSheet("color:#cfd6e2;")
+        diag_summary.setObjectName("mutedText")
         diagnostics_btn = QPushButton("View Runtime Diagnostics")
         diagnostics_btn.clicked.connect(self._show_diagnostics)
 

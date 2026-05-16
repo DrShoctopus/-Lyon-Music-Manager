@@ -91,12 +91,12 @@ class YtDownloadDialog(QDialog):
 
         # Log
         log_label = QLabel("Download log:")
-        log_label.setStyleSheet("color:#72f4ff;font-weight:600;")
+        log_label.setObjectName("sectionHeading")
         layout.addWidget(log_label)
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
         self.log.setMinimumHeight(160)
-        self.log.setStyleSheet("font-family:monospace;font-size:11px;")
+        self.log.setObjectName("monoLog")
         layout.addWidget(self.log, 1)
 
         # Buttons

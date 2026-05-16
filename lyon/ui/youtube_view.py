@@ -97,28 +97,28 @@ class _ResultRow(QWidget):
         row.setSpacing(10)
 
         self._thumb = QLabel()
+        self._thumb.setObjectName("youtubeThumb")
         self._thumb.setFixedSize(_THUMB_W, _THUMB_H)
         self._thumb.setAlignment(Qt.AlignCenter)
-        self._thumb.setStyleSheet("background:#0a0e13; border-radius:3px;")
         row.addWidget(self._thumb)
 
         meta = QVBoxLayout()
         meta.setSpacing(3)
 
         title = QLabel(data["title"])
-        title.setStyleSheet("color:#72f4ff; font-weight:600; font-size:10pt;")
+        title.setObjectName("resultTitle")
         title.setWordWrap(True)
         meta.addWidget(title)
 
         if data["channel"]:
             ch = QLabel(data["channel"])
-            ch.setStyleSheet("color:#8a9bb0; font-size:9pt;")
+            ch.setObjectName("mutedTextSmall")
             meta.addWidget(ch)
 
         detail_parts = [p for p in (data["duration"], data["views"]) if p]
         if detail_parts:
             detail = QLabel("  ·  ".join(detail_parts))
-            detail.setStyleSheet("color:#65707c; font-size:9pt;")
+            detail.setObjectName("mutedTextSmall")
             meta.addWidget(detail)
 
         meta.addStretch(1)
@@ -165,19 +165,14 @@ class YouTubeView(QWidget):
         # ---- status line (searching…)
         self._status = QLabel("")
         self._status.setAlignment(Qt.AlignCenter)
-        self._status.setStyleSheet("color:#8a9bb0; font-size:9pt; padding:2px 10px;")
+        self._status.setObjectName("mutedTextSmall")
         self._status.hide()
         layout.addWidget(self._status)
 
         # ---- results list
         self._list = QListWidget()
+        self._list.setObjectName("youtubeResults")
         self._list.setSpacing(1)
-        self._list.setStyleSheet(
-            "QListWidget { background:#0a0e13; border:none; outline:none; }"
-            "QListWidget::item { border-bottom:1px solid #1a2230; }"
-            "QListWidget::item:selected { background:#1466c7; }"
-            "QListWidget::item:hover:!selected { background:#111c2a; }"
-        )
         self._list.itemClicked.connect(self._on_item_clicked)
         self._list.hide()
         layout.addWidget(self._list, 1)
@@ -190,12 +185,12 @@ class YouTubeView(QWidget):
                 "Search for an artist, album, or track above.\n"
                 "Click a result to open the download dialog."
             )
-            self._hint.setStyleSheet("color:#3a4a5a; font-size:11pt;")
+            self._hint.setObjectName("hintText")
         else:
             self._hint.setText(
                 "yt-dlp is not installed.\n\nInstall it with:\n    pip install yt-dlp"
             )
-            self._hint.setStyleSheet("color:#72f4ff; font-size:11pt;")
+            self._hint.setObjectName("sectionTitle")
             self.search.setEnabled(False)
             self._search_btn.setEnabled(False)
         layout.addWidget(self._hint, 1)

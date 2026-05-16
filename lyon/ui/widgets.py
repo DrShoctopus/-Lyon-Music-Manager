@@ -67,3 +67,19 @@ def format_duration(seconds: float | int) -> str:
 
 def format_ms(ms: int) -> str:
     return format_duration(ms / 1000)
+
+
+def font_scaled(value: int) -> int:
+    """Scale a pixel value relative to the user's default font height.
+
+    Use for fixed widget heights (icon sizes, button rows) so they follow
+    accessibility font scaling instead of being locked to one font size.
+    Returns the value unchanged before QApplication exists.
+    """
+    from PySide6.QtGui import QFontMetrics
+    from PySide6.QtWidgets import QApplication
+    app = QApplication.instance()
+    if app is None:
+        return value
+    fm = QFontMetrics(app.font())
+    return max(1, int(round(value * fm.height() / 15)))

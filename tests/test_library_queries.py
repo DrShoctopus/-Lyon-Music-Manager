@@ -89,6 +89,20 @@ def test_track_rows_include_audio_details(tmp_path):
     assert track.samplerate == 48000
 
 
+def test_tracks_for_artist_returns_all_albums_without_extra_view_queries(tmp_path):
+    library = Library(tmp_path / "library.db")
+    add_track(library, "/music/a_first.flac", artist="Artist", album="First")
+    add_track(library, "/music/b_second.flac", artist="Artist", album="Second")
+    add_track(library, "/music/c_other.flac", artist="Other", album="First")
+
+    tracks = library.tracks_for_artist("Artist")
+
+    assert [track.path for track in tracks] == [
+        "/music/a_first.flac",
+        "/music/b_second.flac",
+    ]
+
+
 def test_add_file_backfills_disc_id_for_existing_track(tmp_path):
     """add_file() must write disc_id even when the path already exists in the DB.
 

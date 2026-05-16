@@ -289,6 +289,22 @@ class Library:
             ).fetchall()
         return [_row_to_track(r) for r in rows]
 
+    def tracks_for_artist(
+        self, artist: str, media_type: str | None = None
+    ) -> list[Track]:
+        """Return all tracks for one display artist in album/track order."""
+        filter_sql = "" if media_type is None else "AND media_type = ?"
+        params = (artist, media_type) if media_type is not None else (artist,)
+        with self._lock:
+            rows = self.conn.execute(
+                f"""SELECT * FROM tracks
+                    WHERE {DISPLAY_ARTIST_SQL} = ? {filter_sql}
+                    ORDER BY {DISPLAY_ALBUM_SQL} COLLATE NOCASE, disc_no, track_no,
+                             title COLLATE NOCASE""",
+                params,
+            ).fetchall()
+        return [_row_to_track(r) for r in rows]
+
     def search(self, query: str, media_type: str | None = None) -> list[Track]:
         escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         like = f"%{escaped}%"
@@ -351,6 +367,19 @@ class Library:
                 (disc_id,),
             ).fetchone()
         return (row["a"], row["b"]) if row else None
+
+    def update_track(self, track_id: int, fields: dict) -> None:
+        allowed = {"title", "artist", "album_artist", "album", "track_no", "disc_no", "year", "genre"}
+        safe = {k: v for k, v in fields.items() if k in allowed}
+        if not safe:
+            return
+        set_clause = ", ".join(f"{k} = ?" for k in safe)
+        with self._lock:
+            self.conn.execute(
+                f"UPDATE tracks SET {set_clause} WHERE id = ?",
+                [*safe.values(), track_id],
+            )
+            self.conn.commit()
 
     def remove_missing(self) -> int:
         with self._lock:

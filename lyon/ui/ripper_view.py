@@ -3,11 +3,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QThread, QTimer, Signal
-from PySide6.QtGui import QPixmap, QStandardItem, QStandardItemModel
+from PySide6.QtCore import Qt, QRectF, QThread, QTimer, Signal
+from PySide6.QtGui import (
+    QColor, QLinearGradient, QPainter, QPainterPath,
+    QPixmap, QStandardItem, QStandardItemModel,
+)
 from PySide6.QtWidgets import (
     QAbstractItemView, QComboBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
-    QMessageBox, QProgressBar, QPushButton, QStyle, QStyleOptionProgressBar,
+    QMessageBox, QProgressBar, QPushButton,
     QStyledItemDelegate, QTableView, QVBoxLayout, QWidget,
 )
 
@@ -43,39 +46,83 @@ _STATUS_FAILED    = -1     # failed / not completed
 _STATUS_CANCELLED = -2     # cancelled mid-rip
 
 
+def _draw_app_progress_bar(painter: QPainter, rect, pct: int, label: str) -> None:
+    """Draw an app-styled progress bar with split-colour label text.
+
+    Matches the QProgressBar QSS (dark bg, blue-cyan gradient chunk).
+    Text is dark-grey over the filled chunk and light over the empty background.
+    pct: 0-100.
+    """
+    r = QRectF(rect)
+    chunk_w = r.width() * max(0, min(100, pct)) / 100.0
+
+    painter.save()
+
+    # Background
+    bg_path = QPainterPath()
+    bg_path.addRoundedRect(r, 5.0, 5.0)
+    painter.setPen(QColor("#27313b"))
+    painter.fillPath(bg_path, QColor("#070a0f"))
+    painter.drawPath(bg_path)
+
+    # Chunk
+    if chunk_w > 0.5:
+        grad = QLinearGradient(r.left(), 0.0, r.right(), 0.0)
+        grad.setColorAt(0.00, QColor("#0f3c9c"))
+        grad.setColorAt(0.55, QColor("#1b8dff"))
+        grad.setColorAt(1.00, QColor("#68f3ff"))
+        chunk_path = QPainterPath()
+        chunk_path.addRoundedRect(QRectF(r.left(), r.top(), chunk_w, r.height()), 4.0, 4.0)
+        chunk_path = chunk_path.intersected(bg_path)
+        painter.fillPath(chunk_path, grad)
+
+    # Label – dark grey over the filled area, light over the empty area
+    painter.setClipping(True)
+    if chunk_w > 0.5:
+        painter.setClipRect(QRectF(r.left(), r.top(), chunk_w, r.height()))
+        painter.setPen(QColor("#3a3a3a"))
+        painter.drawText(rect, Qt.AlignCenter, label)
+    rest_w = r.width() - chunk_w
+    if rest_w > 0.5:
+        painter.setClipRect(QRectF(r.left() + chunk_w, r.top(), rest_w, r.height()))
+        painter.setPen(QColor("#f0fbff"))
+        painter.drawText(rect, Qt.AlignCenter, label)
+    painter.setClipping(False)
+
+    painter.restore()
+
+
+class _AppProgressBar(QProgressBar):
+    """QProgressBar painted with the app's custom bar style and split-colour text."""
+
+    def paintEvent(self, event) -> None:
+        mn, mx, val = self.minimum(), self.maximum(), self.value()
+        pct = int(100 * (val - mn) / (mx - mn)) if mx > mn else 0
+        p = QPainter(self)
+        _draw_app_progress_bar(p, self.rect(), pct, f"{pct}%")
+        p.end()
+
+
 class _ProgressDelegate(QStyledItemDelegate):
     """Paint the Status column.
 
     Qt.UserRole semantics:
       None           → "Waiting"  (gray text)
       0 – 99 (int)   → progress bar at that percent
-      100            → "Done"     (full green bar)
+      100            → "Done"     (full bar, "Done" label)
       -1             → "Failed"   (red text)
       -2             → "Cancelled"(gray text)
     """
-
-    _LABEL_COLORS = {
-        _STATUS_FAILED:    "#e85050",
-        _STATUS_CANCELLED: "#8a93a0",
-    }
 
     def paint(self, painter, option, index) -> None:  # noqa: D102
         val = index.data(Qt.UserRole)
 
         # Named terminal states — paint as coloured text.
         if val is None or val in (_STATUS_FAILED, _STATUS_CANCELLED):
-            labels = {
-                None: "Waiting",
-                _STATUS_FAILED: "Failed",
-                _STATUS_CANCELLED: "Cancelled",
-            }
-            colors = {
-                None: "#8a93a0",
-                _STATUS_FAILED: "#e85050",
-                _STATUS_CANCELLED: "#8a93a0",
-            }
+            labels  = {None: "Waiting", _STATUS_FAILED: "Failed", _STATUS_CANCELLED: "Cancelled"}
+            colors  = {None: "#8a93a0", _STATUS_FAILED: "#e85050", _STATUS_CANCELLED: "#8a93a0"}
             painter.save()
-            painter.setPen(__import__("PySide6.QtGui", fromlist=["QColor"]).QColor(colors[val]))
+            painter.setPen(QColor(colors[val]))
             painter.drawText(option.rect, Qt.AlignCenter, labels[val])
             painter.restore()
             return
@@ -86,32 +133,8 @@ class _ProgressDelegate(QStyledItemDelegate):
             super().paint(painter, option, index)
             return
 
-        if pct == _STATUS_DONE:
-            # Full bar with "Done" label.
-            progress = QStyleOptionProgressBar()
-            progress.rect = option.rect.adjusted(4, 4, -4, -4)
-            progress.minimum = 0
-            progress.maximum = 100
-            progress.progress = 100
-            progress.text = "Done"
-            progress.textAlignment = Qt.AlignCenter
-            progress.textVisible = True
-            widget = option.widget
-            style = widget.style() if widget is not None else self.parent().style()
-            style.drawControl(QStyle.CE_ProgressBar, progress, painter, widget)
-            return
-
-        progress = QStyleOptionProgressBar()
-        progress.rect = option.rect.adjusted(4, 4, -4, -4)
-        progress.minimum = 0
-        progress.maximum = 100
-        progress.progress = pct
-        progress.text = f"{pct}%"
-        progress.textAlignment = Qt.AlignCenter
-        progress.textVisible = True
-        widget = option.widget
-        style = widget.style() if widget is not None else self.parent().style()
-        style.drawControl(QStyle.CE_ProgressBar, progress, painter, widget)
+        label = "Done" if pct == _STATUS_DONE else f"{pct}%"
+        _draw_app_progress_bar(painter, option.rect.adjusted(4, 4, -4, -4), pct, label)
 
 
 class _DiscReadThread(QThread):
@@ -253,9 +276,9 @@ class RipperView(QWidget):
         # Album header (cover + editable artist/album)
         header = QHBoxLayout()
         self.cover = QLabel()
+        self.cover.setObjectName("ripperCover")
         self.cover.setFixedSize(140, 140)
         self.cover.setAlignment(Qt.AlignCenter)
-        self.cover.setStyleSheet("background:#0c0f14;border:1px solid #2a3340;")
         self.cover.setPixmap(cover_pixmap(None, 140, "CD"))
         header.addWidget(self.cover)
 
@@ -277,10 +300,13 @@ class RipperView(QWidget):
         self.relookup_btn = QPushButton("Search Online")
         self.relookup_btn.clicked.connect(self.search_online)
         year_row.addWidget(self.relookup_btn)
+        self.clear_meta_btn = QPushButton("Clear Metadata")
+        self.clear_meta_btn.clicked.connect(self._clear_metadata)
+        year_row.addWidget(self.clear_meta_btn)
         year_row.addStretch(1)
         meta.addLayout(year_row)
         self.dest_label = QLabel("")
-        self.dest_label.setStyleSheet("color:#8a93a0;")
+        self.dest_label.setObjectName("mutedTextSmall")
         meta.addWidget(self.dest_label)
         meta.addStretch(1)
         header.addLayout(meta, 1)
@@ -305,7 +331,7 @@ class RipperView(QWidget):
         # Status bar
         status_row = QHBoxLayout()
         self.status_label = QLabel("Insert a CD and click Read Disc.")
-        self.progress = QProgressBar()
+        self.progress = _AppProgressBar()
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
         status_row.addWidget(self.status_label, 1)
@@ -508,6 +534,13 @@ class RipperView(QWidget):
         self.status_label.setText(f"Found: {info.artist} - {info.album}")
         self.start_btn.setEnabled(True)
         self._update_dest()
+
+    def _clear_metadata(self) -> None:
+        self.tracks_model.removeRows(0, self.tracks_model.rowCount())
+        self.album_edit.clear()
+        self.artist_edit.clear()
+        self.year_edit.clear()
+        self.cover.setPixmap(cover_pixmap(None, 140, "CD"))
 
     def search_online(self) -> None:
         artist = self.artist_edit.text().strip()
