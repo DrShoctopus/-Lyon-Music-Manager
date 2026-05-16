@@ -107,7 +107,7 @@ class YtDownloadDialog(QDialog):
         self._cancel_btn.setEnabled(False)
         self._cancel_btn.clicked.connect(self._cancel)
         self._close_btn = QPushButton("Close")
-        self._close_btn.clicked.connect(self.reject)
+        self._close_btn.clicked.connect(self._request_close)
 
         btn_row = QHBoxLayout()
         btn_row.addStretch(1)
@@ -161,7 +161,11 @@ class YtDownloadDialog(QDialog):
             self._log("Please choose an output folder.")
             return
 
-        Path(output_dir).mkdir(parents=True, exist_ok=True)
+        try:
+            Path(output_dir).mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            self._log(f"Could not create output folder: {exc}")
+            return
 
         mode = "audio" if self.radio_audio.isChecked() else "video"
         fmt = self.fmt_combo.currentText()
@@ -225,8 +229,23 @@ class YtDownloadDialog(QDialog):
         if self._worker is worker:
             self._worker = None
 
+    def _has_active_worker(self) -> bool:
+        return self._worker is not None and self._worker.isRunning()
+
+    def _request_close(self) -> None:
+        if self._has_active_worker():
+            self._log("Cancel the active download before closing.")
+            return
+        self.accept()
+
+    def reject(self) -> None:
+        if self._has_active_worker():
+            self._log("Cancel the active download before closing.")
+            return
+        super().reject()
+
     def closeEvent(self, ev) -> None:
-        if self._worker is not None and self._worker.isRunning():
+        if self._has_active_worker():
             self._worker.cancel()
             if not self._canceling:
                 self._canceling = True

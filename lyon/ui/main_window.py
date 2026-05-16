@@ -188,6 +188,7 @@ class MainWindow(QMainWindow):
         self.library_view.status_message.connect(
             lambda m: self.show_toast(m, level="warning"))
         self.player.track_changed.connect(self.library_view.highlight_track)
+        self.player.playback_unavailable.connect(self._on_playback_unavailable)
         self.library_view.request_add_folder.connect(self.add_folder)
         self.library_view.request_rescan.connect(self.rescan)
         self.library_view.request_youtube_search.connect(self._search_youtube_for_track)
@@ -299,6 +300,15 @@ class MainWindow(QMainWindow):
                 self.player.set_queue(tracks, start_index)
                 return
         self.player.toggle()
+
+    def _on_playback_unavailable(self, reason: str) -> None:
+        self.show_toast(
+            "Audio playback requires VLC/libVLC. Run diagnostics for setup details.",
+            level="error",
+            duration_ms=6000,
+            action=("Diagnostics", self.show_diagnostics),
+        )
+        self.statusBar().showMessage(reason, 6000)
 
     # ------------------------------------------------------------------ toasts
     def show_toast(

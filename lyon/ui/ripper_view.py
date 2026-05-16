@@ -24,7 +24,13 @@ from ..core.metadata import (
     metadata_diagnostics_log_path,
     search_album,
 )
-from ..core.ripper import RipRequest, Ripper, target_file, unique_target_folder
+from ..core.ripper import (
+    RipRequest,
+    Ripper,
+    format_extension,
+    track_output_files,
+    unique_target_folder,
+)
 from ..core.settings import Settings
 from .widgets import cover_pixmap
 
@@ -230,6 +236,11 @@ def _rip_request_from_toc(
         ctdb_toc=toc.ctdb_toc_string,
         track_numbers=track_numbers,
     )
+
+
+def _existing_target_files(settings: Settings, album: AlbumInfo, folder: Path) -> list[Path]:
+    ext = format_extension(settings.rip_format)
+    return [path for path in track_output_files(folder, album.tracks, len(album.tracks), ext) if path.exists()]
 
 
 class RipperView(QWidget):
@@ -596,8 +607,7 @@ class RipperView(QWidget):
             return
 
         folder = unique_target_folder(self.settings, album)
-        existing = [target_file(folder, tr, len(album.tracks)) for tr in album.tracks]
-        existing = [p for p in existing if p.exists()]
+        existing = _existing_target_files(self.settings, album, folder)
         if existing:
             shown = "\n".join(str(p.name) for p in existing[:8])
             if len(existing) > 8:

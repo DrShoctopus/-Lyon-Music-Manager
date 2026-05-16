@@ -2,6 +2,8 @@
 import io
 import struct
 import sys
+import threading
+import time
 import types
 import unittest.mock as mock
 
@@ -288,6 +290,58 @@ def test_verify_rips_uses_disc_boundaries_for_partial_track_set():
 
     assert results[0].verified
     assert calls == [(2, False, False)]
+
+
+def test_verify_rips_parallel_crc_preserves_order_and_boundaries():
+    import lyon.core.ctdb_verify as mod
+
+    files = _files([1, 2, 3])
+    ctdb = {
+        1: [(0xAAAA, 30)],
+        2: [(0xBBBB, 20)],
+        3: [(0xCCCC, 10)],
+    }
+    crcs = {1: 0xAAAA, 2: 0xBBBB, 3: 0xCCCC}
+    calls: list[tuple[int, bool, bool]] = []
+    active = 0
+    max_active = 0
+    lock = threading.Lock()
+
+    def fake_crc(path, ffmpeg, *, is_first_track, is_last_track):
+        nonlocal active, max_active
+        track_no = int(str(path).split("_")[-1].replace(".flac", ""))
+        with lock:
+            calls.append((track_no, is_first_track, is_last_track))
+            active += 1
+            max_active = max(max_active, active)
+        time.sleep(0.02)
+        with lock:
+            active -= 1
+        return crcs[track_no]
+
+    with _patched_fetch(ctdb), mock.patch.object(mod, "compute_accuraterip_v1_crc", side_effect=fake_crc):
+        results = verify_rips(files, "0:15000:30000:45000", "ffmpeg", 3, max_workers=2)
+
+    assert [r.track_no for r in results] == [1, 2, 3]
+    assert all(r.verified for r in results)
+    assert max_active == 2
+    assert sorted(calls) == [
+        (1, True, False),
+        (2, False, False),
+        (3, False, True),
+    ]
+
+
+def test_verify_rips_parallel_handles_crc_decode_failure():
+    files = _files([1, 2])
+    ctdb = {1: [(0xAAAA, 30)], 2: [(0xBBBB, 30)]}
+
+    with _patched_fetch(ctdb), _patched_crc({1: 0xAAAA, 2: None}):
+        results = verify_rips(files, "0:15000:45000", "ffmpeg", 2, max_workers=2)
+
+    assert results[0].verified
+    assert not results[1].verified
+    assert "ffmpeg decode failed" in results[1].message
 
 
 def test_verify_rips_crc_mismatch():

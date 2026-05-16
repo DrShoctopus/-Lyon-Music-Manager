@@ -90,6 +90,6 @@ For Windows packaging, prefer the bundled runtime path used by CI:
    sets `VLC_PLUGIN_PATH` at runtime before importing python-vlc.
 
 A system-wide 64-bit VLC install can still work for source runs, but packaged
-releases should include `bin\vlc\` to avoid depending on target machines. The
-app falls back to the Qt Multimedia backend if python-vlc or libVLC cannot be
-created, but that fallback cannot apply audible per-band EQ.
+releases should include `bin\vlc\` to avoid depending on target machines. If
+python-vlc or libVLC cannot be created, the app still launches but local audio
+playback, video playback, and audible EQ are disabled until VLC/libVLC is fixed.

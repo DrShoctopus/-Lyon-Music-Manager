@@ -2,26 +2,25 @@
 from __future__ import annotations
 
 import importlib
-import importlib.util
 import logging
 import os
 from pathlib import Path
 from typing import Any, Optional
 
-from PySide6.QtCore import QObject, QUrl, Signal
+from PySide6.QtCore import QObject, Signal
 
-from .equalizer import EQ_BAND_COUNT, normalize_equalizer_bands
+from .equalizer import EQ_BAND_COUNT
 from .settings import bundled_bin_dir
+from .vlc_equalizer import (
+    EQ_FADE_INTERVAL_MS,
+    VlcEqualizerController,
+)
 
 
 LOG = logging.getLogger(__name__)
 # Lyon now exposes libVLC's complete native ten-band equalizer, so the
 # UI band order maps directly to VLC's band indexes.
 VLC_EQ_BAND_INDEXES = tuple(range(EQ_BAND_COUNT))
-# Fade band gains over this many timer ticks when toggling the EQ on/off
-# to avoid the filter-state transient that causes audible distortion.
-_EQ_FADE_STEPS = 16
-_EQ_FADE_INTERVAL_MS = 16  # total transition ≈ 256 ms
 _DLL_DIRECTORY_HANDLES: list[Any] = []
 _CONFIGURED_VLC_DIRS: set[Path] = set()
 
@@ -116,89 +115,76 @@ class PlaybackBackend(QObject):
     def apply_equalizer(self, enabled: bool, bands: list[int], preamp: int = 0) -> None:
         raise NotImplementedError
 
+    def is_available(self) -> bool:
+        return True
+
+    def unavailable_reason(self) -> str:
+        return ""
+
     def cleanup(self) -> None:
         """Release any native resources held by the backend. Safe to call on all backends."""
 
 
-class QMediaPlaybackBackend(PlaybackBackend):
-    """Qt Multimedia fallback backend.
+class UnavailablePlaybackBackend(PlaybackBackend):
+    """Non-playing backend used when the required libVLC runtime is unavailable."""
 
-    Qt does not expose per-band equalizer controls, so ``apply_equalizer`` is a
-    documented no-op on this backend. The high-level Player retains normalised
-    EQ state so the app can switch to VLC later without losing the curve.
-    """
-
-    def __init__(self, parent: Optional[QObject] = None):
+    def __init__(self, reason: str, parent: Optional[QObject] = None):
         super().__init__(parent)
-        qtmultimedia = importlib.import_module("PySide6.QtMultimedia")
-        self._qmedia_player_cls = qtmultimedia.QMediaPlayer
-        self._player = qtmultimedia.QMediaPlayer(self)
-        self._audio = qtmultimedia.QAudioOutput(self)
-        self._player.setAudioOutput(self._audio)
-        self._audio.setVolume(0.8)
-
-        self._player.positionChanged.connect(self._emit_position)
-        self._player.durationChanged.connect(self._emit_position_dur)
-        self._player.playbackStateChanged.connect(self._on_state)
-        self._player.mediaStatusChanged.connect(self._on_media_status)
+        self._reason = reason
+        self._volume = 80
+        self._muted = False
+        self._source = ""
+        self._warned = False
 
     def set_source(self, path: str) -> None:
-        self._player.setSource(QUrl.fromLocalFile(path))
+        self._source = path
 
     def play(self) -> None:
-        self._player.play()
+        if not self._warned:
+            LOG.warning("Playback unavailable: %s", self._reason)
+            self._warned = True
+        self.state_changed.emit("stopped")
+        self.position_changed.emit(0, 0)
 
     def pause(self) -> None:
-        self._player.pause()
+        self.state_changed.emit("stopped")
 
     def stop(self) -> None:
-        self._player.stop()
+        self.state_changed.emit("stopped")
+        self.position_changed.emit(0, 0)
 
     def position(self) -> int:
-        return self._player.position()
+        return 0
 
     def duration(self) -> int:
-        return self._player.duration()
+        return 0
 
     def set_position(self, ms: int) -> None:
-        self._player.setPosition(ms)
+        self.position_changed.emit(0, 0)
 
     def set_volume(self, percent: int) -> None:
-        self._audio.setVolume(max(0.0, min(1.0, percent / 100.0)))
+        self._volume = max(0, min(100, int(percent)))
 
     def volume(self) -> int:
-        return int(round(self._audio.volume() * 100))
+        return self._volume
 
     def set_muted(self, muted: bool) -> None:
-        self._audio.setMuted(muted)
+        self._muted = bool(muted)
 
     def is_muted(self) -> bool:
-        return self._audio.isMuted()
+        return self._muted
 
     def is_playing(self) -> bool:
-        return self._player.playbackState() == self._qmedia_player_cls.PlayingState
+        return False
 
     def apply_equalizer(self, enabled: bool, bands: list[int], preamp: int = 0) -> None:
-        # Qt Multimedia has no per-band EQ API; intentional no-op on this backend.
         pass
 
-    def _emit_position(self, pos: int) -> None:
-        self.position_changed.emit(pos, self._player.duration())
+    def is_available(self) -> bool:
+        return False
 
-    def _emit_position_dur(self, dur: int) -> None:
-        self.position_changed.emit(self._player.position(), dur)
-
-    def _on_state(self, state) -> None:
-        mapping = {
-            self._qmedia_player_cls.PlayingState: "playing",
-            self._qmedia_player_cls.PausedState: "paused",
-            self._qmedia_player_cls.StoppedState: "stopped",
-        }
-        self.state_changed.emit(mapping.get(state, "stopped"))
-
-    def _on_media_status(self, status) -> None:
-        if status == self._qmedia_player_cls.EndOfMedia:
-            self.end_reached.emit()
+    def unavailable_reason(self) -> str:
+        return self._reason
 
 
 class VlcPlaybackBackend(PlaybackBackend):
@@ -216,18 +202,15 @@ class VlcPlaybackBackend(PlaybackBackend):
         self._last_state = "stopped"
         self._last_position = (-1, -1)
         self._ended = False
-        self._equalizer = None
-        self._eq_live_bands: list[float] = [0.0] * EQ_BAND_COUNT
-        self._eq_live_preamp: float = 0.0
-        self._eq_fade_start_bands: list[float] = [0.0] * EQ_BAND_COUNT
-        self._eq_fade_start_preamp: float = 0.0
-        self._eq_fade_target_bands: list[float] = [0.0] * EQ_BAND_COUNT
-        self._eq_fade_target_preamp: float = 0.0
-        self._eq_remove_after_fade: bool = False
-        self._eq_fade_steps_left: int = 0
+        self._eq = VlcEqualizerController(
+            vlc_module,
+            self._player,
+            VLC_EQ_BAND_INDEXES,
+            context="VLC playback equalizer",
+        )
 
         self._eq_fade_timer = QTimer(self)
-        self._eq_fade_timer.setInterval(_EQ_FADE_INTERVAL_MS)
+        self._eq_fade_timer.setInterval(EQ_FADE_INTERVAL_MS)
         self._eq_fade_timer.timeout.connect(self._eq_fade_step)
 
         self._timer = QTimer(self)
@@ -242,8 +225,7 @@ class VlcPlaybackBackend(PlaybackBackend):
         self._last_position = (-1, -1)
         self._player.audio_set_volume(self._volume)
         self._player.audio_set_mute(self._muted)
-        if self._equalizer is not None:
-            self._player.set_equalizer(self._equalizer)
+        self._eq.attach_to_player()
 
     def play(self) -> None:
         self._player.play()
@@ -290,92 +272,12 @@ class VlcPlaybackBackend(PlaybackBackend):
 
     def apply_equalizer(self, enabled: bool, bands: list[int], preamp: int = 0) -> None:
         self._eq_fade_timer.stop()
-
-        if not enabled:
-            if self._equalizer is None:
-                return
-            # Fade current live gains → flat, then remove the filter to avoid
-            # the abrupt frequency-response change that causes audible distortion.
-            self._eq_fade_start_bands = list(self._eq_live_bands)
-            self._eq_fade_start_preamp = self._eq_live_preamp
-            self._eq_fade_target_bands = [0.0] * EQ_BAND_COUNT
-            self._eq_fade_target_preamp = 0.0
-            self._eq_remove_after_fade = True
-            self._eq_fade_steps_left = _EQ_FADE_STEPS
+        if self._eq.apply(enabled, bands, preamp):
             self._eq_fade_timer.start()
-            return
-
-        try:
-            normalized = [float(b) for b in normalize_equalizer_bands(bands)]
-            target_preamp = float(preamp)
-            if self._equalizer is None:
-                # Insert the filter at flat (0 dB on every band) so its internal
-                # biquad state initialises on silence rather than on a cold jump
-                # to the target gains, which would cause a transient pop/distortion.
-                eq = self._vlc.AudioEqualizer()
-                if eq is None:
-                    raise RuntimeError("VLC did not create an AudioEqualizer instance")
-                eq.set_preamp(0.0)
-                for vlc_index in VLC_EQ_BAND_INDEXES:
-                    eq.set_amp_at_index(0.0, vlc_index)
-                self._player.set_equalizer(eq)
-                self._equalizer = eq
-                self._eq_live_bands = [0.0] * EQ_BAND_COUNT
-                self._eq_live_preamp = 0.0
-            self._eq_fade_start_bands = list(self._eq_live_bands)
-            self._eq_fade_start_preamp = self._eq_live_preamp
-            self._eq_fade_target_bands = normalized
-            self._eq_fade_target_preamp = target_preamp
-            self._eq_remove_after_fade = False
-            # Skip the fade if VLC is already at the requested gains.
-            # Avoids 16 redundant API calls on every track change.
-            if (self._eq_fade_start_bands == self._eq_fade_target_bands
-                    and self._eq_fade_start_preamp == self._eq_fade_target_preamp):
-                return
-            self._eq_fade_steps_left = _EQ_FADE_STEPS
-            self._eq_fade_timer.start()
-        except (AttributeError, OSError, RuntimeError) as exc:
-            self._equalizer = None
-            try:
-                self._player.set_equalizer(None)
-            except (AttributeError, OSError, RuntimeError):
-                pass
-            LOG.warning("Could not apply VLC equalizer; continuing with flat playback: %s", exc)
 
     def _eq_fade_step(self) -> None:
-        if self._equalizer is None:
+        if not self._eq.fade_step():
             self._eq_fade_timer.stop()
-            return
-
-        self._eq_fade_steps_left -= 1
-        t = 1.0 - self._eq_fade_steps_left / _EQ_FADE_STEPS  # 0.0 → 1.0
-        try:
-            new_preamp = self._eq_fade_start_preamp + (self._eq_fade_target_preamp - self._eq_fade_start_preamp) * t
-            new_bands = [
-                self._eq_fade_start_bands[i] + (self._eq_fade_target_bands[i] - self._eq_fade_start_bands[i]) * t
-                for i in range(EQ_BAND_COUNT)
-            ]
-            self._equalizer.set_preamp(new_preamp)
-            for i, gain in enumerate(new_bands):
-                self._equalizer.set_amp_at_index(gain, VLC_EQ_BAND_INDEXES[i])
-            self._player.set_equalizer(self._equalizer)
-            self._eq_live_preamp = new_preamp
-            self._eq_live_bands = new_bands
-        except (AttributeError, OSError, RuntimeError) as exc:
-            LOG.warning("EQ fade step failed: %s", exc)
-            self._eq_fade_timer.stop()
-            return
-
-        if self._eq_fade_steps_left <= 0:
-            self._eq_fade_timer.stop()
-            if self._eq_remove_after_fade:
-                try:
-                    self._player.set_equalizer(None)
-                except (AttributeError, OSError, RuntimeError) as exc:
-                    LOG.warning("Could not clear VLC equalizer after fade: %s", exc)
-                self._equalizer = None
-                self._eq_live_bands = [0.0] * EQ_BAND_COUNT
-                self._eq_live_preamp = 0.0
 
     def _emit_state(self, state: str) -> None:
         if state != self._last_state:
@@ -424,14 +326,18 @@ class VlcPlaybackBackend(PlaybackBackend):
 
 
 def create_playback_backend(parent: Optional[QObject] = None) -> PlaybackBackend:
-    """Create the preferred backend, falling back safely to Qt Multimedia."""
+    """Create the required VLC backend, preserving app startup if it is unavailable."""
     _configure_vlc_runtime_path()
-    if importlib.util.find_spec("vlc") is None:
-        return QMediaPlaybackBackend(parent)
-
     try:
         vlc_module = importlib.import_module("vlc")
+    except Exception as exc:
+        reason = f"python-vlc is not importable: {exc}"
+        LOG.warning("VLC playback backend unavailable: %s", reason)
+        return UnavailablePlaybackBackend(reason, parent)
+
+    try:
         return VlcPlaybackBackend(vlc_module, parent)
     except Exception as exc:
-        LOG.warning("Falling back to Qt Multimedia because libVLC is unavailable: %s", exc)
-        return QMediaPlaybackBackend(parent)
+        reason = f"libVLC runtime could not be initialized: {exc}"
+        LOG.warning("VLC playback backend unavailable: %s", reason)
+        return UnavailablePlaybackBackend(reason, parent)

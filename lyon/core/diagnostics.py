@@ -163,8 +163,8 @@ def check_vlc() -> DependencyCheck:
     return DependencyCheck(
         "VLC playback backend",
         DiagnosticStatus.WARNING,
-        "python-vlc is not importable; playback can fall back to Qt Multimedia, but EQ will be flat.",
-        "Install python-vlc and provide a VLC runtime under bin/vlc for audible EQ support.",
+        "python-vlc is not importable; local audio playback, video playback, and EQ require VLC/libVLC.",
+        "Install python-vlc and provide a VLC runtime under bin/vlc for playback support.",
     )
 
 

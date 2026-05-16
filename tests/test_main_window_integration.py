@@ -154,3 +154,42 @@ def test_status_bar_carries_scan_progress_widgets(main_window):
     # Sanity: the permanent widgets are children of the status bar.
     assert main_window._scan_progress.parent() is sb
     assert main_window._scan_status_label.parent() is sb
+
+
+def test_main_window_stays_usable_when_playback_backend_is_unavailable(qapp, monkeypatch, tmp_path):
+    from lyon.core import player as player_mod
+    from lyon.core.library import Library
+    from lyon.core.playback_backend import UnavailablePlaybackBackend
+    from lyon.core.settings import Settings
+    from lyon.ui import main_window as main_window_mod
+
+    monkeypatch.setattr(
+        player_mod,
+        "create_playback_backend",
+        lambda _parent: UnavailablePlaybackBackend("libVLC missing"),
+    )
+    settings = Settings(
+        music_root=str(tmp_path / "Music"),
+        library_paths=[],
+        first_run_completed=True,
+    )
+    monkeypatch.setattr(Settings, "load", classmethod(lambda cls: settings))
+    monkeypatch.setattr(
+        main_window_mod,
+        "Library",
+        lambda: Library(tmp_path / "library.db"),
+    )
+
+    w = main_window_mod.MainWindow()
+    try:
+        assert not w.player.playback_available()
+
+        w.player.play()
+
+        assert w._current_toast is not None
+        assert "Audio playback requires VLC/libVLC" in w._current_toast.message()
+        assert "libVLC missing" in w.statusBar().currentMessage()
+    finally:
+        w.player.stop()
+        w.library.close()
+        w.deleteLater()

@@ -9,7 +9,7 @@ to a choice of lossless or lossy formats, organizing a local music library,
 playing tracks and video files, downloading from YouTube, and browsing YouTube
 from one Windows Media Player-inspired interface.
 
-The app is built with Python, PySide6, Qt Multimedia, Qt WebEngine, SQLite,
+The app is built with Python, PySide6, Qt WebEngine, SQLite,
 Mutagen, MusicBrainz, TheAudioDB, CUETools DB, Cover Art Archive, ffmpeg,
 libdiscid, libVLC, and yt-dlp.
 
@@ -43,16 +43,15 @@ The application version is defined in `lyon/__init__.py` (currently `0.5.0`).
   folders Lyon scans.
 - **Library browsing and search** by artist, album, and track, including
   fallbacks for blank metadata such as `Unknown Artist` and `Unknown Album`.
-- **Playback queue** with a libVLC-backed local-audio engine and Qt Multimedia
-  fallback, including play/pause, previous, next, seek/scrub, volume, mute,
-  shuffle, repeat-all, repeat-one, enqueue, an editable Queue dialog, playback
-  shortcuts, and a Now Playing view with cover art.
+- **Playback queue** with a libVLC-backed local-audio engine, including
+  play/pause, previous, next, seek/scrub, volume, mute, shuffle, repeat-all,
+  repeat-one, enqueue, an editable Queue dialog, playback shortcuts, and a Now
+  Playing view with cover art.
 - **Library playback polish** including enqueue feedback, current-track
   highlighting, selected-track scrolling, and track tooltips with artist, album,
   time, and file type.
 - **Six-band equalizer** with five built-in presets and full manual control.
-  Persisted settings are applied to libVLC playback; the Qt Multimedia fallback
-  keeps the controls available but plays audio flat.
+  Persisted settings are applied to libVLC playback.
 - **Audio CD detection** on Windows using Win32 optical-drive APIs and
   libdiscid, with duplicate-disc detection and an automatic eject notification
   when the same disc is inserted twice.
@@ -93,7 +92,7 @@ The application version is defined in `lyon/__init__.py` (currently `0.5.0`).
 
 Install the packages from `requirements.txt`:
 
-- `PySide6` for the desktop UI and multimedia playback.
+- `PySide6` for the desktop UI.
 - `PySide6-Addons` for the optional Qt WebEngine YouTube tab.
 - `mutagen` for reading and writing audio tags.
 - `musicbrainzngs` and `requests` for metadata and artwork lookup.
@@ -126,10 +125,9 @@ Notes:
 - `ffmpeg.exe` must be a build with CDDA/libcdio support. The Windows essentials
   builds from gyan.dev are the intended source used by the build automation.
 - `bin/vlc/` should contain the extracted 64-bit VLC runtime folder contents.
-  It is optional for launching, but without it the app may use a system VLC
-  install or fall back to Qt Multimedia. The fallback plays audio flat, so the
-  six-band EQ will not audibly affect playback and video playback will not be
-  available.
+  It is optional for launching, but local audio playback, video playback, and
+  audible EQ require either that bundled runtime or a discoverable system
+  libVLC install.
 - The app can still launch without these files, but CD detection, ripping, and
   video playback will not be functional.
 
@@ -298,7 +296,7 @@ lyon/core/equalizer.py          Six-band EQ state and preset definitions
 lyon/core/library.py            SQLite library index and search queries
 lyon/core/metadata.py           CUETools DB, MusicBrainz, TheAudioDB, and artwork lookups
 lyon/core/player.py             Playback queue, shuffle, repeat, volume, EQ state
-lyon/core/playback_backend.py   libVLC playback backend and Qt Multimedia fallback
+lyon/core/playback_backend.py   libVLC playback backend and unavailable-backend diagnostics
 lyon/core/ripper.py             ffmpeg-backed multi-format CD-to-audio worker
 lyon/core/settings.py           Settings defaults, persistence, bin lookup
 lyon/core/tagger.py             Audio tag and cover-art writer (Mutagen)
@@ -350,6 +348,10 @@ startup, and CD detection helpers.
 - **Equalizer controls move but audio does not change**: confirm `python-vlc` is
   installed and a 64-bit VLC runtime is either installed system-wide or present
   under `bin\vlc\` with `libvlc.dll`, `libvlccore.dll`, and `plugins\`.
+- **Audio playback is unavailable**: run Runtime Diagnostics and confirm
+  `python-vlc` plus a 64-bit VLC runtime are available. The app can still open
+  without VLC, but local audio playback, video playback, and audible EQ are
+  disabled until VLC/libVLC is fixed.
 - **Video player shows an error screen**: the video tab requires libVLC. See the
   EQ troubleshooting entry above for setup instructions.
 - **Built zip does not run on another machine**: distribute the complete

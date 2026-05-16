@@ -12,7 +12,7 @@ from pathlib import Path
 
 from PIL import Image
 
-ROOT = Path(SPECPATH).resolve().parent
+ROOT = Path(SPECPATH).resolve().parents[1]
 BIN = ROOT / "bin"
 BRAND_DIRS = (
     ROOT / "docs" / "brand",
@@ -80,7 +80,6 @@ a = Analysis(
         "urllib3",
         "certifi",
         "yt_dlp",
-        "PySide6.QtMultimedia",
     ],
     hookspath=[],
     runtime_hooks=[],
