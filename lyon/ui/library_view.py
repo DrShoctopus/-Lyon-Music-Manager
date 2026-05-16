@@ -47,6 +47,7 @@ class LibraryView(QWidget):
         top = QHBoxLayout()
         self.search = QLineEdit()
         self.search.setPlaceholderText("Search artist, album, or track...")
+        self.search.setAccessibleName("Library search")
         self.search.setClearButtonEnabled(True)
         self._search_timer = QTimer(self)
         self._search_timer.setSingleShot(True)

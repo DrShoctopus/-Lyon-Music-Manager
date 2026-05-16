@@ -27,9 +27,9 @@ class NowPlayingView(QWidget):
         self.player = player
 
         self.cover = QLabel()
+        self.cover.setObjectName("nowPlayingCover")
         self.cover.setFixedSize(360, 360)
         self.cover.setAlignment(Qt.AlignCenter)
-        self.cover.setStyleSheet("background:#0a0d11;border:1px solid #1c222b;")
         self.cover.setPixmap(cover_pixmap(None, 360, "♪"))
 
         self.title = QLabel("Nothing playing")

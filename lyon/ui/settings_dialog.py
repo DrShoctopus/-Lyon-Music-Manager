@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 
 from .. import __app_name__, __version__
 from ..core.settings import Settings, normalize_library_paths
+from .branding import app_icon
 
 # (display label, settings key) pairs — order matches the combo box
 _RIP_FORMATS = [
@@ -230,13 +231,26 @@ class SettingsDialog(QDialog):
         layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(6)
 
+        # Branding header: icon + app name + version stacked beside it.
+        brand = QHBoxLayout()
+        brand.setSpacing(14)
+        icon_label = QLabel()
+        icon_pixmap = app_icon().pixmap(64, 64)
+        if not icon_pixmap.isNull():
+            icon_label.setPixmap(icon_pixmap)
+            icon_label.setFixedSize(64, 64)
+            brand.addWidget(icon_label, 0, Qt.AlignTop)
+        text_col = QVBoxLayout()
+        text_col.setSpacing(2)
         name_label = QLabel(__app_name__)
         name_label.setObjectName("dialogTitle")
-        layout.addWidget(name_label)
-
+        text_col.addWidget(name_label)
         version_label = QLabel(f"Version {__version__}")
         version_label.setObjectName("dialogSubtitle")
-        layout.addWidget(version_label)
+        text_col.addWidget(version_label)
+        text_col.addStretch(1)
+        brand.addLayout(text_col, 1)
+        layout.addLayout(brand)
 
         layout.addSpacing(12)
 

@@ -127,9 +127,9 @@ class _VideoCard(QFrame):
         row.setSpacing(8)
 
         thumb = QLabel()
+        thumb.setObjectName("videoCardThumb")
         thumb.setFixedSize(96, 54)
         thumb.setAlignment(Qt.AlignCenter)
-        thumb.setStyleSheet("background:#0a1520;")
         thumb.setPixmap(_thumb_pixmap(track.artwork_path, track.path, 96, 54))
         row.addWidget(thumb)
 
@@ -138,10 +138,10 @@ class _VideoCard(QFrame):
         info.setSpacing(1)
 
         title_lbl = ElidedLabel(title)
-        title_lbl.setStyleSheet("color:#dde3ea; font-size:11px; font-weight:600;")
+        title_lbl.setObjectName("videoCardTitle")
 
         dur_lbl = QLabel(dur or "—")
-        dur_lbl.setStyleSheet("color:#7a8a9a; font-size:10px;")
+        dur_lbl.setObjectName("videoCardDuration")
 
         info.addStretch()
         info.addWidget(title_lbl)
@@ -189,7 +189,7 @@ class _FullscreenWindow(QWidget):
         on_mute_toggle_cb=None,
     ) -> None:
         super().__init__(None, Qt.Window | Qt.FramelessWindowHint)
-        self.setStyleSheet("background:#000000;")
+        self.setObjectName("videoFullscreenWindow")
         self._on_exit = on_exit_cb
         self._on_toggle_play = on_toggle_play_cb
         self._on_seek_relative = on_seek_relative_cb
@@ -249,8 +249,8 @@ class _SplashPane(QLabel):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.setObjectName("videoSplash")
         self.setAlignment(Qt.AlignCenter)
-        self.setStyleSheet("background:#0a1118;")
         from .branding import startup_splash_pixmap
         pm = startup_splash_pixmap()
         self._source: QPixmap | None = pm if not pm.isNull() else None
@@ -384,6 +384,7 @@ class VideoPlayerView(QWidget):
         self._sidebar_btn.setCheckable(True)
         self._sidebar_btn.setChecked(True)
         self._sidebar_btn.setToolTip("Show / hide video catalog  [Ctrl+B]")
+        self._sidebar_btn.setAccessibleName("Toggle video library sidebar")
         self._sidebar_btn.clicked.connect(self._toggle_sidebar)
 
         toolbar.addWidget(self._open_btn)
@@ -423,6 +424,7 @@ class VideoPlayerView(QWidget):
 
         self._seek = QSlider(Qt.Horizontal)
         self._seek.setRange(0, 0)
+        self._seek.setAccessibleName("Video seek position")
         self._seek.sliderPressed.connect(lambda: setattr(self, "_user_dragging", True))
         self._seek.sliderReleased.connect(self._on_seek_release)
 
@@ -512,9 +514,9 @@ class VideoPlayerView(QWidget):
         self._sidebar = self._build_sidebar()
 
         self._sidebar_sep = QFrame()
+        self._sidebar_sep.setObjectName("videoSidebarSeparator")
         self._sidebar_sep.setFrameShape(QFrame.VLine)
         self._sidebar_sep.setFixedWidth(1)
-        self._sidebar_sep.setStyleSheet("QFrame { background: #2a3848; }")
 
         content = QWidget()
         content_row = QHBoxLayout(content)
@@ -546,11 +548,6 @@ class VideoPlayerView(QWidget):
         sidebar = QFrame()
         sidebar.setObjectName("videoCatalogSidebar")
         sidebar.setFixedWidth(_SIDEBAR_WIDTH)
-        sidebar.setStyleSheet("""
-            QFrame#videoCatalogSidebar { background: #0d1520; }
-            QFrame#videoCard { background: #131e2c; border-radius: 3px; }
-            QFrame#videoCard:hover { background: #1e2d40; }
-        """)
 
         sl = QVBoxLayout(sidebar)
         sl.setContentsMargins(0, 0, 0, 0)
@@ -558,37 +555,38 @@ class VideoPlayerView(QWidget):
 
         # Header
         header = QFrame()
-        header.setStyleSheet("background: #0a1520;")
+        header.setObjectName("videoCatalogHeader")
         hl = QHBoxLayout(header)
         hl.setContentsMargins(10, 8, 10, 6)
         hl.setSpacing(4)
         lib_lbl = QLabel("Video Library")
-        lib_lbl.setStyleSheet("color:#72f4ff; font-weight:600; font-size:12px;")
+        lib_lbl.setObjectName("videoCatalogTitle")
         self._catalog_count_lbl = QLabel("")
-        self._catalog_count_lbl.setStyleSheet("color:#7a8a9a; font-size:10px;")
+        self._catalog_count_lbl.setObjectName("videoCatalogCount")
         hl.addWidget(lib_lbl)
         hl.addStretch()
         hl.addWidget(self._catalog_count_lbl)
 
         # Search bar
         search_row = QFrame()
-        search_row.setStyleSheet("background: #0d1520;")
+        search_row.setObjectName("videoCatalogSearchRow")
         swl = QHBoxLayout(search_row)
         swl.setContentsMargins(8, 5, 8, 4)
         self._catalog_search = QLineEdit()
         self._catalog_search.setPlaceholderText("Search videos…")
+        self._catalog_search.setAccessibleName("Video catalog search")
         self._catalog_search.textChanged.connect(self._filter_catalog)
         swl.addWidget(self._catalog_search)
 
         # Scrollable card list
         scroll = QScrollArea()
+        scroll.setObjectName("videoCatalogScroll")
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setStyleSheet("background: #0d1520;")
 
         self._catalog_container = QWidget()
-        self._catalog_container.setStyleSheet("background: #0d1520;")
+        self._catalog_container.setObjectName("videoCatalogContainer")
         self._catalog_layout = QVBoxLayout(self._catalog_container)
         self._catalog_layout.setContentsMargins(6, 6, 6, 6)
         self._catalog_layout.setSpacing(3)

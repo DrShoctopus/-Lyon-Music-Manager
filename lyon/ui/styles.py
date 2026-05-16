@@ -49,6 +49,11 @@ QTabBar::tab:selected {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
         stop:0 rgba(92,213,255,0.18), stop:1 rgba(49,112,224,0.08));
 }
+QTabBar::tab:focus {
+    color: #ffffff;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 rgba(126,245,255,0.28), stop:1 rgba(49,112,224,0.12));
+}
 QTabBar::scroller {
     width: 20px;
 }
@@ -126,6 +131,10 @@ QPushButton:hover {
 }
 QPushButton:pressed { background: #070b10; }
 QPushButton:disabled { color: #65707c; background: #171d24; }
+QPushButton:focus, QToolButton:focus {
+    border: 1px solid #79fbff;
+    outline: none;
+}
 
 QPushButton#accent {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
@@ -147,7 +156,8 @@ QLineEdit, QComboBox, QSpinBox {
     padding: 4px 6px;
     selection-background-color: #1976d2;
 }
-QLineEdit:focus, QComboBox:focus { border: 1px solid #4eefff; }
+/* QLineEdit/QComboBox/QSpinBox :focus rules consolidated below with the
+   broader slider/button focus block. */
 
 /* Sliders (transport bar + volume) */
 QSlider::groove:horizontal {
@@ -172,6 +182,17 @@ QSlider::handle:horizontal {
     border-radius: 9px;
 }
 QSlider::handle:horizontal:hover {
+    border: 1px solid #79fbff;
+}
+QSlider:focus {
+    outline: none;
+}
+QSlider:focus::handle:horizontal {
+    border: 1px solid #79fbff;
+    background: qradialgradient(cx:0.45, cy:0.28, radius:0.85,
+        stop:0 #ffffff, stop:0.24 #c5fbff, stop:0.58 #49a4ff, stop:1 #0a1f44);
+}
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus {
     border: 1px solid #79fbff;
 }
 
@@ -370,6 +391,84 @@ QPlainTextEdit#monoLog {
     background: #07090f;
     border: 1px solid #27313b;
     border-radius: 4px;
+}
+
+/* Video player catalog sidebar */
+QFrame#videoCatalogSidebar,
+QFrame#videoCatalogSearchRow,
+QScrollArea#videoCatalogScroll,
+QWidget#videoCatalogContainer {
+    background: #0d1520;
+}
+QFrame#videoCatalogHeader,
+QLabel#videoCardThumb {
+    background: #0a1520;
+}
+QFrame#videoCard {
+    background: #131e2c;
+    border-radius: 3px;
+}
+QFrame#videoCard:hover {
+    background: #1e2d40;
+}
+QLabel#videoCatalogTitle {
+    color: #72f4ff;
+    font-weight: 600;
+    font-size: 9pt;
+}
+QLabel#videoCatalogCount {
+    color: #7a8a9a;
+    font-size: 8pt;
+}
+QLabel#videoCardTitle {
+    color: #dde3ea;
+    font-size: 8pt;
+    font-weight: 600;
+}
+QLabel#videoCardDuration {
+    color: #7a8a9a;
+    font-size: 8pt;
+}
+QLabel#videoSplash {
+    background: #0a1118;
+}
+QWidget#videoFullscreenWindow {
+    background: #000000;
+}
+QFrame#videoSidebarSeparator {
+    background: #2a3848;
+}
+
+/* Now Playing cover art */
+QLabel#nowPlayingCover {
+    background: #0a0d11;
+    border: 1px solid #1c222b;
+}
+
+/* YouTube view */
+QLabel#youtubeThumb {
+    background: #0a0e13;
+    border-radius: 3px;
+}
+QListWidget#youtubeResults {
+    background: #0a0e13;
+    border: none;
+    outline: none;
+}
+QListWidget#youtubeResults::item {
+    border-bottom: 1px solid #1a2230;
+}
+QListWidget#youtubeResults::item:selected {
+    background: #1466c7;
+}
+QListWidget#youtubeResults::item:hover:!selected {
+    background: #111c2a;
+}
+
+/* Ripper view */
+QLabel#ripperCover {
+    background: #0c0f14;
+    border: 1px solid #2a3340;
 }
 
 /* Toast notifications (floating, bottom-center) */

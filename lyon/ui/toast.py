@@ -63,6 +63,7 @@ class Toast(QFrame):
         close.setObjectName("toastClose")
         close.setCursor(Qt.PointingHandCursor)
         close.setToolTip("Dismiss")
+        close.setAccessibleName("Dismiss notification")
         close.clicked.connect(self.dismiss)
         layout.addWidget(close)
 

@@ -97,9 +97,9 @@ class _ResultRow(QWidget):
         row.setSpacing(10)
 
         self._thumb = QLabel()
+        self._thumb.setObjectName("youtubeThumb")
         self._thumb.setFixedSize(_THUMB_W, _THUMB_H)
         self._thumb.setAlignment(Qt.AlignCenter)
-        self._thumb.setStyleSheet("background:#0a0e13; border-radius:3px;")
         row.addWidget(self._thumb)
 
         meta = QVBoxLayout()
@@ -171,13 +171,8 @@ class YouTubeView(QWidget):
 
         # ---- results list
         self._list = QListWidget()
+        self._list.setObjectName("youtubeResults")
         self._list.setSpacing(1)
-        self._list.setStyleSheet(
-            "QListWidget { background:#0a0e13; border:none; outline:none; }"
-            "QListWidget::item { border-bottom:1px solid #1a2230; }"
-            "QListWidget::item:selected { background:#1466c7; }"
-            "QListWidget::item:hover:!selected { background:#111c2a; }"
-        )
         self._list.itemClicked.connect(self._on_item_clicked)
         self._list.hide()
         layout.addWidget(self._list, 1)
