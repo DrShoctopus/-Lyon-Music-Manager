@@ -48,13 +48,23 @@ def test_ui_module_has_no_inline_setstylesheet(module_path):
     )
 
 
-def test_main_window_keeps_only_the_central_stylesheet_call():
-    """main_window.py is allowed exactly one setStyleSheet — the WMP_QSS apply."""
-    src = Path("lyon/ui/main_window.py").read_text()
+def test_styles_module_owns_the_central_stylesheet_call():
+    """styles.py is the only UI module allowed to apply WMP_QSS."""
+    src = Path("lyon/ui/styles.py").read_text()
     cleaned = re.sub(r"#.*", "", src)
     occurrences = cleaned.count("setStyleSheet")
     assert occurrences == 1, (
-        f"Expected exactly 1 setStyleSheet call in main_window.py, found {occurrences}."
+        f"Expected exactly 1 central setStyleSheet call in styles.py, found {occurrences}."
+    )
+
+
+def test_main_window_uses_central_stylesheet_helper():
+    """MainWindow should not own stylesheet application directly."""
+    src = Path("lyon/ui/main_window.py").read_text()
+    cleaned = re.sub(r"#.*", "", src)
+    occurrences = cleaned.count("setStyleSheet")
+    assert occurrences == 0, (
+        f"Expected main_window.py to use apply_app_styles(), found {occurrences} direct calls."
     )
 
 

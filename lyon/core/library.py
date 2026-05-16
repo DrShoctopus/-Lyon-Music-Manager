@@ -289,6 +289,22 @@ class Library:
             ).fetchall()
         return [_row_to_track(r) for r in rows]
 
+    def tracks_for_artist(
+        self, artist: str, media_type: str | None = None
+    ) -> list[Track]:
+        """Return all tracks for one display artist in album/track order."""
+        filter_sql = "" if media_type is None else "AND media_type = ?"
+        params = (artist, media_type) if media_type is not None else (artist,)
+        with self._lock:
+            rows = self.conn.execute(
+                f"""SELECT * FROM tracks
+                    WHERE {DISPLAY_ARTIST_SQL} = ? {filter_sql}
+                    ORDER BY {DISPLAY_ALBUM_SQL} COLLATE NOCASE, disc_no, track_no,
+                             title COLLATE NOCASE""",
+                params,
+            ).fetchall()
+        return [_row_to_track(r) for r in rows]
+
     def search(self, query: str, media_type: str | None = None) -> list[Track]:
         escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         like = f"%{escaped}%"

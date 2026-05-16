@@ -37,6 +37,12 @@ class FakeLibrary:
     def tracks_for_album(self, artist: str, album: str, _media=None) -> list[Track]:
         return list(self._map.get(artist, {}).get(album, []))
 
+    def tracks_for_artist(self, artist: str, _media=None) -> list[Track]:
+        out: list[Track] = []
+        for tracks in self._map.get(artist, {}).values():
+            out.extend(tracks)
+        return out
+
     def search(self, q: str, _media=None) -> list[Track]:
         q_lower = q.lower()
         out: list[Track] = []

@@ -19,6 +19,17 @@ from .widgets import ElidedLabel, cover_pixmap, format_duration, format_ms
 _FORMAT_LABELS = ("Codec", "Bitrate", "Sample rate")
 
 
+class _ClickableLabel(QLabel):
+    clicked = Signal()
+
+    def mousePressEvent(self, ev) -> None:
+        if ev.button() == Qt.LeftButton:
+            self.clicked.emit()
+            ev.accept()
+            return
+        super().mousePressEvent(ev)
+
+
 class NowPlayingView(QWidget):
     """Now Playing screen: cover, metadata, format strip, and queue preview."""
 
@@ -175,12 +186,13 @@ class TransportBar(QWidget):
         self.bar = QFrame(self)
         self.bar.setObjectName("transport")
 
-        self.thumb = QLabel()
+        self.thumb = _ClickableLabel()
         self.thumb.setObjectName("transportThumb")
         self.thumb.setFixedSize(68, 68)
         self.thumb.setPixmap(cover_pixmap(None, 68, "♪"))
         self.thumb.setCursor(Qt.PointingHandCursor)
-        self.thumb.mousePressEvent = lambda ev: self.open_now_playing.emit()
+        self.thumb.setAccessibleName("Open Now Playing")
+        self.thumb.clicked.connect(self.open_now_playing.emit)
 
         self.title_lbl = ElidedLabel("Nothing playing")
         self.title_lbl.setObjectName("nowPlayingTitle")

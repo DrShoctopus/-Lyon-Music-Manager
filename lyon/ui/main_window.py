@@ -27,7 +27,7 @@ from .library_view import LibraryView
 from .now_playing import NowPlayingView, TransportBar
 from .queue_dialog import QueueDialog
 from .ripper_view import RipperView
-from .styles import WMP_QSS
+from .styles import apply_app_styles
 from .toast import Toast
 from .video_player_view import VideoPlayerView
 from .yt_download_dialog import YtDownloadDialog
@@ -36,6 +36,7 @@ from .youtube_view import YouTubeView
 
 class _LibraryScanThread(QThread):
     finished_with = Signal(int, int, str)  # (new_tracks, removed_tracks, label)
+    failed_with = Signal(str, str)         # (label, error)
 
     def __init__(self, library: Library, roots: list[str], label: str, prune: bool = False, parent=None):
         super().__init__(parent)
@@ -48,11 +49,20 @@ class _LibraryScanThread(QThread):
     def request_stop(self) -> None:
         """Ask the scan loop to bail out at the next directory boundary."""
         self._cancel = True
+        self.requestInterruption()
 
     def run(self) -> None:
-        removed = self.library.remove_missing() if self.prune else 0
-        n = self.library.scan_paths(self.roots, should_cancel=lambda: self._cancel)
-        self.finished_with.emit(n, removed, self.label)
+        try:
+            should_cancel = lambda: self._cancel or self.isInterruptionRequested()
+            removed = self.library.remove_missing() if self.prune and not should_cancel() else 0
+            n = (
+                self.library.scan_paths(self.roots, should_cancel=should_cancel)
+                if not should_cancel()
+                else 0
+            )
+            self.finished_with.emit(n, removed, self.label)
+        except Exception as exc:  # pragma: no cover - defensive worker boundary
+            self.failed_with.emit(self.label, str(exc))
 
 
 class MainWindow(QMainWindow):
@@ -79,7 +89,7 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(app_icon())
         self.resize(1100, 720)
         self.setMinimumSize(900, 600)
-        self.setStyleSheet(WMP_QSS)
+        apply_app_styles(self)
 
         root = QWidget()
         root.setObjectName("root")
@@ -379,11 +389,11 @@ class MainWindow(QMainWindow):
             return
         self.tab_bar.setCurrentIndex(self._tab_index["YouTube"])
         if self.youtube_view.search_youtube(query):
-            self.statusBar().showMessage(f"Searching YouTube for {query}", 3000)
+            self.show_toast(f"Searching YouTube for {query}", level="info")
         elif self.youtube_view.is_searching():
-            self.statusBar().showMessage("YouTube search already in progress.", 3000)
+            self.show_toast("YouTube search already in progress.", level="warning")
         else:
-            self.statusBar().showMessage("YouTube search is unavailable.", 3000)
+            self.show_toast("YouTube search is unavailable.", level="error")
 
     def _enqueue_tracks(self, tracks: list) -> None:
         self.player.enqueue(tracks)
@@ -405,6 +415,7 @@ class MainWindow(QMainWindow):
         self._scan_progress.setVisible(True)
         self._scan_thread = _LibraryScanThread(self.library, list(roots), label, prune, self)
         self._scan_thread.finished_with.connect(self._on_scan_finished)
+        self._scan_thread.failed_with.connect(self._on_scan_failed)
         self._scan_thread.finished.connect(self._scan_thread.deleteLater)
         self._scan_thread.start()
 
@@ -420,6 +431,13 @@ class MainWindow(QMainWindow):
         self.show_toast(message, level=toast_level, duration_ms=4000)
         self.library_view.refresh()
         self.video_player_view.refresh_catalog()
+        self._scan_thread = None
+
+    def _on_scan_failed(self, label: str, error: str) -> None:
+        self._scan_status_label.setVisible(False)
+        self._scan_status_label.setText("")
+        self._scan_progress.setVisible(False)
+        self.show_toast(f"{label} failed: {error}", level="error", duration_ms=6000)
         self._scan_thread = None
 
     def remove_missing(self) -> None:
@@ -575,10 +593,17 @@ class MainWindow(QMainWindow):
         ev.acceptProposedAction()
 
     def closeEvent(self, ev) -> None:
-        self.player.stop()
         if self._scan_thread is not None and self._scan_thread.isRunning():
             self._scan_thread.request_stop()
-            self._scan_thread.wait()
+            if not self._scan_thread.wait(3000):
+                self.show_toast(
+                    "Library scan is still stopping. Try closing again in a moment.",
+                    level="warning",
+                    duration_ms=5000,
+                )
+                ev.ignore()
+                return
+        self.player.stop()
         self.youtube_view.shutdown()
         self.ripper_view.shutdown()
         self.settings.last_volume = self.player.volume()

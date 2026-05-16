@@ -23,7 +23,7 @@ from typing import Any
 from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
-    QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
+    QApplication, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QScrollArea, QSizePolicy, QSlider, QStackedWidget,
     QVBoxLayout, QWidget,
 )
@@ -56,6 +56,9 @@ _RATE_OPTIONS: list[tuple[str, float]] = [
 _DEFAULT_RATE_INDEX = 3  # 1×
 
 _SIDEBAR_WIDTH = 234
+_CATALOG_BATCH_SIZE = 40
+_THUMB_CACHE_MAX = 512
+_THUMB_CACHE: dict[tuple[str | None, str, int, int], QPixmap] = {}
 
 
 def _track_id_and_name(desc: Any) -> tuple[int, str]:
@@ -82,6 +85,11 @@ def _scale_to_fill(pm: QPixmap, w: int, h: int) -> QPixmap:
 def _thumb_pixmap(artwork_path: str | None, file_path: str = "",
                   w: int = 96, h: int = 54) -> QPixmap:
     """Return a w×h thumbnail, also checking for yt-dlp side-car images."""
+    cache_key = (artwork_path, file_path, w, h)
+    cached = _THUMB_CACHE.get(cache_key)
+    if cached is not None:
+        return QPixmap(cached)
+
     sources: list[str] = []
     if artwork_path:
         sources.append(artwork_path)
@@ -97,9 +105,19 @@ def _thumb_pixmap(artwork_path: str | None, file_path: str = "",
     for src in sources:
         pm = QPixmap(src)
         if not pm.isNull():
-            return _scale_to_fill(pm, w, h)
+            out = _scale_to_fill(pm, w, h)
+            _cache_thumb(cache_key, out)
+            return QPixmap(out)
     pm = placeholder_cover(max(w, h), "▶")
-    return pm.scaled(w, h, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+    out = pm.scaled(w, h, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+    _cache_thumb(cache_key, out)
+    return QPixmap(out)
+
+
+def _cache_thumb(key: tuple[str | None, str, int, int], pixmap: QPixmap) -> None:
+    if len(_THUMB_CACHE) >= _THUMB_CACHE_MAX:
+        _THUMB_CACHE.pop(next(iter(_THUMB_CACHE)))
+    _THUMB_CACHE[key] = QPixmap(pixmap)
 
 
 # ---------------------------------------------------------------------------
@@ -207,6 +225,11 @@ class _FullscreenWindow(QWidget):
         layout.setSpacing(0)
         layout.addWidget(self._vlc_surface)
 
+        self._single_click_timer = QTimer(self)
+        self._single_click_timer.setSingleShot(True)
+        self._single_click_timer.setInterval(QApplication.doubleClickInterval())
+        self._single_click_timer.timeout.connect(self._on_toggle_play)
+
     def keyPressEvent(self, ev) -> None:
         key = ev.key()
         mod = ev.modifiers()
@@ -230,13 +253,21 @@ class _FullscreenWindow(QWidget):
         ev.accept()
 
     def mousePressEvent(self, ev) -> None:
-        # Single click toggles play/pause (like every other video player).
         if ev.button() == Qt.LeftButton:
-            self._on_toggle_play()
+            # Defer the single-click action until Qt's double-click interval has
+            # passed so a double-click exits fullscreen without also toggling
+            # playback on the first press.
+            self._single_click_timer.start()
+            ev.accept()
+            return
         super().mousePressEvent(ev)
 
     def mouseDoubleClickEvent(self, ev) -> None:
-        self._on_exit()
+        if ev.button() == Qt.LeftButton:
+            self._single_click_timer.stop()
+            self._on_exit()
+            ev.accept()
+            return
         super().mouseDoubleClickEvent(ev)
 
 
@@ -301,10 +332,15 @@ class VideoPlayerView(QWidget):
         self._eq_fade_target_preamp: float = 0.0
         self._eq_remove_after_fade: bool = False
         self._eq_fade_steps_left: int = 0
+        self._catalog_pending_tracks: list[Any] = []
+        self._catalog_total = 0
 
         self._eq_fade_timer = QTimer(self)
         self._eq_fade_timer.setInterval(_EQ_FADE_INTERVAL_MS)
         self._eq_fade_timer.timeout.connect(self._eq_fade_step)
+        self._catalog_build_timer = QTimer(self)
+        self._catalog_build_timer.setInterval(0)
+        self._catalog_build_timer.timeout.connect(self._append_catalog_batch)
 
         try:
             import importlib
@@ -608,16 +644,29 @@ class VideoPlayerView(QWidget):
         """Reload video catalog from the library database."""
         if self._library is None or not hasattr(self, "_catalog_layout"):
             return
+        self._catalog_build_timer.stop()
 
         for card in self._catalog_cards:
             self._catalog_layout.removeWidget(card)
             card.deleteLater()
         self._catalog_cards.clear()
 
-        videos = list(self._library.all_tracks(media_type="video"))
-        query = self._catalog_search.text().strip().lower()
+        self._catalog_pending_tracks = list(self._library.all_tracks(media_type="video"))
+        self._catalog_total = len(self._catalog_pending_tracks)
+        self._update_catalog_count()
+        self._append_catalog_batch()
+        if self._catalog_pending_tracks:
+            self._catalog_build_timer.start()
 
-        for track in videos:
+    def _append_catalog_batch(self) -> None:
+        """Append a small batch of video cards to keep large libraries responsive."""
+        if not hasattr(self, "_catalog_layout"):
+            return
+        query = self._catalog_search.text().strip().lower()
+        batch = self._catalog_pending_tracks[:_CATALOG_BATCH_SIZE]
+        del self._catalog_pending_tracks[:_CATALOG_BATCH_SIZE]
+
+        for track in batch:
             card = _VideoCard(track)
             card.load_requested.connect(self._load_path)
             # Insert before the trailing stretch
@@ -626,26 +675,27 @@ class VideoPlayerView(QWidget):
             if query and not card.matches(query):
                 card.hide()
 
-        total = len(videos)
-        shown = sum(1 for c in self._catalog_cards if not c.isHidden())
-        if query:
-            self._catalog_count_lbl.setText(f"{shown}/{total}")
-        else:
-            self._catalog_count_lbl.setText(f"{total} video{'s' if total != 1 else ''}")
+        self._update_catalog_count()
+        if not self._catalog_pending_tracks:
+            self._catalog_build_timer.stop()
 
     def _filter_catalog(self, text: str) -> None:
         query = text.strip().lower()
-        visible = 0
         for card in self._catalog_cards:
             show = card.matches(query)
             card.setVisible(show)
-            if show:
-                visible += 1
-        total = len(self._catalog_cards)
+        self._update_catalog_count()
+
+    def _update_catalog_count(self) -> None:
+        query = self._catalog_search.text().strip().lower()
+        visible = sum(1 for c in self._catalog_cards if not c.isHidden())
+        total = self._catalog_total
         if query:
-            self._catalog_count_lbl.setText(f"{visible}/{total}")
+            suffix = "…" if self._catalog_pending_tracks else ""
+            self._catalog_count_lbl.setText(f"{visible}/{total}{suffix}")
         else:
-            self._catalog_count_lbl.setText(f"{total} video{'s' if total != 1 else ''}")
+            suffix = "…" if self._catalog_pending_tracks else ""
+            self._catalog_count_lbl.setText(f"{total} video{'s' if total != 1 else ''}{suffix}")
 
     def _toggle_sidebar(self, checked: bool) -> None:
         self._sidebar.setVisible(checked)

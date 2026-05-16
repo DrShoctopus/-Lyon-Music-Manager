@@ -21,18 +21,32 @@ QtWidgets = pytest.importorskip("PySide6.QtWidgets", exc_type=ImportError)
 
 
 @pytest.fixture
-def main_window(qapp, fake_backend, monkeypatch):
+def main_window(qapp, fake_backend, monkeypatch, tmp_path):
     """Build a MainWindow with the Player backed by FakeBackend."""
     # Patch create_playback_backend BEFORE MainWindow is imported so that
     # MainWindow's `self.player = Player(self)` uses the fake.
     from lyon.core import player as player_mod
+    from lyon.core.library import Library
+    from lyon.core.settings import Settings
 
     def _stub(_parent):
         return fake_backend
 
     monkeypatch.setattr(player_mod, "create_playback_backend", _stub)
+    settings = Settings(
+        music_root=str(tmp_path / "Music"),
+        library_paths=[],
+        first_run_completed=True,
+    )
+    monkeypatch.setattr(Settings, "load", classmethod(lambda cls: settings))
 
-    from lyon.ui.main_window import MainWindow
+    from lyon.ui import main_window as main_window_mod
+    monkeypatch.setattr(
+        main_window_mod,
+        "Library",
+        lambda: Library(tmp_path / "library.db"),
+    )
+    MainWindow = main_window_mod.MainWindow
     w = MainWindow()
     yield w
     # Ensure libraries / threads release before next test.

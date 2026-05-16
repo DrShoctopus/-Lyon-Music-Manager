@@ -242,10 +242,7 @@ class LibraryView(QWidget):
         artist = ai.data(Qt.DisplayRole)
         album_key = bi.data(Qt.UserRole)
         if album_key == _ALL_ALBUMS_KEY:
-            tracks: list[Track] = []
-            for album_name, _ in self.library.albums_for_artist(artist, None):
-                tracks.extend(self.library.tracks_for_album(artist, album_name, None))
-            self._current_tracks = tracks
+            self._current_tracks = self.library.tracks_for_artist(artist, None)
         else:
             album = album_key if isinstance(album_key, str) else bi.data(Qt.DisplayRole)
             self._current_tracks = self.library.tracks_for_album(artist, album, None)

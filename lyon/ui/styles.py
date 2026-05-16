@@ -7,6 +7,8 @@ Aesthetic notes:
 - Matching cool-blue accents across tabs, inputs, progress, and selection
 """
 
+from __future__ import annotations
+
 WMP_QSS = r"""
 * { color: #eef7ff; font-family: "Segoe UI", "Tahoma", sans-serif; font-size: 9pt; }
 
@@ -522,3 +524,19 @@ QLabel#osdLabel {
     padding: 0 4px;
 }
 """
+
+
+def apply_app_styles(widget=None) -> None:
+    """Apply the central stylesheet to the application when possible.
+
+    Top-level tool windows such as the video OSD do not inherit a stylesheet
+    applied only to MainWindow, so the app object owns the stylesheet. The
+    optional widget fallback keeps tests and early construction paths safe when
+    a QApplication has not been created yet.
+    """
+    from PySide6.QtWidgets import QApplication
+
+    app = QApplication.instance()
+    target = app if app is not None else widget
+    if target is not None:
+        target.setStyleSheet(WMP_QSS)
