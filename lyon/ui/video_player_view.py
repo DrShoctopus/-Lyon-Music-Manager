@@ -38,6 +38,8 @@ LOG = logging.getLogger(__name__)
 
 _EQ_FADE_STEPS = 16
 _EQ_FADE_INTERVAL_MS = 16  # total transition ≈ 256 ms
+_VIDEO_OUTPUT_SETTLE_MS = 80
+_VIDEO_OUTPUT_SECOND_SETTLE_MS = 240
 
 VIDEO_EXTENSIONS = (
     ".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm",
@@ -334,6 +336,7 @@ class VideoPlayerView(QWidget):
         self._eq_fade_steps_left: int = 0
         self._catalog_pending_tracks: list[Any] = []
         self._catalog_total = 0
+        self._video_output_generation = 0
 
         self._eq_fade_timer = QTimer(self)
         self._eq_fade_timer.setInterval(_EQ_FADE_INTERVAL_MS)
@@ -729,6 +732,129 @@ class VideoPlayerView(QWidget):
         else:
             self._player.set_nsobject(wid)
 
+    def _handoff_vlc_output_to(
+        self,
+        widget: QWidget,
+        resume: bool,
+        position_ms: int | None = None,
+    ) -> None:
+        """Move VLC output to a new native widget and rebuild the video output."""
+        if not self._available or self._player is None or not self._player.get_media():
+            return
+
+        self._video_output_generation += 1
+        generation = self._video_output_generation
+        if position_ms is None:
+            position_ms = self._safe_player_time()
+
+        rate = _RATE_OPTIONS[self._rate_combo.currentIndex()][1]
+        audio_track = self._safe_audio_track()
+        subtitle_track = self._safe_subtitle_track()
+
+        try:
+            self._player.stop()
+        except Exception as exc:
+            LOG.debug("Could not stop VLC before video output handoff: %s", exc)
+
+        self._attach_vlc_to(widget)
+        self._restore_audio_output_state()
+
+        if self._equalizer is not None:
+            try:
+                self._player.set_equalizer(self._equalizer)
+            except Exception as exc:
+                LOG.debug("Could not reapply video equalizer after output handoff: %s", exc)
+
+        self._player.play()
+        self._timer.start()
+        self._play_btn.set_playing(True)
+
+        QTimer.singleShot(
+            _VIDEO_OUTPUT_SETTLE_MS,
+            lambda: self._restore_vlc_playback_state(
+                generation,
+                position_ms or 0,
+                rate,
+                audio_track,
+                subtitle_track,
+                resume,
+            ),
+        )
+        QTimer.singleShot(
+            _VIDEO_OUTPUT_SECOND_SETTLE_MS,
+            lambda: self._restore_vlc_position(generation, position_ms or 0),
+        )
+
+    def _safe_player_time(self) -> int:
+        try:
+            return max(0, int(self._player.get_time()))
+        except Exception:
+            return 0
+
+    def _safe_audio_track(self) -> int | None:
+        try:
+            return int(self._player.audio_get_track())
+        except Exception:
+            return None
+
+    def _safe_subtitle_track(self) -> int | None:
+        try:
+            return int(self._player.video_get_spu())
+        except Exception:
+            return None
+
+    def _restore_audio_output_state(self) -> None:
+        try:
+            self._player.audio_set_volume(self._vol_slider.value())
+            self._player.audio_set_mute(self._mute_btn.isChecked())
+        except Exception as exc:
+            LOG.debug("Could not restore video audio state: %s", exc)
+
+    def _restore_vlc_playback_state(
+        self,
+        generation: int,
+        position_ms: int,
+        rate: float,
+        audio_track: int | None,
+        subtitle_track: int | None,
+        resume: bool,
+    ) -> None:
+        if generation != self._video_output_generation or self._player is None:
+            return
+        self._restore_vlc_position(generation, position_ms)
+        try:
+            self._player.set_rate(rate)
+        except Exception as exc:
+            LOG.debug("Could not restore playback rate after output handoff: %s", exc)
+        if audio_track is not None:
+            try:
+                self._player.audio_set_track(audio_track)
+            except Exception as exc:
+                LOG.debug("Could not restore audio track after output handoff: %s", exc)
+        if subtitle_track is not None:
+            try:
+                self._player.video_set_spu(subtitle_track)
+            except Exception as exc:
+                LOG.debug("Could not restore subtitle track after output handoff: %s", exc)
+        if not resume:
+            try:
+                self._player.pause()
+            except Exception as exc:
+                LOG.debug("Could not pause after output handoff: %s", exc)
+            self._play_btn.set_playing(False)
+        else:
+            self._play_btn.set_playing(True)
+
+    def _restore_vlc_position(self, generation: int, position_ms: int) -> None:
+        if generation != self._video_output_generation or self._player is None:
+            return
+        if position_ms <= 0:
+            return
+        try:
+            self._player.set_time(position_ms)
+        except Exception as exc:
+            LOG.debug("Could not restore playback position after output handoff: %s", exc)
+
     def _populate_tracks(self) -> None:
         """Refresh audio and subtitle combo boxes from the active media."""
         # Audio tracks
@@ -1004,6 +1130,7 @@ class VideoPlayerView(QWidget):
             return  # already fullscreen
 
         was_playing = bool(self._player.is_playing())
+        position_ms = self._safe_player_time()
         if was_playing:
             self._player.pause()
 
@@ -1017,23 +1144,46 @@ class VideoPlayerView(QWidget):
         self._fs_window.showFullScreen()
         self._fs_window.raise_()
         self._fs_window.activateWindow()
-        # Defer winId capture until the OS window and its child surface are
-        # realized, then resume playback on the new surface.
-        QTimer.singleShot(150, lambda: self._attach_vlc_to_fullscreen_window(was_playing))
+        self._fs_window._vlc_surface.winId()
+        # Let Qt finish showing the fullscreen native child before rebuilding
+        # VLC's video output around that new drawable.
+        QTimer.singleShot(
+            0,
+            lambda: self._attach_vlc_to_fullscreen_window(was_playing, position_ms),
+        )
         self._fullscreen_btn.setText("Exit Fullscreen")
 
-    def _attach_vlc_to_fullscreen_window(self, resume: bool = False) -> None:
+    def _attach_vlc_to_fullscreen_window(
+        self,
+        resume: bool = False,
+        position_ms: int | None = None,
+        attempt: int = 0,
+    ) -> None:
         if self._fs_window is None:
             return
-        self._attach_vlc_to(self._fs_window._vlc_surface)
-        if resume:
-            self._player.play()
+        surface = self._fs_window._vlc_surface
+        surface.show()
+        surface_is_ready = (
+            surface.isVisible() and surface.width() > 1 and surface.height() > 1
+        )
+        if not surface_is_ready and attempt < 5:
+            QTimer.singleShot(
+                40,
+                lambda: self._attach_vlc_to_fullscreen_window(
+                    resume,
+                    position_ms,
+                    attempt + 1,
+                ),
+            )
+            return
+        self._handoff_vlc_output_to(surface, resume, position_ms)
 
     def _exit_fullscreen(self) -> None:
         if self._fs_window is None:
             return
 
         was_playing = bool(self._player.is_playing())
+        position_ms = self._safe_player_time()
         if was_playing:
             self._player.pause()
 
@@ -1043,13 +1193,11 @@ class VideoPlayerView(QWidget):
         self._video_stack.setCurrentIndex(1)
 
         def _reattach() -> None:
-            self._attach_vlc_to(self._surface)
-            if was_playing:
-                self._player.play()
+            self._handoff_vlc_output_to(self._surface, was_playing, position_ms)
 
         # Give the embedded surface a tick to become front-most in the
         # compositor before handing VLC's output back to it.
-        QTimer.singleShot(100, _reattach)
+        QTimer.singleShot(0, _reattach)
 
     # ---------------------------------------------------------------- polling
 
