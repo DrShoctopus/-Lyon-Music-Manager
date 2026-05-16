@@ -384,8 +384,8 @@ class LibraryView(QWidget):
         menu.addSeparator()
         open_folder = menu.addAction("Open Containing Folder")
         edit_metadata = menu.addAction("Edit Metadata")
-        properties = menu.addAction("Properties")
         youtube_search = menu.addAction("Search YouTube for Artist, Album, and Track")
+        properties = menu.addAction("Properties")
         action = menu.exec(self.tracks.viewport().mapToGlobal(pos))
 
         if action == play_now:
