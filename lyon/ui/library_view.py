@@ -4,7 +4,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QDesktopServices, QStandardItem, QStandardItemModel
+from PySide6.QtGui import (
+    QDesktopServices, QKeySequence, QShortcut, QStandardItem, QStandardItemModel,
+)
 from PySide6.QtWidgets import (
     QAbstractItemView, QDialog, QDialogButtonBox, QFormLayout,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListView, QMenu, QPushButton,
@@ -13,6 +15,16 @@ from PySide6.QtWidgets import (
 
 from ..core.library import Library, Track
 from .widgets import format_duration
+
+
+# Sentinel stored in Qt.UserRole on the synthetic "All Albums" album row.
+_ALL_ALBUMS_KEY = "__all_albums__"
+# Roles used on the tracks model:
+#   Qt.UserRole         -> per-column sort key (int for #/Time, lowercase str otherwise)
+#   _TRACK_REF_ROLE     -> Track reference stored on column 0 only
+_TRACK_REF_ROLE = Qt.UserRole + 1
+
+_PLAYING_GLYPH = "▶"
 
 
 class LibraryView(QWidget):
@@ -28,16 +40,20 @@ class LibraryView(QWidget):
     def __init__(self, library: Library, parent: QWidget | None = None):
         super().__init__(parent)
         self.library = library
+        self._current_tracks: list[Track] = []
+        self._currently_playing: Track | None = None
 
-        # Top toolbar
+        # ---- Top toolbar
         top = QHBoxLayout()
         self.search = QLineEdit()
         self.search.setPlaceholderText("Search artist, album, or track...")
+        self.search.setClearButtonEnabled(True)
         self._search_timer = QTimer(self)
         self._search_timer.setSingleShot(True)
         self._search_timer.setInterval(150)
         self._search_timer.timeout.connect(self._do_search)
         self.search.textChanged.connect(self._on_search)
+
         self.play_btn = QPushButton("Play")
         self.play_btn.clicked.connect(self._play_selected)
         self.enqueue_btn = QPushButton("Enqueue")
@@ -52,7 +68,7 @@ class LibraryView(QWidget):
         top.addWidget(add_btn)
         top.addWidget(rescan_btn)
 
-        # Splitter: artists | albums | tracks
+        # ---- Artists / Albums lists
         self.artists = QListView()
         self.artists.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.artists_model = QStandardItemModel()
@@ -63,6 +79,7 @@ class LibraryView(QWidget):
         self.albums_model = QStandardItemModel()
         self.albums.setModel(self.albums_model)
 
+        # ---- Tracks table (sortable)
         self.tracks = QTableView()
         self.tracks.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.tracks.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -72,12 +89,37 @@ class LibraryView(QWidget):
         self.tracks.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tracks.customContextMenuRequested.connect(self._show_track_context_menu)
         self.tracks.verticalHeader().setVisible(False)
+
         self.tracks_model = QStandardItemModel(0, 5)
         self.tracks_model.setHorizontalHeaderLabels(["#", "Title", "Artist", "Album", "Time"])
+        # Sort using a dedicated UserRole key so # / Time sort numerically and
+        # text columns collate case-insensitively.
+        self.tracks_model.setSortRole(Qt.UserRole)
         self.tracks.setModel(self.tracks_model)
-        self.tracks.horizontalHeader().setStretchLastSection(False)
-        self.tracks.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.tracks.setSortingEnabled(True)
+        self.tracks.sortByColumn(0, Qt.AscendingOrder)
 
+        header = self.tracks.horizontalHeader()
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(0, QHeaderView.Fixed)
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.Interactive)
+        header.setSectionResizeMode(3, QHeaderView.Interactive)
+        header.setSectionResizeMode(4, QHeaderView.Fixed)
+        self.tracks.setColumnWidth(0, 50)
+        self.tracks.setColumnWidth(2, 180)
+        self.tracks.setColumnWidth(3, 200)
+        self.tracks.setColumnWidth(4, 70)
+
+        # Keyboard shortcuts scoped to the tracks table
+        QShortcut(QKeySequence(Qt.Key_Return), self.tracks,
+                  activated=self._play_selected, context=Qt.WidgetShortcut)
+        QShortcut(QKeySequence(Qt.Key_Enter), self.tracks,
+                  activated=self._play_selected, context=Qt.WidgetShortcut)
+        QShortcut(QKeySequence("Ctrl+E"), self.tracks,
+                  activated=self._enqueue_selected, context=Qt.WidgetShortcut)
+
+        # ---- Splitter
         splitter = QSplitter(Qt.Horizontal)
         for w, label in ((self.artists, "Artists"), (self.albums, "Albums")):
             box = QWidget()
@@ -98,7 +140,7 @@ class LibraryView(QWidget):
         splitter.addWidget(right)
         splitter.setSizes([180, 220, 600])
 
-        # Empty-state overlay shown when no tracks are present
+        # ---- Empty-state (library has no tracks at all)
         empty_widget = QWidget()
         empty_layout = QVBoxLayout(empty_widget)
         empty_layout.setAlignment(Qt.AlignCenter)
@@ -125,10 +167,10 @@ class LibraryView(QWidget):
         empty_layout.addLayout(empty_btns)
 
         self._browser_stack = QStackedWidget()
-        self._browser_stack.addWidget(empty_widget)  # index 0: empty state
-        self._browser_stack.addWidget(splitter)       # index 1: browser
+        self._browser_stack.addWidget(empty_widget)  # 0: empty
+        self._browser_stack.addWidget(splitter)       # 1: browser
 
-        # Track count / duration footer
+        # ---- Footer
         self._footer_label = QLabel("")
         self._footer_label.setObjectName("footerText")
 
@@ -142,7 +184,6 @@ class LibraryView(QWidget):
         self.albums.selectionModel().currentChanged.connect(lambda *_: self._refresh_tracks())
         self.tracks.doubleClicked.connect(self._on_track_double)
 
-        self._current_tracks: list[Track] = []
         self.refresh()
 
     # ------------------------------------------------------------------ data
@@ -166,9 +207,19 @@ class LibraryView(QWidget):
         if not idx.isValid():
             self._current_tracks = []
             self.tracks_model.removeRows(0, self.tracks_model.rowCount())
+            self._update_footer()
             return
         artist = idx.data(Qt.DisplayRole)
-        for album, _art in self.library.albums_for_artist(artist, None):
+        albums = list(self.library.albums_for_artist(artist, None))
+        # When the artist has multiple albums, offer an "All Albums" view.
+        if len(albums) >= 2:
+            all_item = QStandardItem("All Albums")
+            all_item.setData(_ALL_ALBUMS_KEY, Qt.UserRole)
+            font = all_item.font()
+            font.setItalic(True)
+            all_item.setFont(font)
+            self.albums_model.appendRow(all_item)
+        for album, _art in albums:
             it = QStandardItem(album)
             it.setData(album, Qt.UserRole)
             self.albums_model.appendRow(it)
@@ -177,43 +228,67 @@ class LibraryView(QWidget):
         else:
             self._current_tracks = []
             self.tracks_model.removeRows(0, self.tracks_model.rowCount())
+            self._update_footer()
 
     def _refresh_tracks(self) -> None:
-        self.tracks_model.removeRows(0, self.tracks_model.rowCount())
         ai = self.artists.currentIndex()
         bi = self.albums.currentIndex()
         if not ai.isValid() or not bi.isValid():
             self._current_tracks = []
+            self.tracks_model.removeRows(0, self.tracks_model.rowCount())
             self._update_footer()
             return
         artist = ai.data(Qt.DisplayRole)
-        album = bi.data(Qt.DisplayRole)
-        self._current_tracks = self.library.tracks_for_album(
-            artist, album, None
-        )
+        album_key = bi.data(Qt.UserRole)
+        if album_key == _ALL_ALBUMS_KEY:
+            tracks: list[Track] = []
+            for album_name, _ in self.library.albums_for_artist(artist, None):
+                tracks.extend(self.library.tracks_for_album(artist, album_name, None))
+            self._current_tracks = tracks
+        else:
+            album = album_key if isinstance(album_key, str) else bi.data(Qt.DisplayRole)
+            self._current_tracks = self.library.tracks_for_album(artist, album, None)
         self._populate_tracks(self._current_tracks)
 
     def _populate_tracks(self, tracks: list[Track]) -> None:
+        # Disable sorting while filling so the view doesn't re-sort per insert.
+        self.tracks.setSortingEnabled(False)
+        self.tracks_model.removeRows(0, self.tracks_model.rowCount())
         for tr in tracks:
             duration = format_duration(tr.duration)
             tooltip = self._track_tooltip(tr, duration)
-            row = [
-                QStandardItem(str(tr.track_no or "")),
-                QStandardItem(tr.title),
-                QStandardItem(tr.artist),
-                QStandardItem(tr.album),
-                QStandardItem(duration),
-            ]
-            for it in row:
+
+            n_item = QStandardItem(str(tr.track_no or ""))
+            n_item.setData(int(tr.track_no or 0), Qt.UserRole)
+            n_item.setData(tr, _TRACK_REF_ROLE)
+            n_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+
+            title_item = QStandardItem(tr.title)
+            title_item.setData((tr.title or "").lower(), Qt.UserRole)
+
+            artist_item = QStandardItem(tr.artist)
+            artist_item.setData((tr.artist or "").lower(), Qt.UserRole)
+
+            album_item = QStandardItem(tr.album)
+            album_item.setData((tr.album or "").lower(), Qt.UserRole)
+
+            time_item = QStandardItem(duration)
+            time_item.setData(int(tr.duration or 0), Qt.UserRole)
+            time_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+
+            for it in (n_item, title_item, artist_item, album_item, time_item):
                 it.setEditable(False)
                 it.setToolTip(tooltip)
-            self.tracks_model.appendRow(row)
+            self.tracks_model.appendRow([n_item, title_item, artist_item, album_item, time_item])
+        self.tracks.setSortingEnabled(True)
+        self._refresh_playing_indicator()
         self._update_footer()
 
     def _update_footer(self) -> None:
         count = len(self._current_tracks)
         if count == 0:
-            self._footer_label.setText("")
+            q = self.search.text().strip()
+            self._footer_label.setText(f'No tracks match "{q}"' if q else "")
             return
         total_s = sum(int(t.duration) for t in self._current_tracks)
         h, remainder = divmod(total_s, 3600)
@@ -225,6 +300,23 @@ class LibraryView(QWidget):
         plural = "track" if count == 1 else "tracks"
         self._footer_label.setText(f"{count} {plural} — {duration_str}")
 
+    # ------------------------------------------------------------------ row lookup
+    def _track_at_row(self, row: int) -> Track | None:
+        item = self.tracks_model.item(row, 0)
+        if item is None:
+            return None
+        track = item.data(_TRACK_REF_ROLE)
+        return track if isinstance(track, Track) else None
+
+    def _displayed_tracks(self) -> list[Track]:
+        out: list[Track] = []
+        for r in range(self.tracks_model.rowCount()):
+            t = self._track_at_row(r)
+            if t is not None:
+                out.append(t)
+        return out
+
+    # ------------------------------------------------------------------ details / tooltip
     @staticmethod
     def _track_details(track: Track, duration: str) -> list[tuple[str, str]]:
         file_type = Path(track.path).suffix.lstrip(".").upper() or "Unknown"
@@ -270,19 +362,28 @@ class LibraryView(QWidget):
     # ------------------------------------------------------------------ context menu
     def _show_track_context_menu(self, pos) -> None:
         idx = self.tracks.indexAt(pos)
-        if not idx.isValid() or not (0 <= idx.row() < len(self._current_tracks)):
+        if not idx.isValid():
+            return
+        track = self._track_at_row(idx.row())
+        if track is None:
             return
         self.tracks.selectRow(idx.row())
         self.tracks.setCurrentIndex(idx)
-        track = self._current_tracks[idx.row()]
 
         menu = QMenu(self)
+        play_now = menu.addAction("Play")
+        enqueue = menu.addAction("Enqueue")
+        menu.addSeparator()
         open_folder = menu.addAction("Open Containing Folder")
         properties = menu.addAction("Properties")
         youtube_search = menu.addAction("Search YouTube for Artist, Album, and Track")
         action = menu.exec(self.tracks.viewport().mapToGlobal(pos))
 
-        if action == open_folder:
+        if action == play_now:
+            self._play_selected()
+        elif action == enqueue:
+            self._enqueue_selected()
+        elif action == open_folder:
             self._open_containing_folder(track)
         elif action == properties:
             self._show_track_properties(track)
@@ -333,7 +434,6 @@ class LibraryView(QWidget):
 
     def _do_search(self) -> None:
         q = self.search.text().strip()
-        self.tracks_model.removeRows(0, self.tracks_model.rowCount())
         if not q:
             self._refresh_tracks()
             return
@@ -350,57 +450,87 @@ class LibraryView(QWidget):
         return [idx.row()] if idx.isValid() else []
 
     def _selected_tracks(self) -> list[Track]:
-        return [self._current_tracks[i] for i in self._selected_rows() if i < len(self._current_tracks)]
+        out: list[Track] = []
+        for r in self._selected_rows():
+            t = self._track_at_row(r)
+            if t is not None:
+                out.append(t)
+        return out
 
     def highlighted_playback(self) -> tuple[list[Track], int] | None:
-        """Return the visible track list and highlighted row for transport playback."""
+        """Visible track list (in current sort order) and highlighted row."""
         idx = self.tracks.currentIndex()
-        if not idx.isValid() or not (0 <= idx.row() < len(self._current_tracks)):
+        if not idx.isValid():
             return None
-        return list(self._current_tracks), idx.row()
+        tracks = self._displayed_tracks()
+        row = idx.row()
+        if not tracks or row < 0 or row >= len(tracks):
+            return None
+        return tracks, row
 
     def _play_selected(self) -> None:
-        if not self._current_tracks:
+        displayed = self._displayed_tracks()
+        if not displayed:
             return
-        rows = self._selected_rows()
-        if rows:
-            tracks = [self._current_tracks[i] for i in rows if i < len(self._current_tracks)]
-            if tracks:
-                self.play_tracks.emit(tracks, 0)
+        selected = self._selected_tracks()
+        if selected:
+            self.play_tracks.emit(selected, 0)
             return
-        self.play_tracks.emit(self._current_tracks, 0)
+        self.play_tracks.emit(displayed, 0)
 
     def _enqueue_selected(self) -> None:
-        tracks = self._selected_tracks() or list(self._current_tracks)
+        tracks = self._selected_tracks() or self._displayed_tracks()
         if tracks:
             self.enqueue_tracks.emit(tracks)
         else:
             self.status_message.emit("No tracks selected to enqueue.")
 
     def _on_track_double(self, index) -> None:
-        if not index.isValid() or not self._current_tracks:
+        if not index.isValid():
             return
-        track = self._current_tracks[index.row()]
+        track = self._track_at_row(index.row())
+        if track is None:
+            return
         if track.is_video:
             QDesktopServices.openUrl(QUrl.fromLocalFile(track.path))
             return
-        self.play_tracks.emit(self._current_tracks, index.row())
+        self.play_tracks.emit(self._displayed_tracks(), index.row())
 
+    # ------------------------------------------------------------------ playing indicator / selection sync
     def highlight_track(self, track: Track | None) -> None:
+        self._currently_playing = track
+        self._refresh_playing_indicator()
         if track is None:
             return
         row = self._row_for_track(track)
         if row < 0 and not self.search.text().strip():
             self._show_track_album(track)
             row = self._row_for_track(track)
+            self._refresh_playing_indicator()
         if row >= 0:
             self._select_track_row(row)
 
     def _row_for_track(self, track: Track) -> int:
-        for row, current in enumerate(self._current_tracks):
-            if self._same_track(current, track):
+        for row in range(self.tracks_model.rowCount()):
+            current = self._track_at_row(row)
+            if current and self._same_track(current, track):
                 return row
         return -1
+
+    def _refresh_playing_indicator(self) -> None:
+        target_row = (
+            self._row_for_track(self._currently_playing)
+            if self._currently_playing is not None
+            else -1
+        )
+        for r in range(self.tracks_model.rowCount()):
+            item = self.tracks_model.item(r, 0)
+            track = self._track_at_row(r)
+            if item is None or track is None:
+                continue
+            new_text = _PLAYING_GLYPH if r == target_row else str(track.track_no or "")
+            if item.text() != new_text:
+                item.setText(new_text)
 
     def _same_track(self, a: Track, b: Track) -> bool:
         return (a.id and b.id and a.id == b.id) or a.path == b.path
