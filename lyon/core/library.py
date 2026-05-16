@@ -368,6 +368,19 @@ class Library:
             ).fetchone()
         return (row["a"], row["b"]) if row else None
 
+    def update_track(self, track_id: int, fields: dict) -> None:
+        allowed = {"title", "artist", "album_artist", "album", "track_no", "disc_no", "year", "genre"}
+        safe = {k: v for k, v in fields.items() if k in allowed}
+        if not safe:
+            return
+        set_clause = ", ".join(f"{k} = ?" for k in safe)
+        with self._lock:
+            self.conn.execute(
+                f"UPDATE tracks SET {set_clause} WHERE id = ?",
+                [*safe.values(), track_id],
+            )
+            self.conn.commit()
+
     def remove_missing(self) -> int:
         with self._lock:
             rows = self.conn.execute("SELECT id, path FROM tracks").fetchall()
