@@ -345,4 +345,44 @@ QLabel#resultTitle {
     font-size: 10pt;
 }
 QLabel#warningLabel { color: #e8a830; font-size: 8pt; }
+
+/* Toast notifications (floating, bottom-center) */
+QFrame#toast {
+    background: #15181d;
+    border: 1px solid #27313b;
+    border-radius: 8px;
+    color: #eef7ff;
+    min-height: 32px;
+}
+QFrame#toast[level="success"] { border: 1px solid #5ff59b; }
+QFrame#toast[level="warning"] { border: 1px solid #ffd166; }
+QFrame#toast[level="error"]   { border: 1px solid #ff6b6b; }
+
+QLabel#toastLabel {
+    color: #eef7ff;
+    padding: 0 4px;
+    font-size: 10pt;
+}
+QToolButton#toastAction {
+    background: transparent;
+    color: #43e7ff;
+    font-weight: 600;
+    border: none;
+    padding: 4px 10px;
+}
+QToolButton#toastAction:hover {
+    color: #72f4ff;
+    background: rgba(107,231,255,0.10);
+    border-radius: 4px;
+}
+QToolButton#toastClose {
+    background: transparent;
+    color: #8a93a0;
+    border: none;
+    padding: 0 8px;
+    font-size: 14pt;
+    font-weight: 600;
+    min-width: 18px;
+}
+QToolButton#toastClose:hover { color: #ffffff; }
 """

@@ -4,8 +4,8 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QAction, QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
-    QAbstractSpinBox, QFileDialog, QHBoxLayout,
-    QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit,
+    QAbstractSpinBox, QFileDialog, QHBoxLayout, QLabel,
+    QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar,
     QStackedWidget, QStatusBar, QTabBar, QTextEdit, QToolButton,
     QVBoxLayout, QWidget,
 )
@@ -26,6 +26,7 @@ from .now_playing import NowPlayingView, TransportBar
 from .queue_dialog import QueueDialog
 from .ripper_view import RipperView
 from .styles import WMP_QSS
+from .toast import Toast
 from .video_player_view import VideoPlayerView
 from .yt_download_dialog import YtDownloadDialog
 from .youtube_view import YouTubeView
@@ -66,6 +67,7 @@ class MainWindow(QMainWindow):
         self._scan_thread: _LibraryScanThread | None = None
         self._equalizer_dialog: EqualizerDialog | None = None
         self._queue_dialog: QueueDialog | None = None
+        self._current_toast: Toast | None = None
         # Debounce rapid library_updated signals (e.g. playlist downloads).
         self._library_refresh_timer = QTimer(self)
         self._library_refresh_timer.setSingleShot(True)
@@ -152,15 +154,27 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(root)
 
-        # Status bar
+        # Status bar with permanent scan-progress indicator
         sb = QStatusBar()
         self.setStatusBar(sb)
+        self._scan_status_label = QLabel("")
+        self._scan_status_label.setObjectName("mutedTextSmall")
+        self._scan_status_label.setVisible(False)
+        self._scan_progress = QProgressBar()
+        self._scan_progress.setRange(0, 0)  # indeterminate (busy spinner)
+        self._scan_progress.setMaximumWidth(120)
+        self._scan_progress.setMaximumHeight(14)
+        self._scan_progress.setTextVisible(False)
+        self._scan_progress.setVisible(False)
+        sb.addPermanentWidget(self._scan_status_label)
+        sb.addPermanentWidget(self._scan_progress)
         sb.showMessage(f"{__app_name__} {__version__} - ready")
 
         # Wire library actions
         self.library_view.play_tracks.connect(self.player.set_queue)
         self.library_view.enqueue_tracks.connect(self._enqueue_tracks)
-        self.library_view.status_message.connect(lambda m: sb.showMessage(m, 3000))
+        self.library_view.status_message.connect(
+            lambda m: self.show_toast(m, level="warning"))
         self.player.track_changed.connect(self.library_view.highlight_track)
         self.library_view.request_add_folder.connect(self.add_folder)
         self.library_view.request_rescan.connect(self.rescan)
@@ -274,6 +288,55 @@ class MainWindow(QMainWindow):
                 return
         self.player.toggle()
 
+    # ------------------------------------------------------------------ toasts
+    def show_toast(
+        self,
+        message: str,
+        level: str = "info",
+        duration_ms: int = 2500,
+        action: tuple[str, "callable"] | None = None,
+    ) -> Toast:
+        """Display a transient toast notification above the transport bar.
+
+        `action` is an optional (label, callback) pair that adds an inline
+        button to the toast; clicking it fires the callback and dismisses.
+        """
+        if self._current_toast is not None:
+            self._current_toast.dismiss()
+            self._current_toast = None
+
+        action_label = action[0] if action else None
+        toast = Toast(
+            message,
+            level=level,
+            duration_ms=duration_ms,
+            action_label=action_label,
+            parent=self,
+        )
+        if action and toast.action_button is not None:
+            cb = action[1]
+            toast.action_button.clicked.connect(lambda: (cb(), toast.dismiss()))
+        toast.closed.connect(lambda: self._on_toast_closed(toast))
+        self._current_toast = toast
+        toast.show_at(self, bottom_margin=self._toast_bottom_margin())
+        return toast
+
+    def _on_toast_closed(self, toast: Toast) -> None:
+        if self._current_toast is toast:
+            self._current_toast = None
+
+    def _toast_bottom_margin(self) -> int:
+        # Float the toast above the transport bar when it's visible.
+        base = 24
+        if getattr(self, "transport", None) is not None and self.transport.isVisible():
+            base += self.transport.sizeHint().height()
+        return base
+
+    def resizeEvent(self, ev) -> None:  # noqa: N802 (Qt signature)
+        super().resizeEvent(ev)
+        if self._current_toast is not None:
+            self._current_toast.reposition(self._toast_bottom_margin())
+
     def _on_view_changed(self, _idx: int) -> None:
         current = self.stack.currentWidget()
         is_rip = current is self.ripper_view
@@ -319,32 +382,56 @@ class MainWindow(QMainWindow):
         total = len(self.player.queue())
         plural = "" if count == 1 else "s"
         queue_plural = "" if total == 1 else "s"
-        self.statusBar().showMessage(
-            f"Enqueued {count} track{plural}. Queue now has {total} track{queue_plural}.", 3000
+        self.show_toast(
+            f"Enqueued {count} track{plural} — queue now has {total} track{queue_plural}.",
+            level="info",
         )
 
     def _start_scan(self, roots: list[str], label: str, prune: bool = False) -> None:
         if self._scan_thread is not None and self._scan_thread.isRunning():
-            self.statusBar().showMessage("Library scan already running.", 4000)
+            self.show_toast("Library scan already running.", level="warning")
             return
-        self.statusBar().showMessage("Scanning library...")
+        self._scan_status_label.setText("Scanning library…")
+        self._scan_status_label.setVisible(True)
+        self._scan_progress.setVisible(True)
         self._scan_thread = _LibraryScanThread(self.library, list(roots), label, prune, self)
         self._scan_thread.finished_with.connect(self._on_scan_finished)
         self._scan_thread.finished.connect(self._scan_thread.deleteLater)
         self._scan_thread.start()
 
     def _on_scan_finished(self, n: int, removed: int, label: str) -> None:
-        parts = [f"{label}: {n} new tracks"]
+        self._scan_status_label.setVisible(False)
+        self._scan_status_label.setText("")
+        self._scan_progress.setVisible(False)
+        parts = [f"{label}: {n} new track{'' if n == 1 else 's'}"]
         if removed:
             parts.append(f"{removed} removed")
-        self.statusBar().showMessage(", ".join(parts), 5000)
+        message = ", ".join(parts)
+        toast_level = "success" if (n > 0 or removed > 0) else "info"
+        self.show_toast(message, level=toast_level, duration_ms=4000)
         self.library_view.refresh()
         self.video_player_view.refresh_catalog()
         self._scan_thread = None
 
     def remove_missing(self) -> None:
+        confirm = QMessageBox.question(
+            self,
+            "Remove missing files?",
+            "Scan the library for tracks whose files no longer exist on disk and remove them?\n\n"
+            "Files on disk are never deleted — only the library's records of missing files.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if confirm != QMessageBox.Yes:
+            return
         n = self.library.remove_missing()
-        self.statusBar().showMessage(f"Removed {n} missing tracks", 5000)
+        if n > 0:
+            self.show_toast(
+                f"Removed {n} missing track{'' if n == 1 else 's'}",
+                level="success",
+            )
+        else:
+            self.show_toast("No missing tracks were found.", level="info")
         self.library_view.refresh()
 
     def open_settings(self) -> None:
@@ -368,7 +455,7 @@ class MainWindow(QMainWindow):
             )
             if self.settings.library_paths != old_paths and self.settings.library_paths:
                 self._start_scan(self.settings.library_paths, "Scanned")
-            self.statusBar().showMessage("Settings saved.", 3000)
+            self.show_toast("Settings saved.", level="success")
 
     def _maybe_show_first_run(self) -> None:
         if self.settings.first_run_completed:
@@ -381,7 +468,7 @@ class MainWindow(QMainWindow):
             self.ripper_view.apply_settings(self.settings)
             if self.settings.library_paths:
                 self._start_scan(self.settings.library_paths, "Scanned")
-            self.statusBar().showMessage("Setup saved.", 3000)
+            self.show_toast("Setup saved.", level="success")
 
     def show_diagnostics(self) -> None:
         DiagnosticsDialog(parent=self).exec()
@@ -421,7 +508,7 @@ class MainWindow(QMainWindow):
         self.settings.equalizer_custom_curves = dict(settings.equalizer_custom_curves)
         self.player.set_equalizer(self.settings.equalizer_enabled, self.settings.equalizer_bands, self.settings.equalizer_preamp)
         self.video_player_view.apply_equalizer(self.settings.equalizer_enabled, self.settings.equalizer_bands, self.settings.equalizer_preamp)
-        self.statusBar().showMessage("Equalizer settings saved.", 3000)
+        self.show_toast("Equalizer settings saved.", level="success")
 
     def _clear_equalizer_dialog(self, *_args) -> None:
         self._equalizer_dialog = None
@@ -471,7 +558,11 @@ class MainWindow(QMainWindow):
                 self.library.add_file(f)
             self.library.commit()
             self.library_view.refresh()
-            self.statusBar().showMessage(f"Added {len(files)} file(s) to library.", 4000)
+            plural = "" if len(files) == 1 else "s"
+            self.show_toast(
+                f"Added {len(files)} file{plural} to library.",
+                level="success",
+            )
         ev.acceptProposedAction()
 
     def closeEvent(self, ev) -> None:
