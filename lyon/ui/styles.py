@@ -15,48 +15,51 @@ QMainWindow, QWidget#root {
         stop:0 #15181d, stop:0.45 #080b10, stop:1 #040609);
 }
 
-/* Title / chrome bar */
-QFrame#titlebar {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-        stop:0 #303945, stop:0.38 #1d232a, stop:0.39 #10151b, stop:1 #05070a);
-    border-bottom: 1px solid #050607;
-    min-height: 20px;
-}
-QLabel#titleLabel {
-    color: #f4fbff;
-    font-weight: 700;
-    padding-left: 14px;
-    letter-spacing: 1px;
-}
-
-/* Top section tabs (Now Playing / Library / Rip / YouTube style) */
-QFrame#tabbar {
+/* Header bar containing tab strip + tool buttons */
+QWidget#headerBar {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
         stop:0 #2d3742, stop:0.5 #141a21, stop:1 #070a0f);
     border-bottom: 1px solid #000;
     min-height: 36px;
 }
-QPushButton#navTab {
+
+/* Tab bar */
+QTabBar {
+    background: transparent;
+    border: none;
+    alignment: left;
+}
+QTabBar::tab {
     background: transparent;
     color: #cdd9e6;
     border: none;
+    border-bottom: 2px solid transparent;
     padding: 8px 18px;
     font-weight: 600;
+    min-height: 32px;
 }
-QPushButton#navTab:hover {
+QTabBar::tab:hover {
     color: #ffffff;
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
         stop:0 rgba(107,231,255,0.18), stop:1 rgba(38,96,180,0.08));
 }
-QPushButton#navTab:checked {
+QTabBar::tab:selected {
     color: #72f4ff;
     border-bottom: 2px solid #43e7ff;
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
         stop:0 rgba(92,213,255,0.18), stop:1 rgba(49,112,224,0.08));
 }
+QTabBar::scroller {
+    width: 20px;
+}
+QTabBar QToolButton {
+    background: #1a2030;
+    border: 1px solid #27313b;
+    color: #cdd9e6;
+}
 
-/* Secondary tool buttons in the tab bar (Queue / EQ / Settings) */
-QPushButton#navToolBtn {
+/* Tool buttons in the header bar (Queue / EQ / Settings) */
+QToolButton#navToolBtn {
     background: transparent;
     color: #8a9ab0;
     border: none;
@@ -65,12 +68,12 @@ QPushButton#navToolBtn {
     min-width: 0;
     font-size: 8pt;
 }
-QPushButton#navToolBtn:hover {
+QToolButton#navToolBtn:hover {
     color: #c8d8e8;
     background: rgba(107,231,255,0.10);
     border-left: 1px solid #1c2430;
 }
-QPushButton#navToolBtn:pressed {
+QToolButton#navToolBtn:pressed {
     color: #72f4ff;
     background: rgba(107,231,255,0.18);
     border-left: 1px solid #1c2430;

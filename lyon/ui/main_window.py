@@ -1,12 +1,13 @@
-"""Top-level window with WMP-style title, tab bar, stacked views."""
+"""Top-level window with native tab bar and stacked views."""
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QAction, QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
-    QAbstractSpinBox, QButtonGroup, QFileDialog, QFrame, QHBoxLayout, QLabel,
-    QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QPushButton,
-    QStackedWidget, QStatusBar, QTextEdit, QVBoxLayout, QWidget,
+    QAbstractSpinBox, QFileDialog, QHBoxLayout,
+    QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit,
+    QStackedWidget, QStatusBar, QTabBar, QTextEdit, QToolButton,
+    QVBoxLayout, QWidget,
 )
 
 from .. import __app_name__, __version__
@@ -16,6 +17,7 @@ from ..core.library import Library
 from ..core.playback_backend import close_dll_handles
 from ..core.player import Player
 from ..core.settings import Settings
+from .branding import app_icon
 from .diagnostics_dialog import DiagnosticsDialog
 from .equalizer_dialog import EqualizerDialog
 from .first_run_dialog import FirstRunDialog
@@ -51,6 +53,9 @@ class _LibraryScanThread(QThread):
 
 
 class MainWindow(QMainWindow):
+    # Tab display order — index matches the QStackedWidget page index.
+    _TAB_ORDER = ("Library", "Now Playing", "Video", "Rip", "YouTube")
+
     def __init__(self):
         super().__init__()
         self.settings = Settings.load()
@@ -62,12 +67,12 @@ class MainWindow(QMainWindow):
         self._equalizer_dialog: EqualizerDialog | None = None
         self._queue_dialog: QueueDialog | None = None
         # Debounce rapid library_updated signals (e.g. playlist downloads).
-        # timeout is connected after library_view is constructed below.
         self._library_refresh_timer = QTimer(self)
         self._library_refresh_timer.setSingleShot(True)
         self._library_refresh_timer.setInterval(300)
 
         self.setWindowTitle(__app_name__)
+        self.setWindowIcon(app_icon())
         self.resize(1100, 720)
         self.setMinimumSize(900, 600)
         self.setStyleSheet(WMP_QSS)
@@ -78,93 +83,72 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # ---- title bar
-        title = QFrame()
-        title.setObjectName("titlebar")
-        tlay = QHBoxLayout(title)
-        tlay.setContentsMargins(12, 0, 12, 0)
-        tlay.addWidget(QLabel(f"{__app_name__}"))
-        tlay.itemAt(0).widget().setObjectName("titleLabel")
-        tlay.addStretch(1)
-        layout.addWidget(title)
+        # ---- header bar: tab bar + tool buttons
+        header = QWidget()
+        header.setObjectName("headerBar")
+        hlayout = QHBoxLayout(header)
+        hlayout.setContentsMargins(8, 0, 8, 0)
+        hlayout.setSpacing(0)
 
-        # ---- tab strip
-        tabs = QFrame()
-        tabs.setObjectName("tabbar")
-        tlayout = QHBoxLayout(tabs)
-        tlayout.setContentsMargins(8, 0, 8, 0)
-        tlayout.setSpacing(0)
-        self.tab_group = QButtonGroup(self)
-        self.tab_group.setExclusive(True)
-        self._tab_buttons: dict[str, QPushButton] = {}
-        for name in ("Now Playing", "Library", "Rip", "YouTube", "Video"):
-            btn = QPushButton(name)
-            btn.setObjectName("navTab")
-            btn.setCheckable(True)
-            btn.setCursor(Qt.PointingHandCursor)
-            tlayout.addWidget(btn)
-            self.tab_group.addButton(btn)
-            self._tab_buttons[name] = btn
-        tlayout.addStretch(1)
-        queue_btn = QPushButton("Queue")
-        queue_btn.setObjectName("navToolBtn")
-        queue_btn.setToolTip("Show playback queue  [Ctrl+Q]")
-        queue_btn.clicked.connect(self.open_queue)
-        tlayout.addWidget(queue_btn)
-        equalizer_btn = QPushButton("10 Band EQ")
-        equalizer_btn.setObjectName("navToolBtn")
-        equalizer_btn.setToolTip("Open 10-band equalizer")
-        equalizer_btn.clicked.connect(self.open_equalizer)
-        tlayout.addWidget(equalizer_btn)
-        settings_btn = QPushButton("Settings")
-        settings_btn.setObjectName("navToolBtn")
-        settings_btn.setToolTip("Open Settings")
-        settings_btn.clicked.connect(self.open_settings)
-        tlayout.addWidget(settings_btn)
-        layout.addWidget(tabs)
+        self.tab_bar = QTabBar()
+        self.tab_bar.setExpanding(False)
+        self.tab_bar.setDrawBase(False)
+        self.tab_bar.setCursor(Qt.PointingHandCursor)
+        hlayout.addWidget(self.tab_bar)
+        hlayout.addStretch(1)
 
-        # ---- stacked content
+        for label, tooltip, handler in (
+            ("Queue",    "Show playback queue  [Ctrl+Q]", self.open_queue),
+            ("EQ",       "Open 10-band equalizer",        self.open_equalizer),
+            ("Settings", "Open Settings",                 self.open_settings),
+        ):
+            btn = QToolButton()
+            btn.setText(label)
+            btn.setToolTip(tooltip)
+            btn.setObjectName("navToolBtn")
+            btn.clicked.connect(handler)
+            hlayout.addWidget(btn)
+
+        layout.addWidget(header)
+
+        # ---- stacked content (order must match _TAB_ORDER)
         self.stack = QStackedWidget()
-        self.now_playing = NowPlayingView(self.player)
         self.library_view = LibraryView(self.library)
         self._library_refresh_timer.timeout.connect(self.library_view.refresh)
-        self.ripper_view = RipperView(self.settings, self.library)
-        self.youtube_view = YouTubeView()
+        self.now_playing = NowPlayingView(self.player)
         self.video_player_view = VideoPlayerView(
             library=self.library,
             initial_volume=self.settings.last_volume,
         )
         self.video_player_view.apply_equalizer(self.settings.equalizer_enabled, self.settings.equalizer_bands, self.settings.equalizer_preamp)
         self._library_refresh_timer.timeout.connect(self.video_player_view.refresh_catalog)
+        self.ripper_view = RipperView(self.settings, self.library)
+        self.youtube_view = YouTubeView()
 
-        self.stack.addWidget(self.now_playing)
-        self.stack.addWidget(self.library_view)
-        self.stack.addWidget(self.ripper_view)
-        self.stack.addWidget(self.youtube_view)
-        self.stack.addWidget(self.video_player_view)
+        # Build tab bar + stack together so indices always match _TAB_ORDER.
+        _tab_views = (
+            self.library_view,
+            self.now_playing,
+            self.video_player_view,
+            self.ripper_view,
+            self.youtube_view,
+        )
+        self._tab_index: dict[str, int] = {}
+        for idx, (name, view) in enumerate(zip(self._TAB_ORDER, _tab_views)):
+            self.tab_bar.addTab(name)
+            self.stack.addWidget(view)
+            self._tab_index[name] = idx
 
-        self._tab_buttons["Now Playing"].toggled.connect(
-            lambda c: c and self.stack.setCurrentWidget(self.now_playing))
-        self._tab_buttons["Library"].toggled.connect(
-            lambda c: c and self.stack.setCurrentWidget(self.library_view))
-        self._tab_buttons["Rip"].toggled.connect(
-            lambda c: c and self.stack.setCurrentWidget(self.ripper_view))
-        self._tab_buttons["YouTube"].toggled.connect(
-            lambda c: c and self.stack.setCurrentWidget(self.youtube_view))
-        self._tab_buttons["Video"].toggled.connect(
-            lambda c: c and self.stack.setCurrentWidget(self.video_player_view))
-        self._tab_buttons["Library"].setChecked(True)
-
+        self.tab_bar.currentChanged.connect(self.stack.setCurrentIndex)
+        self.stack.currentChanged.connect(self._on_view_changed)
         layout.addWidget(self.stack, 1)
 
         # ---- transport bar
         self.transport = TransportBar(self.player)
         self.transport.open_now_playing.connect(
-            lambda: self._tab_buttons["Now Playing"].setChecked(True))
+            lambda: self.tab_bar.setCurrentIndex(self._tab_index["Now Playing"]))
         self.transport.play_requested.connect(self._on_transport_play_requested)
         layout.addWidget(self.transport)
-
-        self.stack.currentChanged.connect(self._on_view_changed)
 
         self.setCentralWidget(root)
 
@@ -190,14 +174,16 @@ class MainWindow(QMainWindow):
 
         self.setAcceptDrops(True)
 
-        # Initial scan of saved roots. First-run setup owns this scan until the
-        # user confirms or skips setup, avoiding duplicate startup scans after
-        # upgrading older settings files that do not have first_run_completed.
+        # Initial scan of saved roots.
         if self.settings.library_paths and self.settings.first_run_completed:
             self._start_scan(self.settings.library_paths, "Scanned")
 
-        # Menu
+        # Menu + keyboard shortcuts
         self._build_menu()
+
+        # Ensure transport visibility matches initial tab (Library, index 0).
+        self._on_view_changed(0)
+
         QTimer.singleShot(0, self._maybe_show_first_run)
         backup_path = getattr(self.settings, "_corrupt_backup_path", None)
         if backup_path:
@@ -214,6 +200,7 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ menu
     def _build_menu(self) -> None:
         m = self.menuBar()
+
         file_menu = m.addMenu("&File")
         file_menu.addAction(QAction("Add Folder to Library...", self,
                                     triggered=self.add_folder))
@@ -221,7 +208,9 @@ class MainWindow(QMainWindow):
         file_menu.addAction(QAction("Remove Missing Files", self,
                                     triggered=self.remove_missing))
         file_menu.addSeparator()
-        file_menu.addAction(QAction("Exit", self, triggered=self.close))
+        exit_act = QAction("Exit", self, triggered=self.close)
+        exit_act.setMenuRole(QAction.MenuRole.QuitRole)
+        file_menu.addAction(exit_act)
 
         playback_menu = m.addMenu("&Playback")
         play_action = QAction("Play/Pause", self, triggered=self._on_transport_play_requested)
@@ -240,12 +229,26 @@ class MainWindow(QMainWindow):
         search_action.setShortcut("Ctrl+F")
         playback_menu.addAction(search_action)
 
+        # View menu with Ctrl+1..5 tab shortcuts
+        view_menu = m.addMenu("&View")
+        for idx, name in enumerate(self._TAB_ORDER):
+            act = QAction(name, self)
+            act.setShortcut(f"Ctrl+{idx + 1}")
+            act.triggered.connect(
+                lambda checked=False, i=idx: self.tab_bar.setCurrentIndex(i)
+            )
+            view_menu.addAction(act)
+
         settings_menu = m.addMenu("&Settings")
-        settings_menu.addAction(QAction("Open Settings", self, triggered=self.open_settings))
+        settings_act = QAction("Open Settings", self, triggered=self.open_settings)
+        settings_act.setMenuRole(QAction.MenuRole.ApplicationSpecificRole)
+        settings_menu.addAction(settings_act)
 
         help_menu = m.addMenu("&Help")
         help_menu.addAction(QAction("Runtime Diagnostics", self, triggered=self.show_diagnostics))
-        help_menu.addAction(QAction("About", self, triggered=self.show_about))
+        about_act = QAction("About", self, triggered=self.show_about)
+        about_act.setMenuRole(QAction.MenuRole.AboutRole)
+        help_menu.addAction(about_act)
 
     # ------------------------------------------------------------------ tabs
 
@@ -302,7 +305,7 @@ class MainWindow(QMainWindow):
     def _search_youtube_for_track(self, query: str) -> None:
         if not query:
             return
-        self._tab_buttons["YouTube"].setChecked(True)
+        self.tab_bar.setCurrentIndex(self._tab_index["YouTube"])
         if self.youtube_view.search_youtube(query):
             self.statusBar().showMessage(f"Searching YouTube for {query}", 3000)
         elif self.youtube_view.is_searching():
@@ -395,7 +398,7 @@ class MainWindow(QMainWindow):
         self._queue_dialog = None
 
     def _focus_library_search(self) -> None:
-        self._tab_buttons["Library"].setChecked(True)
+        self.tab_bar.setCurrentIndex(self._tab_index["Library"])
         self.library_view.search.setFocus()
         self.library_view.search.selectAll()
 
@@ -427,7 +430,7 @@ class MainWindow(QMainWindow):
         QMessageBox.about(
             self, "About " + __app_name__,
             f"<h3>{__app_name__} {__version__}</h3>"
-            "<p><b>Custom Built For Chuck Lyon</b></p>"
+            "<p><i>Dedicated to: Chuck Lyon</i></p>"
             "<p>Rip your CDs to FLAC, manage your library, search YouTube, "
             "and play music with a familiar Windows Media Player look.</p>"
             "<p>Uses MusicBrainz, Cover Art Archive, ffmpeg, and yt-dlp.</p>",
@@ -472,23 +475,14 @@ class MainWindow(QMainWindow):
         ev.acceptProposedAction()
 
     def closeEvent(self, ev) -> None:
-        # Stop audio first so it doesn't bleed past the visible window.
         self.player.stop()
-        # Tell the library scan to bail at the next directory boundary, then
-        # block until it actually exits. quit() alone is a no-op because the
-        # scan thread overrides run() and never enters an event loop.
         if self._scan_thread is not None and self._scan_thread.isRunning():
             self._scan_thread.request_stop()
             self._scan_thread.wait()
         self.youtube_view.shutdown()
-        # Cancel any in-flight rip / disc lookup so worker threads don't
-        # outlive the window.
         self.ripper_view.shutdown()
         self.settings.last_volume = self.player.volume()
         self.settings.save()
-        # Release native resources in dependency order: video VLC → audio VLC
-        # → library SQLite connection → metadata HTTP session/log handler →
-        # Windows DLL directory handles.
         self.video_player_view.cleanup()
         self.player.cleanup()
         self.library.close()
