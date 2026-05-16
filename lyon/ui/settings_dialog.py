@@ -7,12 +7,13 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
-    QHBoxLayout, QLabel, QLineEdit, QListWidget, QPushButton, QSpinBox,
-    QTabWidget, QVBoxLayout, QWidget,
+    QHBoxLayout, QLabel, QLineEdit, QListWidget, QMessageBox, QPushButton,
+    QSpinBox, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from .. import __app_name__, __version__
 from ..core.settings import Settings, normalize_library_paths
+from .branding import app_icon
 
 # (display label, settings key) pairs — order matches the combo box
 _RIP_FORMATS = [
@@ -37,6 +38,8 @@ class SettingsDialog(QDialog):
         self.resize(540, 420)
         self.result_settings = replace(settings)
         self.result_settings.library_paths = normalize_library_paths(settings.library_paths)
+        self._initial_music_root = settings.music_root.strip()
+        self._initial_library_paths = set(self.result_settings.library_paths)
 
         tabs = QTabWidget()
         tabs.addTab(self._build_library_tab(settings), "Library")
@@ -68,6 +71,12 @@ class SettingsDialog(QDialog):
         root_row.addWidget(browse)
         root_w = QWidget(); root_w.setLayout(root_row)
         form.addRow("Music folder:", root_w)
+
+        self._root_warn = QLabel("")
+        self._root_warn.setObjectName("warningLabel")
+        self._root_warn.setVisible(False)
+        form.addRow("", self._root_warn)
+        self.root_edit.textChanged.connect(self._check_root_path)
 
         folders_box = QVBoxLayout()
         self.library_paths = QListWidget()
@@ -170,6 +179,13 @@ class SettingsDialog(QDialog):
         self.contact = QLineEdit(settings.musicbrainz_contact)
         form.addRow("MusicBrainz contact:", self.contact)
 
+        self._contact_warn = QLabel("Contact still uses the placeholder 'example.invalid' — metadata lookups may be rate-limited or rejected.")
+        self._contact_warn.setObjectName("warningLabel")
+        self._contact_warn.setWordWrap(True)
+        self._contact_warn.setVisible("example.invalid" in settings.musicbrainz_contact)
+        form.addRow("", self._contact_warn)
+        self.contact.textChanged.connect(self._check_contact)
+
         self.audiodb_key = QLineEdit(settings.theaudiodb_api_key)
         self.audiodb_key.setPlaceholderText("123")
         form.addRow("TheAudioDB API key:", self.audiodb_key)
@@ -215,13 +231,26 @@ class SettingsDialog(QDialog):
         layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(6)
 
+        # Branding header: icon + app name + version stacked beside it.
+        brand = QHBoxLayout()
+        brand.setSpacing(14)
+        icon_label = QLabel()
+        icon_pixmap = app_icon().pixmap(64, 64)
+        if not icon_pixmap.isNull():
+            icon_label.setPixmap(icon_pixmap)
+            icon_label.setFixedSize(64, 64)
+            brand.addWidget(icon_label, 0, Qt.AlignTop)
+        text_col = QVBoxLayout()
+        text_col.setSpacing(2)
         name_label = QLabel(__app_name__)
-        name_label.setStyleSheet("font-size:18px;font-weight:700;")
-        layout.addWidget(name_label)
-
+        name_label.setObjectName("dialogTitle")
+        text_col.addWidget(name_label)
         version_label = QLabel(f"Version {__version__}")
-        version_label.setStyleSheet("font-size:12px;color:#888;")
-        layout.addWidget(version_label)
+        version_label.setObjectName("dialogSubtitle")
+        text_col.addWidget(version_label)
+        text_col.addStretch(1)
+        brand.addLayout(text_col, 1)
+        layout.addLayout(brand)
 
         layout.addSpacing(12)
 
@@ -235,11 +264,37 @@ class SettingsDialog(QDialog):
         layout.addSpacing(12)
 
         license_label = QLabel("Released under the MIT License.")
-        license_label.setStyleSheet("color:#888;")
+        license_label.setObjectName("mutedText")
         layout.addWidget(license_label)
 
         layout.addStretch(1)
         return w
+
+    # ------------------------------------------------------------------ inline validators
+
+    def _check_root_path(self, text: str) -> None:
+        stripped = text.strip()
+        if stripped and not Path(stripped).exists():
+            self._root_warn.setText(f"Path does not exist: {stripped}")
+            self._root_warn.setVisible(True)
+        else:
+            self._root_warn.setVisible(False)
+
+    def _check_contact(self, text: str) -> None:
+        self._contact_warn.setVisible("example.invalid" in text)
+
+    def _new_missing_paths(self, root_text: str, library_paths: list[str]) -> list[str]:
+        missing: list[str] = []
+        if (
+            root_text
+            and root_text != self._initial_music_root
+            and not Path(root_text).exists()
+        ):
+            missing.append(root_text)
+        for path in library_paths:
+            if path not in self._initial_library_paths and not Path(path).exists():
+                missing.append(path)
+        return missing
 
     # ------------------------------------------------------------------ helpers
 
@@ -269,6 +324,26 @@ class SettingsDialog(QDialog):
     # ------------------------------------------------------------------ accept
 
     def _accept(self) -> None:
+        root_text = self.root_edit.text().strip()
+        library_paths = normalize_library_paths([
+            self.library_paths.item(row).text()
+            for row in range(self.library_paths.count())
+        ])
+        missing = self._new_missing_paths(root_text, library_paths)
+        if missing:
+            shown = "\n".join(missing[:6])
+            if len(missing) > 6:
+                shown += f"\n...and {len(missing) - 6} more"
+            answer = QMessageBox.question(
+                self,
+                "Some paths do not exist",
+                f"The following paths were not found on disk:\n\n{shown}\n\nSave anyway?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                return
+
         self.result_settings.music_root = self.root_edit.text().strip() or self.result_settings.music_root
         self.result_settings.rip_format = self.rip_fmt.currentData() or "flac"
         self.result_settings.flac_compression = self.compression.value()
@@ -277,10 +352,7 @@ class SettingsDialog(QDialog):
         except ValueError:
             self.result_settings.rip_audio_bitrate = 320
         self.result_settings.cd_drive = self.drive.text().strip()
-        self.result_settings.library_paths = normalize_library_paths([
-            self.library_paths.item(row).text()
-            for row in range(self.library_paths.count())
-        ])
+        self.result_settings.library_paths = library_paths
         self.result_settings.eject_after_rip = self.eject.isChecked()
         self.result_settings.auto_lookup_metadata = self.lookup.isChecked()
         self.result_settings.cuetools_db_metadata_enabled = self.cuetools_db.isChecked()

@@ -3,11 +3,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QThread, QTimer, Signal
-from PySide6.QtGui import QPixmap, QStandardItem, QStandardItemModel
+from PySide6.QtCore import Qt, QRectF, QThread, QTimer, Signal
+from PySide6.QtGui import (
+    QColor, QLinearGradient, QPainter, QPainterPath,
+    QPixmap, QStandardItem, QStandardItemModel,
+)
 from PySide6.QtWidgets import (
     QAbstractItemView, QComboBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
-    QMessageBox, QProgressBar, QPushButton, QStyle, QStyleOptionProgressBar,
+    QMessageBox, QProgressBar, QPushButton,
     QStyledItemDelegate, QTableView, QVBoxLayout, QWidget,
 )
 
@@ -36,33 +39,102 @@ def _row_track_no(text: str | None) -> int:
         return 0
 
 
+# Sentinel values stored in Qt.UserRole for the Status column.
+_STATUS_WAITING   = None   # not yet started
+_STATUS_DONE      = 100    # completed successfully
+_STATUS_FAILED    = -1     # failed / not completed
+_STATUS_CANCELLED = -2     # cancelled mid-rip
+
+
+def _draw_app_progress_bar(painter: QPainter, rect, pct: int, label: str) -> None:
+    """Draw an app-styled progress bar with split-colour label text.
+
+    Matches the QProgressBar QSS (dark bg, blue-cyan gradient chunk).
+    Text is dark-grey over the filled chunk and light over the empty background.
+    pct: 0-100.
+    """
+    r = QRectF(rect)
+    chunk_w = r.width() * max(0, min(100, pct)) / 100.0
+
+    painter.save()
+
+    # Background
+    bg_path = QPainterPath()
+    bg_path.addRoundedRect(r, 5.0, 5.0)
+    painter.setPen(QColor("#27313b"))
+    painter.fillPath(bg_path, QColor("#070a0f"))
+    painter.drawPath(bg_path)
+
+    # Chunk
+    if chunk_w > 0.5:
+        grad = QLinearGradient(r.left(), 0.0, r.right(), 0.0)
+        grad.setColorAt(0.00, QColor("#0f3c9c"))
+        grad.setColorAt(0.55, QColor("#1b8dff"))
+        grad.setColorAt(1.00, QColor("#68f3ff"))
+        chunk_path = QPainterPath()
+        chunk_path.addRoundedRect(QRectF(r.left(), r.top(), chunk_w, r.height()), 4.0, 4.0)
+        chunk_path = chunk_path.intersected(bg_path)
+        painter.fillPath(chunk_path, grad)
+
+    # Label – dark grey over the filled area, light over the empty area
+    painter.setClipping(True)
+    if chunk_w > 0.5:
+        painter.setClipRect(QRectF(r.left(), r.top(), chunk_w, r.height()))
+        painter.setPen(QColor("#3a3a3a"))
+        painter.drawText(rect, Qt.AlignCenter, label)
+    rest_w = r.width() - chunk_w
+    if rest_w > 0.5:
+        painter.setClipRect(QRectF(r.left() + chunk_w, r.top(), rest_w, r.height()))
+        painter.setPen(QColor("#f0fbff"))
+        painter.drawText(rect, Qt.AlignCenter, label)
+    painter.setClipping(False)
+
+    painter.restore()
+
+
+class _AppProgressBar(QProgressBar):
+    """QProgressBar painted with the app's custom bar style and split-colour text."""
+
+    def paintEvent(self, event) -> None:
+        mn, mx, val = self.minimum(), self.maximum(), self.value()
+        pct = int(100 * (val - mn) / (mx - mn)) if mx > mn else 0
+        p = QPainter(self)
+        _draw_app_progress_bar(p, self.rect(), pct, f"{pct}%")
+        p.end()
+
+
 class _ProgressDelegate(QStyledItemDelegate):
-    """Paint the Status column as an inline percent-complete bar."""
+    """Paint the Status column.
+
+    Qt.UserRole semantics:
+      None           → "Waiting"  (gray text)
+      0 – 99 (int)   → progress bar at that percent
+      100            → "Done"     (full bar, "Done" label)
+      -1             → "Failed"   (red text)
+      -2             → "Cancelled"(gray text)
+    """
 
     def paint(self, painter, option, index) -> None:  # noqa: D102
-        pct = index.data(Qt.UserRole)
-        if pct is None:
-            super().paint(painter, option, index)
+        val = index.data(Qt.UserRole)
+
+        # Named terminal states — paint as coloured text.
+        if val is None or val in (_STATUS_FAILED, _STATUS_CANCELLED):
+            labels  = {None: "Waiting", _STATUS_FAILED: "Failed", _STATUS_CANCELLED: "Cancelled"}
+            colors  = {None: "#8a93a0", _STATUS_FAILED: "#e85050", _STATUS_CANCELLED: "#8a93a0"}
+            painter.save()
+            painter.setPen(QColor(colors[val]))
+            painter.drawText(option.rect, Qt.AlignCenter, labels[val])
+            painter.restore()
             return
 
         try:
-            pct = max(0, min(100, int(pct)))
+            pct = max(0, min(100, int(val)))
         except (TypeError, ValueError):
             super().paint(painter, option, index)
             return
 
-        progress = QStyleOptionProgressBar()
-        progress.rect = option.rect.adjusted(4, 4, -4, -4)
-        progress.minimum = 0
-        progress.maximum = 100
-        progress.progress = pct
-        progress.text = f"{pct}%"
-        progress.textAlignment = Qt.AlignCenter
-        progress.textVisible = True
-
-        widget = option.widget
-        style = widget.style() if widget is not None else self.parent().style()
-        style.drawControl(QStyle.CE_ProgressBar, progress, painter, widget)
+        label = "Done" if pct == _STATUS_DONE else f"{pct}%"
+        _draw_app_progress_bar(painter, option.rect.adjusted(4, 4, -4, -4), pct, label)
 
 
 class _DiscReadThread(QThread):
@@ -141,6 +213,7 @@ def _rip_request_from_toc(
     toc: cd_detect.DiscToc,
     album: AlbumInfo,
     folder: Path,
+    track_numbers: tuple[int, ...] = (),
 ) -> RipRequest:
     """Build a rip request using the already-read disc TOC.
 
@@ -155,6 +228,7 @@ def _rip_request_from_toc(
         track_offsets=tuple(toc.track_offsets),
         leadout_sector=toc.sectors,
         ctdb_toc=toc.ctdb_toc_string,
+        track_numbers=track_numbers,
     )
 
 
@@ -172,6 +246,9 @@ class RipperView(QWidget):
         self._disc_reader: _DiscReadThread | None = None
         self._lookup: _LookupThread | None = None
         self._search: _AlbumSearchThread | None = None
+        self._active_track_nums: set[int] = set()
+        self._done_track_nums: set[int] = set()
+        self._last_rip_folder: Path | None = None
 
         # Drive selector + actions
         toolbar = QHBoxLayout()
@@ -199,9 +276,9 @@ class RipperView(QWidget):
         # Album header (cover + editable artist/album)
         header = QHBoxLayout()
         self.cover = QLabel()
+        self.cover.setObjectName("ripperCover")
         self.cover.setFixedSize(140, 140)
         self.cover.setAlignment(Qt.AlignCenter)
-        self.cover.setStyleSheet("background:#0c0f14;border:1px solid #2a3340;")
         self.cover.setPixmap(cover_pixmap(None, 140, "CD"))
         header.addWidget(self.cover)
 
@@ -223,10 +300,13 @@ class RipperView(QWidget):
         self.relookup_btn = QPushButton("Search Online")
         self.relookup_btn.clicked.connect(self.search_online)
         year_row.addWidget(self.relookup_btn)
+        self.clear_meta_btn = QPushButton("Clear Metadata")
+        self.clear_meta_btn.clicked.connect(self._clear_metadata)
+        year_row.addWidget(self.clear_meta_btn)
         year_row.addStretch(1)
         meta.addLayout(year_row)
         self.dest_label = QLabel("")
-        self.dest_label.setStyleSheet("color:#8a93a0;")
+        self.dest_label.setObjectName("mutedTextSmall")
         meta.addWidget(self.dest_label)
         meta.addStretch(1)
         header.addLayout(meta, 1)
@@ -251,11 +331,17 @@ class RipperView(QWidget):
         # Status bar
         status_row = QHBoxLayout()
         self.status_label = QLabel("Insert a CD and click Read Disc.")
-        self.progress = QProgressBar()
+        self.progress = _AppProgressBar()
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
         status_row.addWidget(self.status_label, 1)
         status_row.addWidget(self.progress, 2)
+
+        self.retry_btn = QPushButton("Retry Failed Tracks")
+        self.retry_btn.setObjectName("accent")
+        self.retry_btn.setToolTip("Re-rip only the tracks that failed in the previous attempt")
+        self.retry_btn.clicked.connect(self._retry_failed)
+        self.retry_btn.setVisible(False)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
@@ -263,11 +349,13 @@ class RipperView(QWidget):
         layout.addLayout(header)
         layout.addWidget(self.tracks, 1)
         layout.addLayout(status_row)
+        layout.addWidget(self.retry_btn)
 
         # Wire ripper signals
         self.ripper.track_started.connect(self._on_track_started)
         self.ripper.track_progress.connect(self._on_track_progress)
         self.ripper.track_finished.connect(self._on_track_finished)
+        self.ripper.track_failed.connect(self._on_track_failed)
         self.ripper.finished.connect(self._on_rip_finished)
         self.ripper.log.connect(self.log)
         self.ripper.log.connect(self.status_label.setText)
@@ -369,6 +457,10 @@ class RipperView(QWidget):
         self.year_edit.clear()
         self.cover.setPixmap(cover_pixmap(None, 140, "CD"))
         self.progress.setValue(0)
+        self.retry_btn.setVisible(False)
+        self._active_track_nums = set()
+        self._done_track_nums = set()
+        self._last_rip_folder = None
 
     def _start_lookup(self, toc: cd_detect.DiscToc) -> None:
         self._lookup = _LookupThread(toc, self.settings, self)
@@ -386,11 +478,11 @@ class RipperView(QWidget):
         row = [
             QStandardItem(str(number)),
             QStandardItem(title),
-            QStandardItem("0%"),
+            QStandardItem("Waiting"),
         ]
         row[0].setEditable(False)
         row[2].setEditable(False)
-        row[2].setData(0, Qt.UserRole)
+        row[2].setData(_STATUS_WAITING, Qt.UserRole)
         self.tracks_model.appendRow(row)
         self.tracks.horizontalHeader().resizeSection(2, self._status_column_width)
 
@@ -399,7 +491,10 @@ class RipperView(QWidget):
         for r in range(self.tracks_model.rowCount()):
             if _row_track_no(self.tracks_model.item(r, 0).text()) == number:
                 status = self.tracks_model.item(r, 2)
-                status.setText(f"{pct}%")
+                if pct == _STATUS_DONE:
+                    status.setText("Done")
+                else:
+                    status.setText(f"{pct}%")
                 status.setData(pct, Qt.UserRole)
                 break
 
@@ -439,6 +534,13 @@ class RipperView(QWidget):
         self.status_label.setText(f"Found: {info.artist} - {info.album}")
         self.start_btn.setEnabled(True)
         self._update_dest()
+
+    def _clear_metadata(self) -> None:
+        self.tracks_model.removeRows(0, self.tracks_model.rowCount())
+        self.album_edit.clear()
+        self.artist_edit.clear()
+        self.year_edit.clear()
+        self.cover.setPixmap(cover_pixmap(None, 140, "CD"))
 
     def search_online(self) -> None:
         artist = self.artist_edit.text().strip()
@@ -513,13 +615,17 @@ class RipperView(QWidget):
                 return
 
         folder = unique_target_folder(self.settings, album, create=True)
+        self._last_rip_folder = folder
         self.start_btn.setEnabled(False)
         self.cancel_btn.setEnabled(True)
         self.detect_btn.setEnabled(False)
+        self.retry_btn.setVisible(False)
         self.progress.setRange(0, len(album.tracks))
         self.progress.setValue(0)
+        self._active_track_nums = {tr.number for tr in album.tracks}
+        self._done_track_nums = set()
         for tr in album.tracks:
-            self._set_track_progress(tr.number, 0)
+            self._set_track_status_sentinel(tr.number, _STATUS_WAITING)
 
         req = _rip_request_from_toc(self._toc, album, folder)
         self.ripper.start(req)
@@ -576,23 +682,95 @@ class RipperView(QWidget):
 
     # ------------------------------------------------------------------ progress
     def _on_track_started(self, n: int, title: str) -> None:
-        self.status_label.setText(f"Ripping {n:02d}: {title}")
-        self._set_track_progress(n, 0)
+        self.status_label.setText(f"Ripping track {n:02d}: {title}")
+        self._set_track_progress(n, 1)
 
     def _on_track_progress(self, n: int, pct: int) -> None:
-        self._set_track_progress(n, pct)
+        self._set_track_progress(n, max(1, pct))
 
     def _on_track_finished(self, n: int, path: str) -> None:
-        self._set_track_progress(n, 100)
+        self._set_track_progress(n, _STATUS_DONE)
+        self._done_track_nums.add(n)
         self.progress.setValue(self.progress.value() + 1)
         self.library.add_file(path, disc_id=self._toc.discid if self._toc else None)
         self.library.commit()
+
+    def _on_track_failed(self, n: int, _reason: str) -> None:
+        self._set_track_status_sentinel(n, _STATUS_FAILED)
 
     def _on_rip_finished(self, ok: bool, msg: str) -> None:
         self.status_label.setText(msg)
         self.start_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
         self.detect_btn.setEnabled(True)
+
+        if not ok:
+            # Mark any track that wasn't completed as Failed (or Cancelled).
+            cancelled = "cancel" in msg.lower()
+            sentinel = _STATUS_CANCELLED if cancelled else _STATUS_FAILED
+            for n in self._active_track_nums - self._done_track_nums:
+                if self._track_status(n) != _STATUS_FAILED:
+                    self._set_track_status_sentinel(n, sentinel)
+            if not cancelled and self._track_nums_with_status(_STATUS_FAILED):
+                self.retry_btn.setVisible(True)
+
         if ok and self.settings.eject_after_rip and self._toc:
             cd_detect.eject(self._toc.drive)
         self.rip_completed.emit()
+
+    def _set_track_status_sentinel(self, number: int, sentinel) -> None:
+        labels = {
+            _STATUS_WAITING: "Waiting",
+            _STATUS_FAILED: "Failed",
+            _STATUS_CANCELLED: "Cancelled",
+        }
+        for r in range(self.tracks_model.rowCount()):
+            if _row_track_no(self.tracks_model.item(r, 0).text()) == number:
+                status_item = self.tracks_model.item(r, 2)
+                status_item.setText(labels.get(sentinel, ""))
+                status_item.setData(sentinel, Qt.UserRole)
+                break
+
+    def _track_status(self, number: int):
+        for r in range(self.tracks_model.rowCount()):
+            if _row_track_no(self.tracks_model.item(r, 0).text()) == number:
+                return self.tracks_model.item(r, 2).data(Qt.UserRole)
+        return None
+
+    def _track_nums_with_status(self, sentinel) -> set[int]:
+        nums: set[int] = set()
+        for r in range(self.tracks_model.rowCount()):
+            number = _row_track_no(self.tracks_model.item(r, 0).text())
+            if number and self.tracks_model.item(r, 2).data(Qt.UserRole) == sentinel:
+                nums.add(number)
+        return nums
+
+    def _retry_failed(self) -> None:
+        """Re-rip only the tracks that are currently marked Failed."""
+        if not self._toc:
+            return
+        album = self._album_from_edits()
+        failed_nums = self._track_nums_with_status(_STATUS_FAILED)
+        if not failed_nums:
+            return
+
+        folder = self._last_rip_folder or unique_target_folder(self.settings, album, create=True)
+
+        self.start_btn.setEnabled(False)
+        self.cancel_btn.setEnabled(True)
+        self.detect_btn.setEnabled(False)
+        self.retry_btn.setVisible(False)
+        self.progress.setRange(0, len(failed_nums))
+        self.progress.setValue(0)
+        self._active_track_nums = set(failed_nums)
+        self._done_track_nums = set()
+        for n in sorted(failed_nums):
+            self._set_track_status_sentinel(n, _STATUS_WAITING)
+
+        req = _rip_request_from_toc(
+            self._toc,
+            album,
+            folder,
+            track_numbers=tuple(sorted(failed_nums)),
+        )
+        self.ripper.start(req)

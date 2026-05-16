@@ -1,101 +1,116 @@
+import io
 import importlib.util
 import sys
 import types
 
 
-def _install_dependency_stubs() -> None:
-    pyside = types.ModuleType("PySide6")
-    qtcore = types.ModuleType("PySide6.QtCore")
+def _install_dependency_stubs() -> bool:
+    try:
+        import PySide6.QtCore  # noqa: F401
+        import PySide6.QtGui  # noqa: F401
+        import PySide6.QtWidgets  # noqa: F401
+        need_pyside_stubs = False
+    except ImportError:
+        need_pyside_stubs = True
 
-    class _Signal:
-        def __init__(self, *_, **__):
-            pass
+    if need_pyside_stubs:
+        pyside = types.ModuleType("PySide6")
+        qtcore = types.ModuleType("PySide6.QtCore")
 
-        def connect(self, *_):
-            pass
+        class _Signal:
+            def __init__(self, *_, **__):
+                self._callbacks = []
 
-        def emit(self, *_):
-            pass
+            def connect(self, callback):
+                self._callbacks.append(callback)
 
-    class _QObject:
-        def __init__(self, *_, **__):
-            pass
+            def emit(self, *args):
+                for callback in list(self._callbacks):
+                    callback(*args)
 
-        def moveToThread(self, *_):
-            pass
+        class _QObject:
+            def __init__(self, *_, **__):
+                pass
 
-    class _QThread:
-        started = _Signal()
+            def moveToThread(self, *_):
+                pass
 
-        def __init__(self, *_, **__):
-            pass
+            def deleteLater(self):
+                pass
 
-        def isRunning(self):
-            return False
+        class _QThread:
+            started = _Signal()
 
-        def start(self):
-            pass
+            def __init__(self, *_, **__):
+                pass
 
-        def quit(self):
-            pass
+            def isRunning(self):
+                return False
 
-        def wait(self):
-            pass
+            def start(self):
+                pass
 
-    qtgui = types.ModuleType("PySide6.QtGui")
-    qtwidgets = types.ModuleType("PySide6.QtWidgets")
+            def quit(self):
+                pass
 
-    class _Qt:
-        AlignCenter = 1
-        ElideRight = 1
-        KeepAspectRatio = 1
-        SmoothTransformation = 1
-        UserRole = 1
+            def wait(self):
+                pass
 
-    class _QSize:
-        def __init__(self, *_, **__):
-            pass
+        qtgui = types.ModuleType("PySide6.QtGui")
+        qtwidgets = types.ModuleType("PySide6.QtWidgets")
 
-    class _Widget:
-        def __init__(self, *_, **__):
-            pass
+        class _Qt:
+            AlignCenter = 1
+            ElideRight = 1
+            KeepAspectRatio = 1
+            SmoothTransformation = 1
+            UserRole = 1
 
-    class _QMessageBox(_Widget):
-        Yes = 1
-        No = 0
+        class _QSize:
+            def __init__(self, *_, **__):
+                pass
 
-        @staticmethod
-        def information(*_, **__):
-            pass
+        class _Widget:
+            def __init__(self, *_, **__):
+                pass
 
-        @staticmethod
-        def question(*_, **__):
-            return _QMessageBox.No
+        class _QMessageBox(_Widget):
+            Yes = 1
+            No = 0
 
-    qtcore.QObject = _QObject
-    qtcore.QThread = _QThread
-    qtcore.Signal = _Signal
-    qtcore.Qt = _Qt
-    qtcore.QSize = _QSize
-    qtgui.QColor = _Widget
-    qtgui.QPainter = _Widget
-    qtgui.QPainter.Antialiasing = 1
-    qtgui.QPixmap = _Widget
-    qtgui.QStandardItem = _Widget
-    qtgui.QStandardItemModel = _Widget
-    for name in (
-        "QAbstractItemView", "QComboBox", "QHBoxLayout", "QHeaderView",
-        "QLabel", "QLineEdit", "QProgressBar", "QPushButton", "QStyle",
-        "QStyleOptionProgressBar", "QStyledItemDelegate", "QTableView",
-        "QVBoxLayout", "QWidget",
-    ):
-        setattr(qtwidgets, name, _Widget)
-    qtwidgets.QMessageBox = _QMessageBox
-    qtwidgets.QStyle.CE_ProgressBar = 1
-    sys.modules["PySide6"] = pyside
-    sys.modules["PySide6.QtCore"] = qtcore
-    sys.modules["PySide6.QtGui"] = qtgui
-    sys.modules["PySide6.QtWidgets"] = qtwidgets
+            @staticmethod
+            def information(*_, **__):
+                pass
+
+            @staticmethod
+            def question(*_, **__):
+                return _QMessageBox.No
+
+        qtcore.QObject = _QObject
+        qtcore.QThread = _QThread
+        qtcore.Signal = _Signal
+        qtcore.Qt = _Qt
+        qtcore.QSize = _QSize
+        qtcore.QTimer = _Widget
+        qtgui.QColor = _Widget
+        qtgui.QPainter = _Widget
+        qtgui.QPainter.Antialiasing = 1
+        qtgui.QPixmap = _Widget
+        qtgui.QStandardItem = _Widget
+        qtgui.QStandardItemModel = _Widget
+        for name in (
+            "QAbstractItemView", "QComboBox", "QHBoxLayout", "QHeaderView",
+            "QLabel", "QLineEdit", "QProgressBar", "QPushButton", "QStyle",
+            "QStyleOptionProgressBar", "QStyledItemDelegate", "QTableView",
+            "QVBoxLayout", "QWidget",
+        ):
+            setattr(qtwidgets, name, _Widget)
+        qtwidgets.QMessageBox = _QMessageBox
+        qtwidgets.QStyle.CE_ProgressBar = 1
+        sys.modules["PySide6"] = pyside
+        sys.modules["PySide6.QtCore"] = qtcore
+        sys.modules["PySide6.QtGui"] = qtgui
+        sys.modules["PySide6.QtWidgets"] = qtwidgets
 
     if importlib.util.find_spec("musicbrainzngs") is None:
         musicbrainzngs = types.ModuleType("musicbrainzngs")
@@ -108,8 +123,10 @@ def _install_dependency_stubs() -> None:
         requests.RequestException = Exception
         sys.modules["requests"] = requests
 
+    return need_pyside_stubs
 
-_install_dependency_stubs()
+
+_PYSIDE_STUBBED = _install_dependency_stubs()
 
 from lyon.core.cd_detect import DiscToc  # noqa: E402
 from lyon.core.metadata import AlbumInfo, TrackInfo  # noqa: E402
@@ -118,6 +135,7 @@ from lyon.core.ripper import (  # noqa: E402
     FfmpegAttemptFailure,
     RipFailure,
     RipRequest,
+    RipWorker,
     _build_libcdio_track_command,
     _build_raw_cdda_ffmpeg_command,
     _ffmpeg_format_listing_has_demuxer,
@@ -131,6 +149,10 @@ from lyon.core.ripper import (  # noqa: E402
     unique_target_folder,
 )
 from lyon.ui.ripper_view import _rip_request_from_toc  # noqa: E402
+
+if _PYSIDE_STUBBED:
+    for _module_name in ("PySide6.QtWidgets", "PySide6.QtGui", "PySide6.QtCore", "PySide6"):
+        sys.modules.pop(_module_name, None)
 
 
 def test_track_sector_span_normalises_musicbrainz_toc_offsets():
@@ -148,7 +170,7 @@ def test_libcdio_command_extracts_one_audio_stream_with_toc_timing(tmp_path):
         "ffmpeg",
         "D:",
         out,
-        8,
+        ["-c:a", "flac", "-compression_level", "8"],
         (15000, 30000),
         input_seek=True,
     )
@@ -163,7 +185,11 @@ def test_libcdio_command_extracts_one_audio_stream_with_toc_timing(tmp_path):
 def test_raw_cdda_command_uses_ffmpeg_as_flac_encoder(tmp_path):
     out = tmp_path / "track.flac"
 
-    cmd = _build_raw_cdda_ffmpeg_command("ffmpeg", out, 5)
+    cmd = _build_raw_cdda_ffmpeg_command(
+        "ffmpeg",
+        out,
+        ["-c:a", "flac", "-compression_level", "5"],
+    )
 
     assert cmd[cmd.index("-f") + 1] == "s16le"
     assert cmd[cmd.index("-ar") + 1] == "44100"
@@ -190,6 +216,71 @@ def test_parse_ffmpeg_progress_bounds_before_completion():
 def test_parse_ffmpeg_progress_ignores_lines_without_time():
     assert _parse_progress("ffmpeg diagnostic", 150) is None
     assert _parse_progress("time=00:00:01.00", 0) is None
+
+
+class _FakeFfmpegProcess:
+    def __init__(self, stdout: bytes, returncode: int | None = None):
+        self.stdout = io.BytesIO(stdout)
+        self.returncode = returncode
+        self.terminated = False
+        self.killed = False
+
+    def poll(self):
+        return self.returncode
+
+    def terminate(self):
+        self.terminated = True
+        self.returncode = -15
+
+    def kill(self):
+        self.killed = True
+        self.returncode = -9
+
+    def wait(self, timeout=None):
+        if self.returncode is None:
+            self.returncode = 1
+        return self.returncode
+
+
+def _rip_worker(tmp_path) -> RipWorker:
+    album = AlbumInfo(artist="Artist", album="Album")
+    request = RipRequest("D:", album, tmp_path)
+    return RipWorker(Settings(), request)
+
+
+def test_run_ffmpeg_cancel_terminates_process_and_removes_partial(monkeypatch, tmp_path):
+    proc = _FakeFfmpegProcess(b"size=1kB time=00:00:01.00\r", returncode=None)
+    monkeypatch.setattr("subprocess.Popen", lambda *args, **kwargs: proc)
+    out = tmp_path / "partial.flac"
+    out.write_bytes(b"partial")
+    worker = _rip_worker(tmp_path)
+    worker.cancel()
+
+    failure = worker._run_ffmpeg(["ffmpeg"], 1, out, 10.0)
+
+    assert failure is not None
+    assert failure.reason == "Cancelled by user."
+    assert proc.terminated
+    assert not out.exists()
+
+
+def test_run_ffmpeg_captures_carriage_return_output(monkeypatch, tmp_path):
+    proc = _FakeFfmpegProcess(
+        b"frame=1 time=00:00:01.00\rsize=2kB time=00:00:02.00\r",
+        returncode=None,
+    )
+    monkeypatch.setattr("subprocess.Popen", lambda *args, **kwargs: proc)
+    out = tmp_path / "failed.flac"
+    worker = _rip_worker(tmp_path)
+
+    failure = worker._run_ffmpeg(["ffmpeg"], 1, out, 10.0)
+
+    assert failure is not None
+    assert failure.returncode == 1
+    assert failure.output == [
+        "frame=1 time=00:00:01.00",
+        "size=2kB time=00:00:02.00",
+    ]
 
 
 def test_ffmpeg_format_listing_detects_libcdio_demuxer():
@@ -254,6 +345,97 @@ def test_rip_request_reuses_detected_disc_toc(tmp_path):
     assert request.target_dir == tmp_path
     assert request.track_offsets == (150, 15150)
     assert request.leadout_sector == 30150
+    assert request.track_numbers == ()
+
+
+def test_rip_worker_filters_retry_tracks_without_shrinking_album_metadata(monkeypatch, tmp_path):
+    album = AlbumInfo(artist="Artist", album="Album")
+    album.tracks = [
+        TrackInfo(number=1, title="First"),
+        TrackInfo(number=2, title="Second"),
+        TrackInfo(number=3, title="Third"),
+    ]
+    request = RipRequest(
+        "D:",
+        album,
+        tmp_path,
+        track_offsets=(150, 15150, 30150),
+        leadout_sector=45150,
+        track_numbers=(2,),
+    )
+    worker = RipWorker(
+        Settings(download_artwork=False, ctdb_verify_rips=False),
+        request,
+    )
+    ripped: list[tuple[int, str]] = []
+    tag_calls: list[tuple[int, int, str]] = []
+    finished: list[tuple[bool, str]] = []
+
+    def fake_rip_track(self, ffmpeg, track_no, title, out):
+        ripped.append((track_no, out.name))
+        out.write_bytes(b"audio")
+        return None
+
+    def fake_write_tags(path, tagged_album, track, artwork):
+        tag_calls.append((track.number, len(tagged_album.tracks), path.name))
+        return True
+
+    monkeypatch.setattr("lyon.core.ripper.find_ffmpeg", lambda: "ffmpeg")
+    monkeypatch.setattr("lyon.core.ripper._ffmpeg_supports_demuxer", lambda *_: True)
+    monkeypatch.setattr(RipWorker, "_rip_track", fake_rip_track)
+    monkeypatch.setitem(
+        sys.modules,
+        "lyon.core.tagger",
+        types.SimpleNamespace(write_tags=fake_write_tags),
+    )
+    worker.finished.connect(lambda ok, msg: finished.append((ok, msg)))
+
+    worker.run()
+
+    assert ripped == [(2, "02 - Second.flac")]
+    assert tag_calls == [(2, 3, "02 - Second.flac")]
+    assert finished[-1] == (True, "Rip complete.")
+
+
+def test_rip_worker_reports_tag_failures_as_failed_not_finished(monkeypatch, tmp_path):
+    album = AlbumInfo(artist="Artist", album="Album")
+    album.tracks = [TrackInfo(number=1, title="First")]
+    request = RipRequest(
+        "D:",
+        album,
+        tmp_path,
+        track_offsets=(150,),
+        leadout_sector=15150,
+    )
+    worker = RipWorker(
+        Settings(download_artwork=False, ctdb_verify_rips=False),
+        request,
+    )
+    failed: list[tuple[int, str]] = []
+    completed: list[tuple[int, str]] = []
+    finished: list[tuple[bool, str]] = []
+
+    def fake_rip_track(self, ffmpeg, track_no, title, out):
+        out.write_bytes(b"audio")
+        return None
+
+    monkeypatch.setattr("lyon.core.ripper.find_ffmpeg", lambda: "ffmpeg")
+    monkeypatch.setattr("lyon.core.ripper._ffmpeg_supports_demuxer", lambda *_: True)
+    monkeypatch.setattr(RipWorker, "_rip_track", fake_rip_track)
+    monkeypatch.setitem(
+        sys.modules,
+        "lyon.core.tagger",
+        types.SimpleNamespace(write_tags=lambda *_: False),
+    )
+    worker.track_failed.connect(lambda n, reason: failed.append((n, reason)))
+    worker.track_finished.connect(lambda n, path: completed.append((n, path)))
+    worker.finished.connect(lambda ok, msg: finished.append((ok, msg)))
+
+    worker.run()
+
+    assert failed == [(1, "Track ripped but audio tags could not be written.")]
+    assert completed == []
+    assert finished[-1] == (False, "Rip finished with errors.")
 
 
 def test_libcdio_failure_summary_recommends_supported_ffmpeg():

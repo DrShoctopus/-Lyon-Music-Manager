@@ -10,12 +10,16 @@ import ctypes
 from ctypes import wintypes
 import importlib
 import importlib.util
+import logging
 import os
 import string
 import sys
 from dataclasses import dataclass, field
+from typing import Any
 
 from .settings import bundled_bin_dir
+
+LOG = logging.getLogger(__name__)
 
 DRIVE_CDROM = 5  # GetDriveTypeW return value
 GENERIC_READ = 0x80000000
@@ -74,6 +78,7 @@ _bind_winapi()
 
 # Guard against repeated PATH mutation across successive read_disc calls.
 _bin_dir_on_path = False
+_DLL_DIRECTORY_HANDLES: list[Any] = []
 
 
 @dataclass
@@ -141,11 +146,23 @@ def _ensure_bin_dir_on_path() -> None:
         current = os.environ.get("PATH", "")
         if path_str not in current.split(os.pathsep):
             os.environ["PATH"] = path_str + (os.pathsep + current if current else "")
-        try:
-            os.add_dll_directory(path_str)  # type: ignore[attr-defined]
-        except (AttributeError, OSError):
-            pass
+        add_dll_directory = getattr(os, "add_dll_directory", None)
+        if add_dll_directory is not None:
+            try:
+                _DLL_DIRECTORY_HANDLES.append(add_dll_directory(path_str))
+            except OSError as exc:
+                LOG.debug("Could not add libdiscid DLL directory %s: %s", bin_dir, exc)
     _bin_dir_on_path = True
+
+
+def close_dll_handles() -> None:
+    """Release Windows DLL directory handles acquired for bundled libdiscid."""
+    for handle in _DLL_DIRECTORY_HANDLES:
+        try:
+            handle.close()
+        except Exception as exc:
+            LOG.debug("Could not close libdiscid DLL directory handle: %s", exc)
+    _DLL_DIRECTORY_HANDLES.clear()
 
 
 def read_disc(drive: str | None = None) -> DiscToc | None:

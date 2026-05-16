@@ -1,4 +1,5 @@
 """Tests for lyon.core.ctdb_verify — CRC computation and CTDB lookup parsing."""
+import io
 import struct
 import sys
 import types
@@ -43,10 +44,27 @@ def _make_pcm(samples: list[int]) -> bytes:
     return struct.pack(f"<{len(samples)}I", *samples)
 
 
-def _pcm_file(tmp_path, samples: list[int], name: str = "track.raw") -> object:
-    p = tmp_path / name
-    p.write_bytes(_make_pcm(samples))
-    return p
+class _FakePopen:
+    def __init__(self, stdout: bytes, returncode: int = 0):
+        self.stdout = io.BytesIO(stdout)
+        self.returncode = returncode
+        self.killed = False
+
+    def wait(self, timeout=None):
+        return self.returncode
+
+    def poll(self):
+        return self.returncode
+
+    def kill(self):
+        self.killed = True
+        self.returncode = -9
+
+
+def _patch_popen(monkeypatch, stdout: bytes, returncode: int = 0):
+    proc = _FakePopen(stdout, returncode)
+    monkeypatch.setattr("subprocess.Popen", lambda *args, **kwargs: proc)
+    return proc
 
 
 # ---------------------------------------------------------------------------
@@ -58,13 +76,7 @@ def test_crc_simple_non_boundary(monkeypatch, tmp_path):
     samples = [1, 2, 3, 4, 5, 6]
     expected = sum(s * (i + 1) for i, s in enumerate(samples)) & 0xFFFFFFFF
 
-    def fake_run(cmd, **kwargs):
-        r = mock.MagicMock()
-        r.stdout = _make_pcm(samples)
-        r.returncode = 0
-        return r
-
-    monkeypatch.setattr("subprocess.run", fake_run)
+    _patch_popen(monkeypatch, _make_pcm(samples))
     assert compute_accuraterip_v1_crc("f.flac", "ffmpeg", is_first_track=False, is_last_track=False) == expected
 
 
@@ -75,12 +87,7 @@ def test_crc_first_track_skips_leading_samples(monkeypatch):
     # Only samples[2940:] contribute, but multiplier is still 1-based from index 0
     expected = sum(samples[i] * (i + 1) for i in range(skip, n)) & 0xFFFFFFFF
 
-    def fake_run(cmd, **kwargs):
-        r = mock.MagicMock()
-        r.stdout = _make_pcm(samples)
-        return r
-
-    monkeypatch.setattr("subprocess.run", fake_run)
+    _patch_popen(monkeypatch, _make_pcm(samples))
     assert compute_accuraterip_v1_crc("f.flac", "ffmpeg", is_first_track=True, is_last_track=False) == expected
 
 
@@ -91,32 +98,22 @@ def test_crc_last_track_skips_trailing_samples(monkeypatch):
     end = n - skip
     expected = sum(samples[i] * (i + 1) for i in range(0, end)) & 0xFFFFFFFF
 
-    def fake_run(cmd, **kwargs):
-        r = mock.MagicMock()
-        r.stdout = _make_pcm(samples)
-        return r
-
-    monkeypatch.setattr("subprocess.run", fake_run)
+    _patch_popen(monkeypatch, _make_pcm(samples))
     assert compute_accuraterip_v1_crc("f.flac", "ffmpeg", is_first_track=False, is_last_track=True) == expected
 
 
 def test_crc_returns_none_on_empty_stdout(monkeypatch):
-    def fake_run(cmd, **kwargs):
-        r = mock.MagicMock()
-        r.stdout = b""
-        return r
-
-    monkeypatch.setattr("subprocess.run", fake_run)
+    _patch_popen(monkeypatch, b"")
     assert compute_accuraterip_v1_crc("f.flac", "ffmpeg", is_first_track=False, is_last_track=False) is None
 
 
 def test_crc_returns_none_on_subprocess_error(monkeypatch):
     import subprocess
 
-    def fake_run(cmd, **kwargs):
+    def fake_popen(cmd, **kwargs):
         raise subprocess.SubprocessError("boom")
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
     assert compute_accuraterip_v1_crc("f.flac", "ffmpeg", is_first_track=False, is_last_track=False) is None
 
 
@@ -125,15 +122,26 @@ def test_crc_wraps_at_32_bits(monkeypatch):
     samples = [0xFFFFFFFF] * 5
     expected = sum(0xFFFFFFFF * (i + 1) for i in range(5)) & 0xFFFFFFFF
 
-    def fake_run(cmd, **kwargs):
-        r = mock.MagicMock()
-        r.stdout = _make_pcm(samples)
-        return r
-
-    monkeypatch.setattr("subprocess.run", fake_run)
+    _patch_popen(monkeypatch, _make_pcm(samples))
     result = compute_accuraterip_v1_crc("f.flac", "ffmpeg", is_first_track=False, is_last_track=False)
     assert result == expected
     assert 0 <= result <= 0xFFFFFFFF
+
+
+def test_crc_streams_large_stdout_without_buffering_whole_track(monkeypatch):
+    samples = list(range(1, 50000))
+    expected = sum(sample * (i + 1) for i, sample in enumerate(samples)) & 0xFFFFFFFF
+    proc = _patch_popen(monkeypatch, _make_pcm(samples))
+
+    result = compute_accuraterip_v1_crc(
+        "f.flac",
+        "ffmpeg",
+        is_first_track=False,
+        is_last_track=False,
+    )
+
+    assert result == expected
+    assert proc.stdout.tell() == len(_make_pcm(samples))
 
 
 # ---------------------------------------------------------------------------
@@ -261,6 +269,25 @@ def test_verify_rips_all_match():
     assert len(results) == 2
     assert all(r.verified for r in results)
     assert results[0].confidence == 30
+
+
+def test_verify_rips_uses_disc_boundaries_for_partial_track_set():
+    import lyon.core.ctdb_verify as mod
+
+    files = _files([2])
+    ctdb = {2: [(0xBBBB, 30)]}
+    calls: list[tuple[int, bool, bool]] = []
+
+    def fake_crc(path, ffmpeg, *, is_first_track, is_last_track):
+        track_no = int(str(path).split("_")[-1].replace(".flac", ""))
+        calls.append((track_no, is_first_track, is_last_track))
+        return 0xBBBB
+
+    with _patched_fetch(ctdb), mock.patch.object(mod, "compute_accuraterip_v1_crc", side_effect=fake_crc):
+        results = verify_rips(files, "0:15000:45000", "ffmpeg", 3)
+
+    assert results[0].verified
+    assert calls == [(2, False, False)]
 
 
 def test_verify_rips_crc_mismatch():

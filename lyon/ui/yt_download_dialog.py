@@ -35,6 +35,7 @@ class YtDownloadDialog(QDialog):
         self.settings = settings
         self.library = library
         self._worker: YtDownloadWorker | None = None
+        self._canceling = False
 
         self.setWindowTitle("Download from YouTube")
         self.setMinimumWidth(560)
@@ -90,12 +91,12 @@ class YtDownloadDialog(QDialog):
 
         # Log
         log_label = QLabel("Download log:")
-        log_label.setStyleSheet("color:#72f4ff;font-weight:600;")
+        log_label.setObjectName("sectionHeading")
         layout.addWidget(log_label)
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
         self.log.setMinimumHeight(160)
-        self.log.setStyleSheet("font-family:monospace;font-size:11px;")
+        self.log.setObjectName("monoLog")
         layout.addWidget(self.log, 1)
 
         # Buttons
@@ -173,19 +174,28 @@ class YtDownloadDialog(QDialog):
 
         self._start_btn.setEnabled(False)
         self._cancel_btn.setEnabled(True)
+        self._close_btn.setEnabled(True)
+        self._canceling = False
 
-        self._worker = YtDownloadWorker(url, mode, fmt, output_dir, playlist, self)
-        self._worker.progress.connect(self._log)
-        self._worker.track_ready.connect(self._on_track_ready)
-        self._worker.error.connect(self._on_error)
-        self._worker.finished.connect(self._on_finished)
-        self._worker.start()
+        worker = YtDownloadWorker(url, mode, fmt, output_dir, playlist, self)
+        self._worker = worker
+        worker.progress.connect(self._log)
+        worker.track_ready.connect(self._on_track_ready)
+        worker.error.connect(self._on_error)
+        worker.download_finished.connect(self._on_finished)
+        worker.finished.connect(lambda w=worker: self._on_thread_finished(w))
+        worker.finished.connect(worker.deleteLater)
+        worker.start()
 
     def _cancel(self) -> None:
         if self._worker is not None:
+            if self._canceling:
+                return
+            self._canceling = True
             self._worker.cancel()
             self._log("\n[Cancelling…]")
             self._cancel_btn.setEnabled(False)
+            self._close_btn.setEnabled(False)
 
     def _log(self, msg: str) -> None:
         self.log.appendPlainText(msg)
@@ -208,10 +218,21 @@ class YtDownloadDialog(QDialog):
         )
         self._start_btn.setEnabled(True)
         self._cancel_btn.setEnabled(False)
-        self._worker = None
+        self._close_btn.setEnabled(True)
+        self._canceling = False
+
+    def _on_thread_finished(self, worker: YtDownloadWorker) -> None:
+        if self._worker is worker:
+            self._worker = None
 
     def closeEvent(self, ev) -> None:
         if self._worker is not None and self._worker.isRunning():
             self._worker.cancel()
-            self._worker.wait(3000)
+            if not self._canceling:
+                self._canceling = True
+                self._log("\n[Cancelling…]")
+            self._cancel_btn.setEnabled(False)
+            self._close_btn.setEnabled(False)
+            ev.ignore()
+            return
         super().closeEvent(ev)

@@ -10,7 +10,7 @@ from lyon.ui.library_view import LibraryView
 def make_track(**overrides):
     values = {
         "id": 1,
-        "path": r"C:\\Music\\Artist\\Album\\song.flac",
+        "path": r"C:\Music\Artist\Album\song.flac",
         "title": "Song",
         "artist": "Track Artist",
         "album_artist": "Album Artist",
@@ -55,7 +55,7 @@ def test_track_properties_reuse_tooltip_details():
         ("Bitrate", "922 kbps"),
         ("Sample rate", "44.1 kHz"),
         ("File type", "FLAC"),
-        ("File location", r"C:\\Music\\Artist\\Album\\song.flac"),
+        ("File location", r"C:\Music\Artist\Album\song.flac"),
     ]
 
 

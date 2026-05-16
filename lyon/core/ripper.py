@@ -127,6 +127,30 @@ def find_ffmpeg() -> Optional[str]:
     return found
 
 
+def _stop_process(proc, *, timeout: float = 2.0) -> None:
+    """Terminate a subprocess, escalating to kill if it does not exit promptly."""
+    if proc.poll() is not None:
+        return
+    try:
+        proc.terminate()
+    except OSError:
+        pass
+    try:
+        proc.wait(timeout=timeout)
+        return
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    if proc.poll() is None:
+        try:
+            proc.kill()
+        except OSError:
+            pass
+        try:
+            proc.wait(timeout=timeout)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
+
 def target_folder(settings: Settings, album: AlbumInfo, create: bool = False) -> Path:
     """Compute the destination folder for an album rip.
 
@@ -424,6 +448,7 @@ class RipRequest:
     track_offsets: tuple[int, ...] = ()
     leadout_sector: int = 0
     ctdb_toc: str = ""
+    track_numbers: tuple[int, ...] = ()
 
 
 @dataclass
@@ -550,6 +575,7 @@ class RipWorker(QObject):
     track_started = Signal(int, str)            # (1-based, title)
     track_progress = Signal(int, int)           # (track_no, percent 0-100)
     track_finished = Signal(int, str)           # (track_no, output_path)
+    track_failed = Signal(int, str)             # (track_no, reason)
     finished = Signal(bool, str)                # (success, message)
     log = Signal(str)
 
@@ -635,11 +661,20 @@ class RipWorker(QObject):
             self.finished.emit(False, message)
             return
 
+        track_filter = set(self.request.track_numbers)
+        tracks_to_rip = [
+            track for track in album.tracks
+            if not track_filter or track.number in track_filter
+        ]
+        if track_filter and not tracks_to_rip:
+            self.finished.emit(False, "No matching tracks were found to rip.")
+            return
+
         total = len(album.tracks) or 1
         ext = _format_ext(self.settings.rip_format)
         success = True
         ripped_files: dict[int, Path] = {}
-        for tr in album.tracks:
+        for tr in tracks_to_rip:
             if self._cancel:
                 self.finished.emit(False, "Cancelled")
                 return
@@ -652,6 +687,7 @@ class RipWorker(QObject):
                 success = False
                 failures.append(failure)
                 self.log.emit(f"Track {tr.number} failed: {failure.reason}")
+                self.track_failed.emit(tr.number, failure.reason)
                 continue
 
             from .tagger import write_tags
@@ -660,6 +696,8 @@ class RipWorker(QObject):
                 reason = "Track ripped but audio tags could not be written."
                 failures.append(RipFailure(tr.number, tr.title, out, reason))
                 self.log.emit(f"Track {tr.number} {reason.lower()}")
+                self.track_failed.emit(tr.number, reason)
+                continue
             self.track_finished.emit(tr.number, str(out))
             ripped_files[tr.number] = out
 
@@ -669,21 +707,26 @@ class RipWorker(QObject):
             and self.request.ctdb_toc
             and (self.settings.rip_format or "flac").lower() == "flac"
         ):
-            self._verify_rips(ff, ripped_files)
+            self._verify_rips(ff, ripped_files, total)
 
         message = "Rip complete." if success else "Rip finished with errors."
         if not success:
             self._emit_failure_log(folder, ff, failures, message)
         self.finished.emit(success, message)
 
-    def _verify_rips(self, ffmpeg: str, ripped_files: dict[int, Path]) -> None:
+    def _verify_rips(
+        self,
+        ffmpeg: str,
+        ripped_files: dict[int, Path],
+        total_tracks: int,
+    ) -> None:
         from .ctdb_verify import verify_rips
         self.log.emit("Verifying rips against CUETools DB...")
         results = verify_rips(
             ripped_files,
             self.request.ctdb_toc,
             ffmpeg,
-            len(ripped_files),
+            total_tracks,
         )
         for r in results:
             self.log.emit(r.message)
@@ -825,8 +868,7 @@ class RipWorker(QObject):
                         proc.stdin.close()
                     except OSError:
                         pass
-                    proc.kill()
-                    proc.wait()
+                    _stop_process(proc)
                     reader.join(timeout=2)
                     _cleanup_partial()
                     return FfmpegAttemptFailure(
@@ -847,16 +889,12 @@ class RipWorker(QObject):
         except _WindowsCddaReadError as e:
             reason = f"Windows raw CD reader failed: {e}"
             self.log.emit(reason)
-            if proc.poll() is None:
-                proc.kill()
-            proc.wait()
+            _stop_process(proc)
             reader.join(timeout=2)
             _cleanup_partial()
             return FfmpegAttemptFailure(cmd, proc.returncode, reason, _collected_output())
         except (BrokenPipeError, OSError) as e:
-            if proc.poll() is None:
-                proc.kill()
-            proc.wait()
+            _stop_process(proc)
             reader.join(timeout=2)
             output = _collected_output()
             reason = _summarize_ffmpeg_failure(output, proc.returncode)
@@ -888,9 +926,8 @@ class RipWorker(QObject):
         try:
             proc = subprocess.Popen(
                 cmd,
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                text=True, bufsize=1,
-                encoding="utf-8", errors="replace",
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
                 creationflags=_NO_WINDOW,
             )
         except OSError as e:
@@ -898,32 +935,69 @@ class RipWorker(QObject):
             self.log.emit(reason)
             return FfmpegAttemptFailure(cmd, None, reason)
 
+        output_chunks: list[str] = []
+        output_lock = threading.Lock()
         recent_output: list[str] = []
-        if proc.stdout is not None:
-            for line in proc.stdout:
-                if self._cancel:
-                    proc.kill()
-                    proc.wait()
-                    return FfmpegAttemptFailure(
-                        cmd, proc.returncode, "Cancelled by user.", recent_output
-                    )
-                line = line.strip()
-                if line:
+
+        def _drain_output() -> None:
+            if proc.stdout is None:
+                return
+            try:
+                for chunk in iter(lambda: proc.stdout.read(4096), b""):
+                    text = chunk.decode("utf-8", errors="replace")
+                    with output_lock:
+                        output_chunks.append(text)
+            except OSError:
+                pass
+
+        def _consume_output() -> None:
+            nonlocal recent_output
+            with output_lock:
+                chunks = list(output_chunks)
+                output_chunks.clear()
+            for chunk in chunks:
+                for part in re.split(r"[\r\n]+", chunk):
+                    line = part.strip()
+                    if not line:
+                        continue
                     recent_output.append(line)
                     recent_output = recent_output[-FFMPEG_ERROR_LINES:]
-                pct = _parse_progress(line, total_seconds)
-                if pct is not None:
-                    self.track_progress.emit(track_no, pct)
-        proc.wait()
+                    pct = _parse_progress(line, total_seconds)
+                    if pct is not None:
+                        self.track_progress.emit(track_no, pct)
+
+        def _cleanup_partial() -> None:
+            try:
+                out.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+        reader = threading.Thread(target=_drain_output, name="ffmpeg-output-drain", daemon=True)
+        reader.start()
+
+        while proc.poll() is None:
+            _consume_output()
+            if self._cancel:
+                _stop_process(proc)
+                reader.join(timeout=2)
+                _consume_output()
+                _cleanup_partial()
+                return FfmpegAttemptFailure(
+                    cmd, proc.returncode, "Cancelled by user.", recent_output
+                )
+            try:
+                proc.wait(timeout=0.1)
+            except subprocess.TimeoutExpired:
+                pass
+
+        reader.join(timeout=2)
+        _consume_output()
 
         if proc.returncode == 0 and out.exists() and out.stat().st_size > 0:
             self.track_progress.emit(track_no, 100)
             return None
 
-        try:
-            out.unlink(missing_ok=True)
-        except OSError:
-            pass
+        _cleanup_partial()
 
         reason = _summarize_ffmpeg_failure(recent_output, proc.returncode)
         if recent_output:
@@ -953,6 +1027,7 @@ class Ripper(QObject):
     track_started = Signal(int, str)
     track_progress = Signal(int, int)
     track_finished = Signal(int, str)
+    track_failed = Signal(int, str)
     finished = Signal(bool, str)
     log = Signal(str)
 
@@ -974,9 +1049,11 @@ class Ripper(QObject):
         self._thread.started.connect(self._worker.run)
         # Schedule QThread cleanup when the thread's event loop exits.
         self._thread.finished.connect(self._thread.deleteLater)
+        self._worker.finished.connect(self._worker.deleteLater)
         self._worker.track_started.connect(self.track_started)
         self._worker.track_progress.connect(self.track_progress)
         self._worker.track_finished.connect(self.track_finished)
+        self._worker.track_failed.connect(self.track_failed)
         self._worker.log.connect(self.log)
         self._worker.finished.connect(self._on_finished)
         self._thread.start()
@@ -1013,7 +1090,6 @@ class Ripper(QObject):
         if self._thread:
             self._thread.quit()
             if not self._thread.wait(5000):
-                self._thread.terminate()
-                self._thread.wait(2000)
+                self.log.emit("Warning: rip worker thread did not exit within 5 seconds.")
         self._thread = None
         self._worker = None

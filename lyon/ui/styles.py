@@ -7,6 +7,8 @@ Aesthetic notes:
 - Matching cool-blue accents across tabs, inputs, progress, and selection
 """
 
+from __future__ import annotations
+
 WMP_QSS = r"""
 * { color: #eef7ff; font-family: "Segoe UI", "Tahoma", sans-serif; font-size: 9pt; }
 
@@ -15,44 +17,73 @@ QMainWindow, QWidget#root {
         stop:0 #15181d, stop:0.45 #080b10, stop:1 #040609);
 }
 
-/* Title / chrome bar */
-QFrame#titlebar {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-        stop:0 #303945, stop:0.38 #1d232a, stop:0.39 #10151b, stop:1 #05070a);
-    border-bottom: 1px solid #050607;
-    min-height: 20px;
-}
-QLabel#titleLabel {
-    color: #f4fbff;
-    font-weight: 700;
-    padding-left: 14px;
-    letter-spacing: 1px;
-}
-
-/* Top section tabs (Now Playing / Library / Rip / YouTube style) */
-QFrame#tabbar {
+/* Header bar containing tab strip + tool buttons */
+QWidget#headerBar {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
         stop:0 #2d3742, stop:0.5 #141a21, stop:1 #070a0f);
     border-bottom: 1px solid #000;
     min-height: 36px;
 }
-QPushButton#navTab {
+
+/* Tab bar */
+QTabBar {
+    background: transparent;
+    border: none;
+    alignment: left;
+}
+QTabBar::tab {
     background: transparent;
     color: #cdd9e6;
     border: none;
+    border-bottom: 2px solid transparent;
     padding: 8px 18px;
     font-weight: 600;
+    min-height: 32px;
 }
-QPushButton#navTab:hover {
+QTabBar::tab:hover {
     color: #ffffff;
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
         stop:0 rgba(107,231,255,0.18), stop:1 rgba(38,96,180,0.08));
 }
-QPushButton#navTab:checked {
+QTabBar::tab:selected {
     color: #72f4ff;
     border-bottom: 2px solid #43e7ff;
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
         stop:0 rgba(92,213,255,0.18), stop:1 rgba(49,112,224,0.08));
+}
+QTabBar::tab:focus {
+    color: #ffffff;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 rgba(126,245,255,0.28), stop:1 rgba(49,112,224,0.12));
+}
+QTabBar::scroller {
+    width: 20px;
+}
+QTabBar QToolButton {
+    background: #1a2030;
+    border: 1px solid #27313b;
+    color: #cdd9e6;
+}
+
+/* Tool buttons in the header bar (Queue / EQ / Settings) */
+QToolButton#navToolBtn {
+    background: transparent;
+    color: #8a9ab0;
+    border: none;
+    border-left: 1px solid #1c2430;
+    padding: 8px 12px;
+    min-width: 0;
+    font-size: 8pt;
+}
+QToolButton#navToolBtn:hover {
+    color: #c8d8e8;
+    background: rgba(107,231,255,0.10);
+    border-left: 1px solid #1c2430;
+}
+QToolButton#navToolBtn:pressed {
+    color: #72f4ff;
+    background: rgba(107,231,255,0.18);
+    border-left: 1px solid #1c2430;
 }
 
 /* Sidebar & lists */
@@ -102,6 +133,10 @@ QPushButton:hover {
 }
 QPushButton:pressed { background: #070b10; }
 QPushButton:disabled { color: #65707c; background: #171d24; }
+QPushButton:focus, QToolButton:focus {
+    border: 1px solid #79fbff;
+    outline: none;
+}
 
 QPushButton#accent {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
@@ -123,7 +158,8 @@ QLineEdit, QComboBox, QSpinBox {
     padding: 4px 6px;
     selection-background-color: #1976d2;
 }
-QLineEdit:focus, QComboBox:focus { border: 1px solid #4eefff; }
+/* QLineEdit/QComboBox/QSpinBox :focus rules consolidated below with the
+   broader slider/button focus block. */
 
 /* Sliders (transport bar + volume) */
 QSlider::groove:horizontal {
@@ -136,7 +172,7 @@ QSlider::groove:horizontal {
 QSlider::sub-page:horizontal {
     background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
         stop:0 #102c83, stop:0.5 #1b8dff, stop:1 #68f3ff);
-    border: 1px solid rgba(126,245,255,0.45);
+    border: none;
     border-radius: 4px;
 }
 QSlider::handle:horizontal {
@@ -144,79 +180,98 @@ QSlider::handle:horizontal {
         stop:0 #ffffff, stop:0.24 #9ff4ff, stop:0.58 #267fe9, stop:1 #07142d);
     border: 1px solid #02050a;
     width: 18px;
-    margin: -6px 0;
+    margin: -5px 0;
     border-radius: 9px;
 }
 QSlider::handle:horizontal:hover {
     border: 1px solid #79fbff;
 }
+QSlider:focus {
+    outline: none;
+}
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus {
+    border: 1px solid #79fbff;
+}
 
-/* Transport bar */
+/* Transport bar — flattened, full-width, modern card */
 QFrame#transport {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-        stop:0 #6b6f73, stop:0.12 #3a3f44, stop:0.48 #25292e,
-        stop:0.49 #171b20, stop:1 #07090c);
-    border: 1px solid #020304;
-    border-radius: 38px;
-    min-height: 104px;
-    margin: 0 14px 10px 14px;
+        stop:0 #1a2030, stop:1 #07090c);
+    border-top: 1px solid #050607;
+    min-height: 88px;
 }
 QLabel#transportThumb {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-        stop:0 #3e4852, stop:1 #07090c);
-    border: 1px solid #030405;
-    border-radius: 10px;
+    background: #07090c;
+    border: 1px solid #1c222b;
+    border-radius: 6px;
     padding: 2px;
 }
-QLabel#nowPlayingTitle  { color: #72f4ff; font-weight: 700; font-size: 12.5pt; }
-QLabel#nowPlayingArtist { color: #d4e2ee; font-size: 10pt; }
-QLabel#timeLabel        { color: #aeb9c4; font-size: 9.5pt; }
-QLabel#volumeIcon       { color: #e9f7ff; font-size: 18pt; padding-left: 2px; }
+QLabel#nowPlayingTitle       { color: #72f4ff; font-weight: 700; font-size: 12.5pt; }
+QLabel#nowPlayingArtist      { color: #d4e2ee; font-size: 10pt; }
+QLabel#nowPlayingHeroTitle   { color: #72f4ff; }
+QLabel#nowPlayingHeroArtist  { color: #d4e2ee; }
+QLabel#timeLabel             { color: #aeb9c4; font-size: 9.5pt; }
 
-/* Gloss transport buttons */
+/* Transport buttons — flat dark base, cyan rim on hover/checked */
 QToolButton#transportBtn {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-        stop:0 #777e85, stop:0.18 #3f474f, stop:0.5 #1b2026, stop:1 #050607);
+    background: #1b222a;
     border: 1px solid #050607;
-    border-radius: 8px;
+    border-radius: 6px;
     min-width: 42px;
     min-height: 40px;
     color: #f8fdff;
-    font-size: 15pt;
-    font-weight: 700;
 }
 QToolButton#transportBtn:hover {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-        stop:0 #92fbff, stop:0.18 #4bb8de, stop:0.5 #243a58, stop:1 #07101a);
+    background: #25323f;
+    border: 1px solid #58eaff;
+}
+QToolButton#transportBtn:pressed {
+    background: #0d141b;
     border: 1px solid #7ff8ff;
 }
-QToolButton#transportBtn:pressed, QToolButton#transportBtn:checked {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-        stop:0 #49f4ff, stop:0.42 #247fdf, stop:1 #082158);
-    border: 1px solid #9dfdff;
-    color: #ffffff;
+QToolButton#transportBtn:checked {
+    background: #102845;
+    border: 1px solid #7ff8ff;
 }
+QToolButton#transportBtn:disabled {
+    background: #141a20;
+    border: 1px solid #0a0d11;
+}
+
+/* Primary play/pause — cyan accent disc */
 QToolButton#transportPlay {
     min-width: 62px;
     min-height: 62px;
     border-radius: 31px;
-    background: qradialgradient(cx:0.38, cy:0.25, radius:0.86,
-        stop:0 #ffffff, stop:0.18 #d6f7ff, stop:0.39 #73c8ff,
-        stop:0.62 #1f67d6, stop:0.82 #102c82, stop:1 #07101b);
+    background: qradialgradient(cx:0.4, cy:0.3, radius:0.85,
+        stop:0 #8df7ff, stop:0.55 #2080e0, stop:1 #0a1a3a);
     color: #ffffff;
-    font-weight: 900;
-    font-size: 22pt;
     border: 2px solid #1b2026;
 }
 QToolButton#transportPlay:hover {
-    background: qradialgradient(cx:0.38, cy:0.25, radius:0.86,
-        stop:0 #ffffff, stop:0.2 #e7ffff, stop:0.42 #8df7ff,
-        stop:0.64 #2d8fff, stop:0.84 #1440aa, stop:1 #07101b);
+    background: qradialgradient(cx:0.4, cy:0.3, radius:0.85,
+        stop:0 #ffffff, stop:0.55 #3aa0ff, stop:1 #11286a);
     border: 2px solid #65efff;
 }
 QToolButton#transportPlay:pressed {
     background: qradialgradient(cx:0.5, cy:0.6, radius:0.82,
-        stop:0 #3dcfff, stop:0.52 #155ccc, stop:1 #040912);
+        stop:0 #2a8fff, stop:1 #040912);
+}
+
+/* Up Next queue preview in the Now Playing view */
+QListWidget#queuePreview {
+    background: #0a0e13;
+    border: 1px solid #1c222b;
+    border-radius: 6px;
+}
+QListWidget#queuePreview::item {
+    padding: 6px 8px;
+    border-bottom: 1px solid #131a21;
+    color: #cfd6e2;
+}
+QListWidget#queuePreview::item:selected {
+    background: #1466c7;
+    color: #ffffff;
 }
 
 /* Status bar */
@@ -266,7 +321,7 @@ QFrame#videoControls {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
         stop:0 #1a2030, stop:1 #07090d);
     border-top: 1px solid #000000;
-    min-height: 80px;
+    min-height: 104px;
 }
 
 QFrame#equalizerPanel {
@@ -280,5 +335,203 @@ QLabel#sectionTitle {
     font-weight: 700;
     font-size: 14pt;
 }
+QLabel#sectionHeading {
+    color: #72f4ff;
+    font-weight: 600;
+    padding: 4px 6px;
+}
 QLabel#mutedText { color: #aeb9c4; }
+QLabel#mutedTextSmall { color: #8a93a0; font-size: 8pt; }
+QLabel#footerText {
+    color: #8a93a0;
+    font-size: 11px;
+    padding: 2px 4px;
+}
+QLabel#emptyStateText {
+    color: #8a93a0;
+    font-size: 13px;
+}
+QLabel#hintText {
+    color: #3a4a5a;
+    font-size: 11pt;
+}
+QLabel#resultTitle {
+    color: #72f4ff;
+    font-weight: 600;
+    font-size: 10pt;
+}
+QLabel#warningLabel { color: #e8a830; font-size: 8pt; }
+
+/* Dialog typography (used across Settings, First Run, Queue, Diagnostics, YT) */
+QLabel#dialogTitle {
+    color: #eef7ff;
+    font-size: 16pt;
+    font-weight: 700;
+}
+QLabel#dialogSubtitle {
+    color: #8a93a0;
+    font-size: 9pt;
+}
+QLabel#dialogSummary {
+    color: #cfd6e2;
+    font-weight: 600;
+}
+QLabel#formLabel {
+    color: #dce8f4;
+    font-weight: 600;
+}
+QPlainTextEdit#monoLog {
+    font-family: "Consolas", "Menlo", "DejaVu Sans Mono", monospace;
+    font-size: 9pt;
+    background: #07090f;
+    border: 1px solid #27313b;
+    border-radius: 4px;
+}
+
+/* Video player catalog sidebar */
+QFrame#videoCatalogSidebar,
+QFrame#videoCatalogSearchRow,
+QScrollArea#videoCatalogScroll,
+QWidget#videoCatalogContainer {
+    background: #0d1520;
+}
+QFrame#videoCatalogHeader,
+QLabel#videoCardThumb {
+    background: #0a1520;
+}
+QFrame#videoCard {
+    background: #131e2c;
+    border-radius: 3px;
+}
+QFrame#videoCard:hover {
+    background: #1e2d40;
+}
+QLabel#videoCatalogTitle {
+    color: #72f4ff;
+    font-weight: 600;
+    font-size: 9pt;
+}
+QLabel#videoCatalogCount {
+    color: #7a8a9a;
+    font-size: 8pt;
+}
+QLabel#videoCardTitle {
+    color: #dde3ea;
+    font-size: 8pt;
+    font-weight: 600;
+}
+QLabel#videoCardDuration {
+    color: #7a8a9a;
+    font-size: 8pt;
+}
+QLabel#videoSplash {
+    background: #0a1118;
+}
+QWidget#videoFullscreenWindow {
+    background: #000000;
+}
+QFrame#videoSidebarSeparator {
+    background: #2a3848;
+}
+
+/* Now Playing cover art */
+QLabel#nowPlayingCover {
+    background: #0a0d11;
+    border: 1px solid #1c222b;
+}
+
+/* YouTube view */
+QLabel#youtubeThumb {
+    background: #0a0e13;
+    border-radius: 3px;
+}
+QListWidget#youtubeResults {
+    background: #0a0e13;
+    border: none;
+    outline: none;
+}
+QListWidget#youtubeResults::item {
+    border-bottom: 1px solid #1a2230;
+}
+QListWidget#youtubeResults::item:selected {
+    background: #1466c7;
+}
+QListWidget#youtubeResults::item:hover:!selected {
+    background: #111c2a;
+}
+
+/* Ripper view */
+QLabel#ripperCover {
+    background: #0c0f14;
+    border: 1px solid #2a3340;
+}
+
+/* Toast notifications (floating, bottom-center) */
+QFrame#toast {
+    background: #15181d;
+    border: 1px solid #27313b;
+    border-radius: 8px;
+    color: #eef7ff;
+    min-height: 32px;
+}
+QFrame#toast[level="success"] { border: 1px solid #5ff59b; }
+QFrame#toast[level="warning"] { border: 1px solid #ffd166; }
+QFrame#toast[level="error"]   { border: 1px solid #ff6b6b; }
+
+QLabel#toastLabel {
+    color: #eef7ff;
+    padding: 0 4px;
+    font-size: 10pt;
+}
+QToolButton#toastAction {
+    background: transparent;
+    color: #43e7ff;
+    font-weight: 600;
+    border: none;
+    padding: 4px 10px;
+}
+QToolButton#toastAction:hover {
+    color: #72f4ff;
+    background: rgba(107,231,255,0.10);
+    border-radius: 4px;
+}
+QToolButton#toastClose {
+    background: transparent;
+    color: #8a93a0;
+    border: none;
+    padding: 0 8px;
+    font-size: 14pt;
+    font-weight: 600;
+    min-width: 18px;
+}
+QToolButton#toastClose:hover { color: #ffffff; }
+
+/* On-screen display (transient overlay for video playback feedback) */
+QFrame#osdFrame {
+    background: rgba(8, 12, 18, 220);
+    border: 1px solid #43e7ff;
+    border-radius: 10px;
+}
+QLabel#osdLabel {
+    color: #eef7ff;
+    font-size: 18pt;
+    font-weight: 600;
+    padding: 0 4px;
+}
 """
+
+
+def apply_app_styles(widget=None) -> None:
+    """Apply the central stylesheet to the application when possible.
+
+    Top-level tool windows such as the video OSD do not inherit a stylesheet
+    applied only to MainWindow, so the app object owns the stylesheet. The
+    optional widget fallback keeps tests and early construction paths safe when
+    a QApplication has not been created yet.
+    """
+    from PySide6.QtWidgets import QApplication
+
+    app = QApplication.instance()
+    target = app if app is not None else widget
+    if target is not None:
+        target.setStyleSheet(WMP_QSS)

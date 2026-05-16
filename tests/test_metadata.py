@@ -296,6 +296,35 @@ def test_provider_names_keep_only_supported_metadata_sources():
     assert metadata.METADATA_PROVIDER_ORDER == metadata.ALBUM_METADATA_PROVIDER_ORDER
 
 
+def test_musicbrainz_useragent_refreshes_when_settings_change(monkeypatch):
+    calls = []
+    current = [
+        types.SimpleNamespace(
+            musicbrainz_app="LyonTest",
+            musicbrainz_version="1.0",
+            musicbrainz_contact="first@example.invalid",
+        )
+    ]
+
+    monkeypatch.setattr(metadata, "_initialised", False)
+    monkeypatch.setattr(metadata, "_last_musicbrainz_useragent", None)
+    monkeypatch.setattr(metadata._settings, "get_cached_settings", lambda: current[0])
+    monkeypatch.setattr(metadata.musicbrainzngs, "set_useragent", lambda *args: calls.append(args))
+
+    metadata._init()
+    current[0] = types.SimpleNamespace(
+        musicbrainz_app="LyonTest",
+        musicbrainz_version="1.0",
+        musicbrainz_contact="second@example.invalid",
+    )
+    metadata._init()
+
+    assert calls == [
+        ("LyonTest", "1.0", "first@example.invalid"),
+        ("LyonTest", "1.0", "second@example.invalid"),
+    ]
+
+
 def test_theaudiodb_search_maps_album_tracks_and_artwork(monkeypatch):
     responses = [
         {
