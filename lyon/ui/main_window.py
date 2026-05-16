@@ -541,14 +541,16 @@ class MainWindow(QMainWindow):
         self._equalizer_dialog = None
 
     def show_about(self) -> None:
-        QMessageBox.about(
-            self, "About " + __app_name__,
-            f"<h3>{__app_name__} {__version__}</h3>"
-            "<p><i>Dedicated to: Chuck Lyon</i></p>"
-            "<p>Rip your CDs to FLAC, manage your library, search YouTube, "
-            "and play music with a familiar Windows Media Player look.</p>"
-            "<p>Uses MusicBrainz, Cover Art Archive, ffmpeg, and yt-dlp.</p>",
+        dlg = QMessageBox(self)
+        dlg.setWindowTitle("About " + __app_name__)
+        dlg.setIconPixmap(app_icon().pixmap(64, 64))
+        dlg.setText(f"<b>{__app_name__}</b><br>Version {__version__}")
+        dlg.setInformativeText(
+            "Sea Lyon is a music library manager, CD ripper, and player\n"
+            "for Windows, macOS, and Linux.\n\n"
+            "Released under the MIT License."
         )
+        dlg.exec()
 
     # ------------------------------------------------------------------ drag-and-drop
     _AUDIO_EXTENSIONS = frozenset(
