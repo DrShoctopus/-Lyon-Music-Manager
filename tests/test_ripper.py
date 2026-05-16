@@ -4,104 +4,113 @@ import sys
 import types
 
 
-def _install_dependency_stubs() -> None:
-    pyside = types.ModuleType("PySide6")
-    qtcore = types.ModuleType("PySide6.QtCore")
+def _install_dependency_stubs() -> bool:
+    try:
+        import PySide6.QtCore  # noqa: F401
+        import PySide6.QtGui  # noqa: F401
+        import PySide6.QtWidgets  # noqa: F401
+        need_pyside_stubs = False
+    except ImportError:
+        need_pyside_stubs = True
 
-    class _Signal:
-        def __init__(self, *_, **__):
-            self._callbacks = []
+    if need_pyside_stubs:
+        pyside = types.ModuleType("PySide6")
+        qtcore = types.ModuleType("PySide6.QtCore")
 
-        def connect(self, callback):
-            self._callbacks.append(callback)
+        class _Signal:
+            def __init__(self, *_, **__):
+                self._callbacks = []
 
-        def emit(self, *args):
-            for callback in list(self._callbacks):
-                callback(*args)
+            def connect(self, callback):
+                self._callbacks.append(callback)
 
-    class _QObject:
-        def __init__(self, *_, **__):
-            pass
+            def emit(self, *args):
+                for callback in list(self._callbacks):
+                    callback(*args)
 
-        def moveToThread(self, *_):
-            pass
+        class _QObject:
+            def __init__(self, *_, **__):
+                pass
 
-        def deleteLater(self):
-            pass
+            def moveToThread(self, *_):
+                pass
 
-    class _QThread:
-        started = _Signal()
+            def deleteLater(self):
+                pass
 
-        def __init__(self, *_, **__):
-            pass
+        class _QThread:
+            started = _Signal()
 
-        def isRunning(self):
-            return False
+            def __init__(self, *_, **__):
+                pass
 
-        def start(self):
-            pass
+            def isRunning(self):
+                return False
 
-        def quit(self):
-            pass
+            def start(self):
+                pass
 
-        def wait(self):
-            pass
+            def quit(self):
+                pass
 
-    qtgui = types.ModuleType("PySide6.QtGui")
-    qtwidgets = types.ModuleType("PySide6.QtWidgets")
+            def wait(self):
+                pass
 
-    class _Qt:
-        AlignCenter = 1
-        ElideRight = 1
-        KeepAspectRatio = 1
-        SmoothTransformation = 1
-        UserRole = 1
+        qtgui = types.ModuleType("PySide6.QtGui")
+        qtwidgets = types.ModuleType("PySide6.QtWidgets")
 
-    class _QSize:
-        def __init__(self, *_, **__):
-            pass
+        class _Qt:
+            AlignCenter = 1
+            ElideRight = 1
+            KeepAspectRatio = 1
+            SmoothTransformation = 1
+            UserRole = 1
 
-    class _Widget:
-        def __init__(self, *_, **__):
-            pass
+        class _QSize:
+            def __init__(self, *_, **__):
+                pass
 
-    class _QMessageBox(_Widget):
-        Yes = 1
-        No = 0
+        class _Widget:
+            def __init__(self, *_, **__):
+                pass
 
-        @staticmethod
-        def information(*_, **__):
-            pass
+        class _QMessageBox(_Widget):
+            Yes = 1
+            No = 0
 
-        @staticmethod
-        def question(*_, **__):
-            return _QMessageBox.No
+            @staticmethod
+            def information(*_, **__):
+                pass
 
-    qtcore.QObject = _QObject
-    qtcore.QThread = _QThread
-    qtcore.Signal = _Signal
-    qtcore.Qt = _Qt
-    qtcore.QSize = _QSize
-    qtcore.QTimer = _Widget
-    qtgui.QColor = _Widget
-    qtgui.QPainter = _Widget
-    qtgui.QPainter.Antialiasing = 1
-    qtgui.QPixmap = _Widget
-    qtgui.QStandardItem = _Widget
-    qtgui.QStandardItemModel = _Widget
-    for name in (
-        "QAbstractItemView", "QComboBox", "QHBoxLayout", "QHeaderView",
-        "QLabel", "QLineEdit", "QProgressBar", "QPushButton", "QStyle",
-        "QStyleOptionProgressBar", "QStyledItemDelegate", "QTableView",
-        "QVBoxLayout", "QWidget",
-    ):
-        setattr(qtwidgets, name, _Widget)
-    qtwidgets.QMessageBox = _QMessageBox
-    qtwidgets.QStyle.CE_ProgressBar = 1
-    sys.modules["PySide6"] = pyside
-    sys.modules["PySide6.QtCore"] = qtcore
-    sys.modules["PySide6.QtGui"] = qtgui
-    sys.modules["PySide6.QtWidgets"] = qtwidgets
+            @staticmethod
+            def question(*_, **__):
+                return _QMessageBox.No
+
+        qtcore.QObject = _QObject
+        qtcore.QThread = _QThread
+        qtcore.Signal = _Signal
+        qtcore.Qt = _Qt
+        qtcore.QSize = _QSize
+        qtcore.QTimer = _Widget
+        qtgui.QColor = _Widget
+        qtgui.QPainter = _Widget
+        qtgui.QPainter.Antialiasing = 1
+        qtgui.QPixmap = _Widget
+        qtgui.QStandardItem = _Widget
+        qtgui.QStandardItemModel = _Widget
+        for name in (
+            "QAbstractItemView", "QComboBox", "QHBoxLayout", "QHeaderView",
+            "QLabel", "QLineEdit", "QProgressBar", "QPushButton", "QStyle",
+            "QStyleOptionProgressBar", "QStyledItemDelegate", "QTableView",
+            "QVBoxLayout", "QWidget",
+        ):
+            setattr(qtwidgets, name, _Widget)
+        qtwidgets.QMessageBox = _QMessageBox
+        qtwidgets.QStyle.CE_ProgressBar = 1
+        sys.modules["PySide6"] = pyside
+        sys.modules["PySide6.QtCore"] = qtcore
+        sys.modules["PySide6.QtGui"] = qtgui
+        sys.modules["PySide6.QtWidgets"] = qtwidgets
 
     if importlib.util.find_spec("musicbrainzngs") is None:
         musicbrainzngs = types.ModuleType("musicbrainzngs")
@@ -114,8 +123,10 @@ def _install_dependency_stubs() -> None:
         requests.RequestException = Exception
         sys.modules["requests"] = requests
 
+    return need_pyside_stubs
 
-_install_dependency_stubs()
+
+_PYSIDE_STUBBED = _install_dependency_stubs()
 
 from lyon.core.cd_detect import DiscToc  # noqa: E402
 from lyon.core.metadata import AlbumInfo, TrackInfo  # noqa: E402
@@ -138,6 +149,10 @@ from lyon.core.ripper import (  # noqa: E402
     unique_target_folder,
 )
 from lyon.ui.ripper_view import _rip_request_from_toc  # noqa: E402
+
+if _PYSIDE_STUBBED:
+    for _module_name in ("PySide6.QtWidgets", "PySide6.QtGui", "PySide6.QtCore", "PySide6"):
+        sys.modules.pop(_module_name, None)
 
 
 def test_track_sector_span_normalises_musicbrainz_toc_offsets():

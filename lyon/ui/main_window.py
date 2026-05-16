@@ -1,6 +1,8 @@
 """Top-level window with native tab bar and stacked views."""
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QAction, QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
@@ -294,7 +296,7 @@ class MainWindow(QMainWindow):
         message: str,
         level: str = "info",
         duration_ms: int = 2500,
-        action: tuple[str, "callable"] | None = None,
+        action: tuple[str, Callable[[], None]] | None = None,
     ) -> Toast:
         """Display a transient toast notification above the transport bar.
 
@@ -315,7 +317,14 @@ class MainWindow(QMainWindow):
         )
         if action and toast.action_button is not None:
             cb = action[1]
-            toast.action_button.clicked.connect(lambda: (cb(), toast.dismiss()))
+
+            def _run_action() -> None:
+                try:
+                    cb()
+                finally:
+                    toast.dismiss()
+
+            toast.action_button.clicked.connect(_run_action)
         toast.closed.connect(lambda: self._on_toast_closed(toast))
         self._current_toast = toast
         toast.show_at(self, bottom_margin=self._toast_bottom_margin())
