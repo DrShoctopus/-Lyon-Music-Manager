@@ -300,6 +300,9 @@ class RipperView(QWidget):
         self.relookup_btn = QPushButton("Search Online")
         self.relookup_btn.clicked.connect(self.search_online)
         year_row.addWidget(self.relookup_btn)
+        self.clear_meta_btn = QPushButton("Clear Metadata")
+        self.clear_meta_btn.clicked.connect(self._clear_metadata)
+        year_row.addWidget(self.clear_meta_btn)
         year_row.addStretch(1)
         meta.addLayout(year_row)
         self.dest_label = QLabel("")
@@ -531,6 +534,13 @@ class RipperView(QWidget):
         self.status_label.setText(f"Found: {info.artist} - {info.album}")
         self.start_btn.setEnabled(True)
         self._update_dest()
+
+    def _clear_metadata(self) -> None:
+        self.tracks_model.removeRows(0, self.tracks_model.rowCount())
+        self.album_edit.clear()
+        self.artist_edit.clear()
+        self.year_edit.clear()
+        self.cover.setPixmap(cover_pixmap(None, 140, "CD"))
 
     def search_online(self) -> None:
         artist = self.artist_edit.text().strip()
