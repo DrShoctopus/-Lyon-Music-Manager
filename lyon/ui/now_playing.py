@@ -266,7 +266,7 @@ class TransportBar(QWidget):
 
         center = QVBoxLayout()
         center.setContentsMargins(0, 0, 0, 0)
-        center.setSpacing(2)
+        center.setSpacing(6)
         center.addLayout(controls)
         center.addLayout(seek_row)
 
