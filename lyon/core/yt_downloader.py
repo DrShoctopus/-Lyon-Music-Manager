@@ -20,6 +20,26 @@ def _find_ffmpeg() -> Path | None:
     return Path(found) if found else None
 
 
+def _video_postprocessors(fmt: str) -> list[dict]:
+    """Postprocessors for video downloads with a persistent catalog thumbnail."""
+    postprocessors = [
+        {
+            "key": "FFmpegThumbnailsConvertor",
+            "format": "jpg",
+            "when": "before_dl",
+        },
+    ]
+    # yt-dlp cannot embed thumbnails in WebM containers.  The converted JPG
+    # sidecar above is still enough for Lyon's video catalog thumbnail.
+    if fmt != "webm":
+        postprocessors.append({"key": "EmbedThumbnail", "already_have_thumbnail": True})
+    postprocessors.extend([
+        {"key": "FFmpegMetadata", "add_metadata": True},
+        {"key": "FFmpegEmbedSubtitle"},
+    ])
+    return postprocessors
+
+
 class _YtLogger:
     """Forwards yt-dlp log messages to the worker's progress signal."""
 
@@ -48,13 +68,13 @@ class YtDownloadWorker(QThread):
     -------
     progress(str)      -- log / status line suitable for display
     track_ready(str)   -- absolute path of each completed output file
-    finished(int, int) -- (succeeded, failed) counts when done
+    download_finished(int, int) -- (succeeded, failed) counts when done
     error(str)         -- emitted on a fatal error before finished
     """
 
     progress = Signal(str)
     track_ready = Signal(str)
-    finished = Signal(int, int)
+    download_finished = Signal(int, int)
     error = Signal(str)
 
     def __init__(
@@ -76,6 +96,7 @@ class YtDownloadWorker(QThread):
         self._succeeded = 0
         self._failed = 0
         self._emitted_paths: set[str] = set()
+        self._uses_postprocessors = False
 
     def cancel(self) -> None:
         self._cancelled = True
@@ -87,6 +108,7 @@ class YtDownloadWorker(QThread):
             self.error.emit(
                 "yt-dlp is not installed. Run:  pip install yt-dlp"
             )
+            self.download_finished.emit(0, 1)
             return
 
         out_template = str(
@@ -101,7 +123,7 @@ class YtDownloadWorker(QThread):
                     "ffmpeg is required for audio conversion but was not found. "
                     "Install ffmpeg and place it on PATH (or in the app bin folder), then retry."
                 )
-                self.finished.emit(0, 1)
+                self.download_finished.emit(0, 1)
                 return
             postprocessors = [
                 {
@@ -116,11 +138,7 @@ class YtDownloadWorker(QThread):
             merge_fmt = None
         else:
             if ffmpeg_path:
-                postprocessors = [
-                    {"key": "EmbedThumbnail"},
-                    {"key": "FFmpegMetadata", "add_metadata": True},
-                    {"key": "FFmpegEmbedSubtitle"},
-                ]
+                postprocessors = _video_postprocessors(self.fmt)
                 fmt_selector = "bestvideo+bestaudio/best"
                 merge_fmt = self.fmt
             else:
@@ -132,6 +150,8 @@ class YtDownloadWorker(QThread):
                 fmt_selector = f"best[ext={self.fmt}]/best[ext=mp4]/best"
                 merge_fmt = None
 
+        self._uses_postprocessors = bool(postprocessors)
+
         ydl_opts: dict = {
             "format": fmt_selector,
             "outtmpl": out_template,
@@ -141,9 +161,9 @@ class YtDownloadWorker(QThread):
             "postprocessor_hooks": [self._on_postprocessor],
             "noplaylist": not self.playlist,
             "writethumbnail": True,
-            # Keep the thumbnail sidecar file on disk after EmbedThumbnail runs
-            # so _thumb_pixmap() can find it when rendering the video card.
-            "keep_thumbnail": self.mode == "video",
+            # Video downloads need a persistent, Qt-friendly sidecar thumbnail
+            # for the catalog card.  EmbedThumbnail deletes it unless the
+            # postprocessor is told the thumbnail is intentionally kept.
             # Keep going through playlist errors rather than aborting.
             "ignoreerrors": self.playlist,
         }
@@ -159,7 +179,7 @@ class YtDownloadWorker(QThread):
             if not self._cancelled:
                 self.error.emit(str(exc))
         finally:
-            self.finished.emit(self._succeeded, self._failed)
+            self.download_finished.emit(self._succeeded, self._failed)
 
     # ------------------------------------------------------------------ hooks
 
@@ -174,6 +194,14 @@ class YtDownloadWorker(QThread):
             eta = d.get("_eta_str", "").strip()
             filename = Path(d.get("filename", "")).name
             self.progress.emit(f"  {filename}  {pct}  {speed}  ETA {eta}")
+        elif status == "finished" and not self._uses_postprocessors:
+            # When ffmpeg is unavailable for video downloads we intentionally
+            # run with no postprocessors, so _on_postprocessor() will never be
+            # called.  Emit the completed, pre-merged file from the progress
+            # hook so auto-add still works in that fallback path.
+            path = d.get("filename", "")
+            if path and Path(path).exists():
+                self._emit_track_ready(path)
         elif status == "error":
             self._failed += 1
 

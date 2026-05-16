@@ -28,11 +28,14 @@ from PySide6.QtWidgets import (
     QToolButton, QVBoxLayout, QWidget,
 )
 
-from ..core.equalizer import normalize_equalizer_bands
+from ..core.equalizer import EQ_BAND_COUNT, normalize_equalizer_bands
 from ..core.playback_backend import _configure_vlc_runtime_path
 from .widgets import ElidedLabel, format_duration, format_ms, placeholder_cover
 
 LOG = logging.getLogger(__name__)
+
+_EQ_FADE_STEPS = 16
+_EQ_FADE_INTERVAL_MS = 16  # total transition ≈ 256 ms
 
 VIDEO_EXTENSIONS = (
     ".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm",
@@ -241,6 +244,8 @@ class _SplashPane(QLabel):
 class VideoPlayerView(QWidget):
     """Full-featured libVLC video player tab with collapsible catalog sidebar."""
 
+    request_diagnostics = Signal()
+
     def __init__(self, library: Any = None, parent: QWidget | None = None):
         super().__init__(parent)
         self._library = library
@@ -258,6 +263,18 @@ class VideoPlayerView(QWidget):
         self._eq_bands: list[int] = []
         self._eq_preamp: int = 0
         self._equalizer: Any = None
+        self._eq_live_bands: list[float] = [0.0] * EQ_BAND_COUNT
+        self._eq_live_preamp: float = 0.0
+        self._eq_fade_start_bands: list[float] = [0.0] * EQ_BAND_COUNT
+        self._eq_fade_start_preamp: float = 0.0
+        self._eq_fade_target_bands: list[float] = [0.0] * EQ_BAND_COUNT
+        self._eq_fade_target_preamp: float = 0.0
+        self._eq_remove_after_fade: bool = False
+        self._eq_fade_steps_left: int = 0
+
+        self._eq_fade_timer = QTimer(self)
+        self._eq_fade_timer.setInterval(_EQ_FADE_INTERVAL_MS)
+        self._eq_fade_timer.timeout.connect(self._eq_fade_step)
 
         try:
             import importlib
@@ -296,9 +313,15 @@ class VideoPlayerView(QWidget):
         body.setAlignment(Qt.AlignCenter)
         body.setStyleSheet("color:#cfd6e2;")
 
+        diag_btn = QPushButton("Run Diagnostics")
+        diag_btn.setToolTip("Open the diagnostics panel to verify your runtime environment")
+        diag_btn.clicked.connect(self.request_diagnostics.emit)
+
         layout.addStretch(1)
         layout.addWidget(title)
         layout.addWidget(body)
+        layout.addSpacing(16)
+        layout.addWidget(diag_btn, alignment=Qt.AlignCenter)
         layout.addStretch(1)
 
     def _build_player_ui(self) -> None:
@@ -379,7 +402,7 @@ class VideoPlayerView(QWidget):
         seek_row.addWidget(self._seek, 1)
         seek_row.addWidget(self._total_lbl)
 
-        # Transport + options row
+        # Primary transport row: play / stop / volume / mute
         self._play_btn = self._make_transport_btn("▶")
         self._play_btn.setToolTip("Play / Pause  [Space]")
         self._play_btn.setCheckable(True)
@@ -389,6 +412,33 @@ class VideoPlayerView(QWidget):
         self._stop_btn.setToolTip("Stop")
         self._stop_btn.clicked.connect(self._stop)
 
+        vol_lbl = QLabel("♬")
+        vol_lbl.setObjectName("volumeIcon")
+        self._vol_slider = QSlider(Qt.Horizontal)
+        self._vol_slider.setObjectName("volumeSlider")
+        self._vol_slider.setRange(0, 100)
+        self._vol_slider.setValue(80)
+        self._vol_slider.setFixedWidth(110)
+        self._vol_slider.setToolTip("Volume")
+        self._vol_slider.valueChanged.connect(self._on_volume_changed)
+        self._player.audio_set_volume(80)
+
+        self._mute_btn = self._make_transport_btn("M")
+        self._mute_btn.setToolTip("Mute / Unmute")
+        self._mute_btn.setCheckable(True)
+        self._mute_btn.clicked.connect(self._on_mute_toggled)
+
+        transport_row = QHBoxLayout()
+        transport_row.setContentsMargins(0, 0, 0, 0)
+        transport_row.setSpacing(6)
+        transport_row.addWidget(self._play_btn)
+        transport_row.addWidget(self._stop_btn)
+        transport_row.addStretch(1)
+        transport_row.addWidget(vol_lbl)
+        transport_row.addWidget(self._vol_slider)
+        transport_row.addWidget(self._mute_btn)
+
+        # Secondary options row: speed / audio track / subtitle track
         speed_lbl = self._ctrl_label("Speed:")
         self._rate_combo = QComboBox()
         for label, _ in _RATE_OPTIONS:
@@ -415,44 +465,23 @@ class VideoPlayerView(QWidget):
         self._sub_file_btn.setToolTip("Load an external subtitle file (.srt, .ass, ...)")
         self._sub_file_btn.clicked.connect(self._load_sub_file)
 
-        vol_lbl = QLabel("♬")
-        vol_lbl.setObjectName("volumeIcon")
-        self._vol_slider = QSlider(Qt.Horizontal)
-        self._vol_slider.setObjectName("volumeSlider")
-        self._vol_slider.setRange(0, 100)
-        self._vol_slider.setValue(80)
-        self._vol_slider.setFixedWidth(110)
-        self._vol_slider.setToolTip("Volume")
-        self._vol_slider.valueChanged.connect(self._on_volume_changed)
-        self._player.audio_set_volume(80)
-
-        self._mute_btn = self._make_transport_btn("M")
-        self._mute_btn.setToolTip("Mute / Unmute")
-        self._mute_btn.setCheckable(True)
-        self._mute_btn.clicked.connect(self._on_mute_toggled)
-
-        btn_row = QHBoxLayout()
-        btn_row.setContentsMargins(0, 0, 0, 0)
-        btn_row.setSpacing(6)
-        btn_row.addWidget(self._play_btn)
-        btn_row.addWidget(self._stop_btn)
-        btn_row.addSpacing(6)
-        btn_row.addWidget(speed_lbl)
-        btn_row.addWidget(self._rate_combo)
-        btn_row.addSpacing(8)
-        btn_row.addWidget(audio_lbl)
-        btn_row.addWidget(self._audio_combo)
-        btn_row.addSpacing(8)
-        btn_row.addWidget(sub_lbl)
-        btn_row.addWidget(self._sub_combo)
-        btn_row.addWidget(self._sub_file_btn)
-        btn_row.addStretch(1)
-        btn_row.addWidget(vol_lbl)
-        btn_row.addWidget(self._vol_slider)
-        btn_row.addWidget(self._mute_btn)
+        opts_row = QHBoxLayout()
+        opts_row.setContentsMargins(0, 2, 0, 0)
+        opts_row.setSpacing(6)
+        opts_row.addWidget(speed_lbl)
+        opts_row.addWidget(self._rate_combo)
+        opts_row.addSpacing(12)
+        opts_row.addWidget(audio_lbl)
+        opts_row.addWidget(self._audio_combo)
+        opts_row.addSpacing(12)
+        opts_row.addWidget(sub_lbl)
+        opts_row.addWidget(self._sub_combo)
+        opts_row.addWidget(self._sub_file_btn)
+        opts_row.addStretch(1)
 
         cl.addLayout(seek_row)
-        cl.addLayout(btn_row)
+        cl.addLayout(transport_row)
+        cl.addLayout(opts_row)
 
         # ---- Sidebar + video surface (side by side) -------------------------
         self._sidebar = self._build_sidebar()
@@ -760,23 +789,45 @@ class VideoPlayerView(QWidget):
         self._eq_preamp = int(preamp)
         if not self._available:
             return
+        self._eq_fade_timer.stop()
+
         if not enabled:
-            self._equalizer = None
-            try:
-                self._player.set_equalizer(None)
-            except (AttributeError, OSError, RuntimeError) as exc:
-                LOG.warning("Could not clear video VLC equalizer: %s", exc)
+            if self._equalizer is None:
+                return
+            self._eq_fade_start_bands = list(self._eq_live_bands)
+            self._eq_fade_start_preamp = self._eq_live_preamp
+            self._eq_fade_target_bands = [0.0] * EQ_BAND_COUNT
+            self._eq_fade_target_preamp = 0.0
+            self._eq_remove_after_fade = True
+            self._eq_fade_steps_left = _EQ_FADE_STEPS
+            self._eq_fade_timer.start()
             return
+
         try:
-            normalized = normalize_equalizer_bands(bands)
-            equalizer = self._vlc.AudioEqualizer()
-            if equalizer is None:
-                raise RuntimeError("VLC did not create an AudioEqualizer instance")
-            equalizer.set_preamp(float(preamp))
-            for band_index, band_gain in enumerate(normalized):
-                equalizer.set_amp_at_index(float(band_gain), band_index)
-            self._player.set_equalizer(equalizer)
-            self._equalizer = equalizer
+            normalized = [float(b) for b in normalize_equalizer_bands(bands)]
+            target_preamp = float(preamp)
+            if self._equalizer is None:
+                eq = self._vlc.AudioEqualizer()
+                if eq is None:
+                    raise RuntimeError("VLC did not create an AudioEqualizer instance")
+                eq.set_preamp(0.0)
+                for i in range(EQ_BAND_COUNT):
+                    eq.set_amp_at_index(0.0, i)
+                self._player.set_equalizer(eq)
+                self._equalizer = eq
+                self._eq_live_bands = [0.0] * EQ_BAND_COUNT
+                self._eq_live_preamp = 0.0
+            self._eq_fade_start_bands = list(self._eq_live_bands)
+            self._eq_fade_start_preamp = self._eq_live_preamp
+            self._eq_fade_target_bands = normalized
+            self._eq_fade_target_preamp = target_preamp
+            self._eq_remove_after_fade = False
+            # Skip the fade if VLC is already at the requested gains.
+            if (self._eq_fade_start_bands == self._eq_fade_target_bands
+                    and self._eq_fade_start_preamp == self._eq_fade_target_preamp):
+                return
+            self._eq_fade_steps_left = _EQ_FADE_STEPS
+            self._eq_fade_timer.start()
         except (AttributeError, OSError, RuntimeError) as exc:
             self._equalizer = None
             try:
@@ -784,6 +835,41 @@ class VideoPlayerView(QWidget):
             except (AttributeError, OSError, RuntimeError):
                 pass
             LOG.warning("Could not apply video VLC equalizer: %s", exc)
+
+    def _eq_fade_step(self) -> None:
+        if self._equalizer is None:
+            self._eq_fade_timer.stop()
+            return
+
+        self._eq_fade_steps_left -= 1
+        t = 1.0 - self._eq_fade_steps_left / _EQ_FADE_STEPS
+        try:
+            new_preamp = self._eq_fade_start_preamp + (self._eq_fade_target_preamp - self._eq_fade_start_preamp) * t
+            new_bands = [
+                self._eq_fade_start_bands[i] + (self._eq_fade_target_bands[i] - self._eq_fade_start_bands[i]) * t
+                for i in range(EQ_BAND_COUNT)
+            ]
+            self._equalizer.set_preamp(new_preamp)
+            for i, gain in enumerate(new_bands):
+                self._equalizer.set_amp_at_index(gain, i)
+            self._player.set_equalizer(self._equalizer)
+            self._eq_live_preamp = new_preamp
+            self._eq_live_bands = new_bands
+        except (AttributeError, OSError, RuntimeError) as exc:
+            LOG.warning("Video EQ fade step failed: %s", exc)
+            self._eq_fade_timer.stop()
+            return
+
+        if self._eq_fade_steps_left <= 0:
+            self._eq_fade_timer.stop()
+            if self._eq_remove_after_fade:
+                try:
+                    self._player.set_equalizer(None)
+                except (AttributeError, OSError, RuntimeError) as exc:
+                    LOG.warning("Could not clear video VLC equalizer after fade: %s", exc)
+                self._equalizer = None
+                self._eq_live_bands = [0.0] * EQ_BAND_COUNT
+                self._eq_live_preamp = 0.0
 
     def _on_rate_changed(self, index: int) -> None:
         _, rate = _RATE_OPTIONS[index]
