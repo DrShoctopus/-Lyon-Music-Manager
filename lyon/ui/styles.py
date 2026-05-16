@@ -161,7 +161,7 @@ QLineEdit, QComboBox, QSpinBox {
 /* QLineEdit/QComboBox/QSpinBox :focus rules consolidated below with the
    broader slider/button focus block. */
 
-/* Sliders (transport bar + volume) */
+/* Sliders (transport bar, volume, preamp, EQ bands) */
 QSlider::groove:horizontal {
     height: 8px;
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
@@ -184,6 +184,30 @@ QSlider::handle:horizontal {
     border-radius: 9px;
 }
 QSlider::handle:horizontal:hover {
+    border: 1px solid #79fbff;
+}
+QSlider::groove:vertical {
+    width: 8px;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #07090c, stop:0.45 #171d24, stop:1 #343d47);
+    border: 1px solid #030405;
+    border-radius: 4px;
+}
+QSlider::sub-page:vertical {
+    background: qlineargradient(x1:0, y1:1, x2:0, y2:0,
+        stop:0 #102c83, stop:0.5 #1b8dff, stop:1 #68f3ff);
+    border: none;
+    border-radius: 4px;
+}
+QSlider::handle:vertical {
+    background: qradialgradient(cx:0.45, cy:0.28, radius:0.78,
+        stop:0 #ffffff, stop:0.24 #9ff4ff, stop:0.58 #267fe9, stop:1 #07142d);
+    border: 1px solid #02050a;
+    height: 18px;
+    margin: 0 -5px;
+    border-radius: 9px;
+}
+QSlider::handle:vertical:hover {
     border: 1px solid #79fbff;
 }
 QSlider:focus {

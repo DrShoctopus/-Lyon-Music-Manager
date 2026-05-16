@@ -104,8 +104,6 @@ class EqualizerDialog(QDialog):
         self._preamp_slider = QSlider(Qt.Horizontal)
         self._preamp_slider.setRange(MIN_EQ_PREAMP_DB, MAX_EQ_PREAMP_DB)
         self._preamp_slider.setValue(settings.equalizer_preamp)
-        self._preamp_slider.setTickPosition(QSlider.TicksBothSides)
-        self._preamp_slider.setTickInterval(5)
         self._preamp_slider.setToolTip("Overall gain applied before the EQ bands")
         self._preamp_slider.valueChanged.connect(self._preamp_changed)
         preamp_row.addWidget(self._preamp_slider, 1)
@@ -127,8 +125,6 @@ class EqualizerDialog(QDialog):
             slider = QSlider(Qt.Vertical)
             slider.setRange(MIN_EQ_GAIN_DB, MAX_EQ_GAIN_DB)
             slider.setValue(value)
-            slider.setTickPosition(QSlider.TicksBothSides)
-            slider.setTickInterval(6)
             slider.setToolTip(f"{band} - {tooltip}")
             slider.valueChanged.connect(self._slider_changed)
 
