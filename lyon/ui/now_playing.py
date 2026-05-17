@@ -649,7 +649,10 @@ class NowPlayingView(QWidget):
         menu = QMenu(self)
         play_act = menu.addAction("Play Now")
         remove_act = menu.addAction("Remove from Queue")
-        action = menu.exec(self._queue_list.mapToGlobal(pos))
+        try:
+            action = menu.exec(self._queue_list.mapToGlobal(pos))
+        finally:
+            menu.deleteLater()
         if action == play_act:
             self.player.play_index(idx)
         elif action == remove_act:

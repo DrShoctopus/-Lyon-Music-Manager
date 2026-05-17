@@ -301,6 +301,25 @@ class Player(QObject):
         if callable(cleanup):
             cleanup()
 
+    def _dispose_transient_backend(self, backend: PlaybackBackend) -> None:
+        self._cleanup_backend(backend)
+        try:
+            backend.setParent(None)
+            backend.deleteLater()
+        except RuntimeError:
+            pass
+
+    def _clear_fade_timer(self) -> None:
+        timer = self._fade_timer
+        self._fade_timer = None
+        if timer is None:
+            return
+        timer.stop()
+        try:
+            timer.deleteLater()
+        except RuntimeError:
+            pass
+
     def _on_position_changed(self, pos_ms: int, dur_ms: int) -> None:
         self.position_changed.emit(pos_ms, dur_ms)
         self._maybe_auto_crossfade(pos_ms, dur_ms)
@@ -371,6 +390,8 @@ class Player(QObject):
     def _crossfade_to_index(self, idx: int) -> bool:
         if self._backend_factory is None:
             return False
+        if self._fade_timer is not None or self._fade_out_backend is not None:
+            self._cancel_crossfade()
         try:
             next_backend = self._create_backend()
         except Exception:
@@ -393,8 +414,7 @@ class Player(QObject):
         self.track_changed.emit(track)
 
         self._fade_out_backend = previous_backend
-        if self._fade_timer is not None:
-            self._fade_timer.stop()
+        self._clear_fade_timer()
         self._fade_target = self._user_volume
         self._fade_step = 0
         self._fade_total_steps = max(1, self._crossfade_seconds * 1000 // 50)
@@ -416,23 +436,21 @@ class Player(QObject):
             self._finish_crossfade()
 
     def _finish_crossfade(self) -> None:
-        if self._fade_timer is not None:
-            self._fade_timer.stop()
-            self._fade_timer = None
+        self._clear_fade_timer()
         if self._fade_out_backend is not None:
-            self._fade_out_backend.stop()
-            self._cleanup_backend(self._fade_out_backend)
+            backend = self._fade_out_backend
             self._fade_out_backend = None
+            backend.stop()
+            self._dispose_transient_backend(backend)
         self._backend.set_volume(self._fade_target)
 
     def _cancel_crossfade(self, *, restore_active_volume: bool = True) -> None:
-        if self._fade_timer is not None:
-            self._fade_timer.stop()
-            self._fade_timer = None
+        self._clear_fade_timer()
         if self._fade_out_backend is not None:
-            self._fade_out_backend.stop()
-            self._cleanup_backend(self._fade_out_backend)
+            backend = self._fade_out_backend
             self._fade_out_backend = None
+            backend.stop()
+            self._dispose_transient_backend(backend)
         if restore_active_volume:
             self._backend.set_volume(self._user_volume)
 

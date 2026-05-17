@@ -265,3 +265,55 @@ def test_crossfade_preserves_muted_state_on_next_backend():
     assert backends[0].is_muted()
     assert backends[1].is_muted()
     assert player.is_muted()
+
+
+def test_crossfade_finish_releases_retired_backend_parent():
+    backends: list[FakeBackend] = []
+
+    def factory(parent=None):
+        backend = FakeBackend()
+        backends.append(backend)
+        return backend
+
+    player = Player(backend_factory=factory)
+    player.set_crossfade(5)
+    player.set_queue([
+        _track("C:/Music/one.flac"),
+        _track("C:/Music/two.flac"),
+    ])
+
+    backends[0].position_changed.emit(115_000, 120_000)
+    assert backends[0].parent() is player
+
+    player._finish_crossfade()
+
+    assert player._fade_timer is None
+    assert player._fade_out_backend is None
+    assert backends[0].parent() is None
+    assert backends[1].parent() is player
+
+
+def test_new_crossfade_cancels_previous_retired_backend():
+    backends: list[FakeBackend] = []
+
+    def factory(parent=None):
+        backend = FakeBackend()
+        backends.append(backend)
+        return backend
+
+    player = Player(backend_factory=factory)
+    player.set_crossfade(5)
+    player.set_queue([
+        _track("C:/Music/one.flac"),
+        _track("C:/Music/two.flac"),
+        _track("C:/Music/three.flac"),
+    ])
+
+    backends[0].position_changed.emit(115_000, 120_000)
+    player.play_index(2)
+
+    assert len(backends) == 3
+    assert backends[0].parent() is None
+    assert player._fade_out_backend is backends[1]
+    assert backends[1].parent() is player
+    assert backends[2].parent() is player

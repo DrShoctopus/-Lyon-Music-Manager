@@ -140,6 +140,7 @@ class YouTubeView(QWidget):
         self._worker: _SearchWorker | None = None
         self._shutting_down = False
         self._nam = QNetworkAccessManager(self)
+        self._thumbnail_replies: set[QNetworkReply] = set()
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -214,6 +215,7 @@ class YouTubeView(QWidget):
     def shutdown(self, timeout_ms: int = 3000) -> None:
         """Stop any active search worker before the widget is destroyed."""
         self._shutting_down = True
+        self._cancel_thumbnail_fetches()
         worker = self._worker
         if worker is None:
             return
@@ -245,6 +247,7 @@ class YouTubeView(QWidget):
             self._status.show()
             return False
 
+        self._cancel_thumbnail_fetches()
         self._list.clear()
         self._list.hide()
         self._hint.hide()
@@ -303,14 +306,32 @@ class YouTubeView(QWidget):
     def _fetch_thumbnail(self, url: str, row: _ResultRow) -> None:
         req = QNetworkRequest(QUrl(url))
         reply = self._nam.get(req)
+        self._thumbnail_replies.add(reply)
         reply.finished.connect(lambda: self._apply_thumbnail(reply, row))
 
     def _apply_thumbnail(self, reply: QNetworkReply, row: _ResultRow) -> None:
-        if reply.error() == QNetworkReply.NetworkError.NoError:
+        self._thumbnail_replies.discard(reply)
+        if not self._shutting_down and reply.error() == QNetworkReply.NetworkError.NoError:
             px = QPixmap()
             if px.loadFromData(QByteArray(reply.readAll())):
-                row.set_thumbnail(px)
+                try:
+                    row.set_thumbnail(px)
+                except RuntimeError:
+                    pass
         reply.deleteLater()
+
+    def _cancel_thumbnail_fetches(self) -> None:
+        for reply in list(self._thumbnail_replies):
+            self._thumbnail_replies.discard(reply)
+            try:
+                reply.finished.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+            try:
+                reply.abort()
+            except RuntimeError:
+                pass
+            reply.deleteLater()
 
     def _on_item_clicked(self, item: QListWidgetItem) -> None:
         url = item.data(Qt.UserRole)

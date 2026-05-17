@@ -697,6 +697,7 @@ class RipperView(QWidget):
             if t.isRunning() and not t.wait(1500):
                 t.terminate()
                 t.wait(500)
+            setattr(self, thread_attr, None)
 
     # ------------------------------------------------------------------ progress
     def _on_track_started(self, n: int, title: str) -> None:

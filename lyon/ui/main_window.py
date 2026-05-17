@@ -438,7 +438,10 @@ class MainWindow(QMainWindow):
     def _on_yt_download(self, url: str) -> None:
         dlg = YtDownloadDialog(url, self.settings, self.library, self)
         dlg.library_updated.connect(self._library_refresh_timer.start)
-        dlg.exec()
+        try:
+            dlg.exec()
+        finally:
+            dlg.deleteLater()
 
     def _search_youtube_for_track(self, query: str) -> None:
         if not query:
@@ -521,8 +524,13 @@ class MainWindow(QMainWindow):
         from .settings_dialog import SettingsDialog
         old_paths = list(self.settings.library_paths)
         dlg = SettingsDialog(self.settings, self)
-        if dlg.exec():
-            self.settings = dlg.result_settings
+        try:
+            accepted = dlg.exec()
+            result_settings = dlg.result_settings if accepted else None
+        finally:
+            dlg.deleteLater()
+        if accepted and result_settings is not None:
+            self.settings = result_settings
             self.settings.save()
             metadata.reset_musicbrainz_useragent()
             self.ripper_view.apply_settings(self.settings)
@@ -546,8 +554,13 @@ class MainWindow(QMainWindow):
         if self.settings.first_run_completed:
             return
         dlg = FirstRunDialog(self.settings, self)
-        if dlg.exec():
-            self.settings = dlg.result_settings
+        try:
+            accepted = dlg.exec()
+            result_settings = dlg.result_settings if accepted else None
+        finally:
+            dlg.deleteLater()
+        if accepted and result_settings is not None:
+            self.settings = result_settings
             self.settings.save()
             metadata.reset_musicbrainz_useragent()
             self.ripper_view.apply_settings(self.settings)
@@ -557,13 +570,19 @@ class MainWindow(QMainWindow):
             self.show_toast("Setup saved.", level="success")
 
     def show_diagnostics(self) -> None:
-        DiagnosticsDialog(parent=self).exec()
+        dlg = DiagnosticsDialog(parent=self)
+        try:
+            dlg.exec()
+        finally:
+            dlg.deleteLater()
 
     def open_queue(self) -> None:
         if self._queue_dialog is None:
-            self._queue_dialog = QueueDialog(self.player, self.library, self)
-            self._queue_dialog.finished.connect(self._clear_queue_dialog)
-            self._queue_dialog.playlist_saved.connect(self._on_playlist_saved_from_queue)
+            dialog = QueueDialog(self.player, self.library, self)
+            dialog.finished.connect(self._clear_queue_dialog)
+            dialog.finished.connect(dialog.deleteLater)
+            dialog.playlist_saved.connect(self._on_playlist_saved_from_queue)
+            self._queue_dialog = dialog
         self._queue_dialog.show()
         self._queue_dialog.raise_()
         self._queue_dialog.activateWindow()
@@ -626,16 +645,22 @@ class MainWindow(QMainWindow):
             self._sleep_btn.setText("Sleep")
 
     def show_duplicates(self) -> None:
-        DuplicateDialog(self.library, self).exec()
+        dlg = DuplicateDialog(self.library, self)
+        try:
+            dlg.exec()
+        finally:
+            dlg.deleteLater()
         self.library_view.refresh()
 
     def open_equalizer(self) -> None:
         if self._equalizer_dialog is None:
-            self._equalizer_dialog = EqualizerDialog(self.settings, self)
-            self._equalizer_dialog.equalizer_changed.connect(self.player.set_equalizer)
-            self._equalizer_dialog.equalizer_changed.connect(self.video_player_view.apply_equalizer)
-            self._equalizer_dialog.settings_saved.connect(self._apply_equalizer_settings)
-            self._equalizer_dialog.finished.connect(self._clear_equalizer_dialog)
+            dialog = EqualizerDialog(self.settings, self)
+            dialog.equalizer_changed.connect(self.player.set_equalizer)
+            dialog.equalizer_changed.connect(self.video_player_view.apply_equalizer)
+            dialog.settings_saved.connect(self._apply_equalizer_settings)
+            dialog.finished.connect(self._clear_equalizer_dialog)
+            dialog.finished.connect(dialog.deleteLater)
+            self._equalizer_dialog = dialog
         self._equalizer_dialog.show()
         self._equalizer_dialog.raise_()
         self._equalizer_dialog.activateWindow()
@@ -663,7 +688,10 @@ class MainWindow(QMainWindow):
             "for Windows, macOS, and Linux.\n\n"
             "Released under the MIT License."
         )
-        dlg.exec()
+        try:
+            dlg.exec()
+        finally:
+            dlg.deleteLater()
 
     # ------------------------------------------------------------------ drag-and-drop
     _AUDIO_EXTENSIONS = frozenset(

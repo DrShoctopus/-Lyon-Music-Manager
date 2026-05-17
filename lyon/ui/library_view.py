@@ -72,6 +72,20 @@ _FORMAT_COLORS: dict[str, str] = {
 _TRACK_MIME_TYPE = "application/x-lyon-track-ids"
 
 
+def _exec_menu(menu: QMenu, global_pos):
+    try:
+        return menu.exec(global_pos)
+    finally:
+        menu.deleteLater()
+
+
+def _exec_dialog(dialog: QDialog) -> int:
+    try:
+        return dialog.exec()
+    finally:
+        dialog.deleteLater()
+
+
 class _TrackListModel(QStandardItemModel):
     """QStandardItemModel that embeds track IDs in drag MIME data."""
 
@@ -988,7 +1002,7 @@ class LibraryView(QWidget):
         format_act = menu.addAction("Format")
         format_act.setCheckable(True)
         format_act.setChecked(not self.tracks.isColumnHidden(_COL_FORMAT))
-        action = menu.exec(self.tracks.horizontalHeader().mapToGlobal(pos))
+        action = _exec_menu(menu, self.tracks.horizontalHeader().mapToGlobal(pos))
         if action == rating_act:
             self.tracks.setColumnHidden(_COL_RATING, not rating_act.isChecked())
         elif action == format_act:
@@ -1149,7 +1163,7 @@ class LibraryView(QWidget):
 
         menu = QMenu(self)
         fetch_act = menu.addAction("Fetch Metadata…")
-        action = menu.exec(self.albums.viewport().mapToGlobal(pos))
+        action = _exec_menu(menu, self.albums.viewport().mapToGlobal(pos))
 
         if action == fetch_act:
             self._fetch_album_metadata(artist, album)
@@ -1160,7 +1174,7 @@ class LibraryView(QWidget):
             self.status_message.emit("No audio tracks found for this album.")
             return
         dlg = MetadataFetchDialog(tracks, artist, album, self.library, self)
-        if dlg.exec() == QDialog.Accepted:
+        if _exec_dialog(dlg) == QDialog.Accepted:
             self.status_message.emit(f"Metadata updated for \"{album}\".")
             self.refresh()
 
@@ -1225,7 +1239,7 @@ class LibraryView(QWidget):
         edit_metadata = menu.addAction("Edit Metadata")
         youtube_search = menu.addAction("Search YouTube for Artist, Album, and Track")
         properties = menu.addAction("Properties")
-        action = menu.exec(global_pos)
+        action = _exec_menu(menu, global_pos)
 
         if action is None:
             return
@@ -1278,7 +1292,7 @@ class LibraryView(QWidget):
         layout.addLayout(form)
         layout.addWidget(buttons)
         dialog.resize(520, 260)
-        dialog.exec()
+        _exec_dialog(dialog)
 
     def _show_edit_metadata_dialog(self, track: Track) -> None:
         dialog = QDialog(self)
@@ -1322,7 +1336,7 @@ class LibraryView(QWidget):
         layout.addWidget(buttons)
         dialog.resize(480, 320)
 
-        if dialog.exec() != QDialog.Accepted:
+        if _exec_dialog(dialog) != QDialog.Accepted:
             return
 
         self.library.update_track(track.id, {
@@ -1573,7 +1587,7 @@ class LibraryView(QWidget):
         layout.addWidget(buttons)
         dialog.resize(480, 300)
 
-        if dialog.exec() != QDialog.Accepted:
+        if _exec_dialog(dialog) != QDialog.Accepted:
             return
 
         fields: dict = {}
@@ -1707,7 +1721,7 @@ class LibraryView(QWidget):
                 export_act = menu.addAction("Export as M3U…")
                 menu.addSeparator()
                 remove_act = menu.addAction("Delete Playlist")
-        action = menu.exec(self.playlists_view.mapToGlobal(pos))
+        action = _exec_menu(menu, self.playlists_view.mapToGlobal(pos))
         if action is None:
             return
         if action == new_act:
@@ -1751,7 +1765,7 @@ class LibraryView(QWidget):
 
     def _new_smart_playlist_dialog(self) -> None:
         dlg = SmartPlaylistDialog(parent=self)
-        if not dlg.exec() or dlg.spec is None:
+        if not _exec_dialog(dlg) or dlg.spec is None:
             return
         try:
             pl_id = self.library.create_smart_playlist(dlg.playlist_name, spec_to_json(dlg.spec))
@@ -1768,7 +1782,7 @@ class LibraryView(QWidget):
         self, playlist_id: int, pl_name: str, rules_json: str
     ) -> None:
         dlg = SmartPlaylistDialog(name=pl_name, rules_json=rules_json, parent=self)
-        if not dlg.exec() or dlg.spec is None:
+        if not _exec_dialog(dlg) or dlg.spec is None:
             return
         new_rules = spec_to_json(dlg.spec)
         try:

@@ -164,6 +164,7 @@ class MetadataFetchDialog(QDialog):
         self._track_rows: list[tuple[Track, str, QCheckBox]] = []
         self._artwork_cb: QCheckBox | None = None
         self._artwork_row_w: QWidget | None = None
+        self._search_worker: _SearchWorker | None = None
         self._detail_worker: _DetailWorker | None = None
 
         outer = QVBoxLayout(self)
@@ -243,6 +244,8 @@ class MetadataFetchDialog(QDialog):
         self._search_worker.candidates.connect(self._on_candidates)
         self._search_worker.not_found.connect(self._on_not_found)
         self._search_worker.error.connect(self._on_search_error)
+        self._search_worker.finished.connect(self._on_search_worker_finished)
+        self._search_worker.finished.connect(self._search_worker.deleteLater)
         self._search_worker.start()
 
     # ------------------------------------------------------------------ search slots
@@ -264,10 +267,14 @@ class MetadataFetchDialog(QDialog):
             selected = candidates[0]
         else:
             picker = _PickerDialog(candidates, self)
-            if picker.exec() != QDialog.Accepted or picker.selected is None:
+            try:
+                accepted = picker.exec()
+                selected = picker.selected
+            finally:
+                picker.deleteLater()
+            if accepted != QDialog.Accepted or selected is None:
                 self.reject()
                 return
-            selected = picker.selected
 
         self._banner.setText(
             "Matched by text search — please review all fields carefully before applying."
@@ -293,7 +300,17 @@ class MetadataFetchDialog(QDialog):
         self._detail_worker.detail_ready.connect(self._show_diff)
         self._detail_worker.artwork_ready.connect(self._on_artwork_ready)
         self._detail_worker.error.connect(self._on_detail_error)
+        self._detail_worker.finished.connect(self._on_detail_worker_finished)
+        self._detail_worker.finished.connect(self._detail_worker.deleteLater)
         self._detail_worker.start()
+
+    def _on_search_worker_finished(self) -> None:
+        if self.sender() is self._search_worker:
+            self._search_worker = None
+
+    def _on_detail_worker_finished(self) -> None:
+        if self.sender() is self._detail_worker:
+            self._detail_worker = None
 
     def _on_detail_error(self, msg: str) -> None:
         # Don't block the user; if detail fails we already emitted fallback in _DetailWorker
@@ -580,11 +597,35 @@ class MetadataFetchDialog(QDialog):
         self.accept()
 
     def closeEvent(self, event) -> None:
-        for worker in (
-            getattr(self, "_search_worker", None),
-            getattr(self, "_detail_worker", None),
-        ):
-            if worker is not None and worker.isRunning():
-                worker.quit()
-                worker.wait(2000)
+        self._stop_worker("_search_worker")
+        self._stop_worker("_detail_worker")
         super().closeEvent(event)
+
+    def _stop_worker(self, attr: str) -> None:
+        worker = getattr(self, attr, None)
+        if worker is None:
+            return
+        for signal_name in (
+            "disc_found",
+            "candidates",
+            "not_found",
+            "detail_ready",
+            "artwork_ready",
+            "error",
+        ):
+            signal = getattr(worker, signal_name, None)
+            if signal is None:
+                continue
+            try:
+                signal.disconnect()
+            except (TypeError, RuntimeError):
+                pass
+        try:
+            worker.requestInterruption()
+            worker.quit()
+            if worker.isRunning() and not worker.wait(2000):
+                worker.terminate()
+                worker.wait(500)
+        except RuntimeError:
+            pass
+        setattr(self, attr, None)

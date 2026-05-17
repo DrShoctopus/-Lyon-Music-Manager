@@ -183,6 +183,29 @@ def test_fetch_ctdb_crcs_parses_entries(monkeypatch):
     assert result[2] == [(0x11223344, 50)]
 
 
+def test_fetch_ctdb_crcs_closes_owned_session(monkeypatch):
+    import lyon.core.ctdb_verify as mod
+
+    xml = _xml_response([(50, [(1, "AABBCCDD")])])
+
+    class _OwnedSession:
+        closed = False
+
+        def get(self, *args, **kwargs):
+            return mock.MagicMock(status_code=200, content=xml)
+
+        def close(self):
+            self.closed = True
+
+    session = _OwnedSession()
+    monkeypatch.setattr(mod.requests, "Session", lambda: session)
+
+    result = fetch_ctdb_crcs("0:15000:45000")
+
+    assert result is not None
+    assert session.closed
+
+
 def test_fetch_ctdb_crcs_merges_multiple_entries(monkeypatch):
     xml = _xml_response([
         (50, [(1, "AABBCCDD")]),

@@ -1110,8 +1110,10 @@ class VideoPlayerView(QWidget):
         if was_playing:
             self._player.pause()
 
-        self._fs_window.close()
+        fs_window = self._fs_window
         self._fs_window = None
+        fs_window.close()
+        fs_window.deleteLater()
         self._fullscreen_btn.setText("Fullscreen")
         self._video_stack.setCurrentIndex(1)
 
@@ -1198,11 +1200,15 @@ class VideoPlayerView(QWidget):
         """Release native libVLC resources. Called from MainWindow.closeEvent."""
         if not self._available:
             return
+        self._eq_fade_timer.stop()
+        self._catalog_build_timer.stop()
         if hasattr(self, "_timer"):
             self._timer.stop()
         if self._fs_window is not None:
-            self._fs_window.close()
+            fs_window = self._fs_window
             self._fs_window = None
+            fs_window.close()
+            fs_window.deleteLater()
         if self._osd is not None:
             self._osd.hide()
             self._osd.deleteLater()
