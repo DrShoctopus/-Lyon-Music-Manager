@@ -64,6 +64,9 @@ class Player(QObject):
         self._rg_multiplier: float = 1.0          # multiplier for the active backend
         self._rg_fade_out_multiplier: float = 1.0  # multiplier for the fading-out backend
 
+        self._audio_output: str = ""
+        self._audio_device: str = ""
+
         self._connect_backend(self._backend)
 
     # --------------------------------------------------------------- queue
@@ -267,6 +270,20 @@ class Player(QObject):
         if self._fade_timer is None:
             self._backend.set_volume(self._rg_applied_vol(self._user_volume, self._rg_multiplier))
 
+    def set_audio_device(self, audio_output: str, device_id: str) -> None:
+        """Apply audio output module and device. Takes effect on next play()."""
+        self._audio_output = audio_output
+        self._audio_device = device_id
+        self._backend.set_audio_device(audio_output, device_id)
+        if self._fade_out_backend is not None:
+            self._fade_out_backend.set_audio_device(audio_output, device_id)
+
+    def list_audio_outputs(self) -> list[tuple[str, str]]:
+        return self._backend.list_audio_outputs()
+
+    def list_audio_devices(self, audio_output: str = "") -> list[tuple[str, str]]:
+        return self._backend.list_audio_devices(audio_output)
+
     def set_muted(self, muted: bool) -> None:
         self._backend.set_muted(muted)
         if self._fade_out_backend is not None:
@@ -434,6 +451,8 @@ class Player(QObject):
         if callable(is_available) and not is_available():
             self._cleanup_backend(next_backend)
             return False
+        if self._audio_output or self._audio_device:
+            next_backend.set_audio_device(self._audio_output, self._audio_device)
 
         previous_backend = self._backend
         muted = previous_backend.is_muted()

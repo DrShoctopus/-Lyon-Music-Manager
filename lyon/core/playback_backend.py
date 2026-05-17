@@ -76,6 +76,17 @@ class PlaybackBackend(QObject):
     position_changed = Signal(int, int)
     end_reached = Signal()
 
+    def list_audio_outputs(self) -> list[tuple[str, str]]:
+        """Return [(id, description), …] for available audio output modules."""
+        return []
+
+    def list_audio_devices(self, audio_output: str = "") -> list[tuple[str, str]]:
+        """Return [(device_id, description), …] for the given output module."""
+        return []
+
+    def set_audio_device(self, audio_output: str, device_id: str) -> None:
+        """Switch audio output module and/or device. Takes effect on next play()."""
+
     def set_source(
         self,
         path: str,
@@ -202,13 +213,30 @@ class UnavailablePlaybackBackend(PlaybackBackend):
 class VlcPlaybackBackend(PlaybackBackend):
     """libVLC playback backend with real equalizer support."""
 
-    def __init__(self, vlc_module: Any, parent: Optional[QObject] = None):
+    def __init__(
+        self,
+        vlc_module: Any,
+        parent: Optional[QObject] = None,
+        *,
+        audio_output: str = "",
+        audio_device: str = "",
+    ):
         super().__init__(parent)
         from PySide6.QtCore import QTimer
 
         self._vlc = vlc_module
         self._instance = vlc_module.Instance()
         self._player = self._instance.media_player_new()
+        if audio_output:
+            try:
+                self._player.audio_output_set(audio_output)
+            except Exception as exc:
+                LOG.debug("Could not set audio output %r: %s", audio_output, exc)
+        if audio_device or audio_output:
+            try:
+                self._player.audio_output_device_set(audio_output or None, audio_device or None)
+            except Exception as exc:
+                LOG.debug("Could not set audio device %r: %s", audio_device, exc)
         self._volume = 80
         self._muted = False
         self._last_state = "stopped"
@@ -297,6 +325,42 @@ class VlcPlaybackBackend(PlaybackBackend):
     def is_playing(self) -> bool:
         return bool(self._player.is_playing())
 
+    def list_audio_outputs(self) -> list[tuple[str, str]]:
+        result: list[tuple[str, str]] = [("", "Default")]
+        try:
+            out = self._instance.audio_output_list_get()
+            while out:
+                name = str(getattr(out, "name", "") or "")
+                desc = str(getattr(out, "description", "") or name)
+                if name:
+                    result.append((name, desc))
+                out = getattr(out, "next", None)
+        except Exception as exc:
+            LOG.debug("Could not list audio outputs: %s", exc)
+        return result
+
+    def list_audio_devices(self, audio_output: str = "") -> list[tuple[str, str]]:
+        result: list[tuple[str, str]] = [("", "Default")]
+        try:
+            dev = self._instance.audio_output_device_list_get(audio_output)
+            while dev:
+                device_id = str(getattr(dev, "device", "") or "")
+                desc = str(getattr(dev, "description", "") or device_id)
+                if device_id:
+                    result.append((device_id, desc))
+                dev = getattr(dev, "next", None)
+        except Exception as exc:
+            LOG.debug("Could not list audio devices for %r: %s", audio_output, exc)
+        return result
+
+    def set_audio_device(self, audio_output: str, device_id: str) -> None:
+        try:
+            if audio_output:
+                self._player.audio_output_set(audio_output)
+            self._player.audio_output_device_set(audio_output or None, device_id or None)
+        except Exception as exc:
+            LOG.debug("Could not set audio device %r/%r: %s", audio_output, device_id, exc)
+
     def apply_equalizer(self, enabled: bool, bands: list[int], preamp: int = 0) -> None:
         self._eq_fade_timer.stop()
         if self._eq.apply(enabled, bands, preamp):
@@ -352,7 +416,12 @@ class VlcPlaybackBackend(PlaybackBackend):
             self.position_changed.emit(*current)
 
 
-def create_playback_backend(parent: Optional[QObject] = None) -> PlaybackBackend:
+def create_playback_backend(
+    parent: Optional[QObject] = None,
+    *,
+    audio_output: str = "",
+    audio_device: str = "",
+) -> PlaybackBackend:
     """Create the required VLC backend, preserving app startup if it is unavailable."""
     _configure_vlc_runtime_path()
     try:
@@ -363,7 +432,7 @@ def create_playback_backend(parent: Optional[QObject] = None) -> PlaybackBackend
         return UnavailablePlaybackBackend(reason, parent)
 
     try:
-        return VlcPlaybackBackend(vlc_module, parent)
+        return VlcPlaybackBackend(vlc_module, parent, audio_output=audio_output, audio_device=audio_device)
     except Exception as exc:
         reason = f"libVLC runtime could not be initialized: {exc}"
         LOG.warning("VLC playback backend unavailable: %s", reason)

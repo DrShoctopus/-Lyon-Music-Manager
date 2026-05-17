@@ -142,6 +142,8 @@ class Settings:
     replaygain_mode: str = "off"        # "off" | "track" | "album"
     replaygain_preamp_db: float = 0.0   # additional offset applied after gain, -6.0 to +6.0
     replaygain_prevent_clipping: bool = True
+    audio_output: str = ""              # VLC audio output module ID (e.g. "wasapi", "directsound")
+    audio_output_device: str = ""       # VLC device ID string; "" = VLC default
 
     def __post_init__(self) -> None:
         self.rip_format = str(self.rip_format or "flac").lower()
@@ -160,6 +162,8 @@ class Settings:
         except (TypeError, ValueError):
             self.replaygain_preamp_db = 0.0
         self.replaygain_prevent_clipping = _bool_value(self.replaygain_prevent_clipping, True)
+        self.audio_output = str(self.audio_output or "").strip()
+        self.audio_output_device = str(self.audio_output_device or "").strip()
         self.yt_audio_format = str(self.yt_audio_format or "flac").lower()
         if self.yt_audio_format not in _YT_AUDIO_FORMATS:
             self.yt_audio_format = "flac"

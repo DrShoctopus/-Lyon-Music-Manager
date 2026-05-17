@@ -32,14 +32,23 @@ _FLAC_FORMAT = "flac"
 
 
 class SettingsDialog(QDialog):
-    def __init__(self, settings: Settings, parent: QWidget | None = None):
+    def __init__(
+        self,
+        settings: Settings,
+        parent: QWidget | None = None,
+        *,
+        audio_outputs: list[tuple[str, str]] | None = None,
+        audio_devices_map: dict[str, list[tuple[str, str]]] | None = None,
+    ):
         super().__init__(parent)
         self.setWindowTitle("Settings")
-        self.resize(540, 420)
+        self.resize(540, 460)
         self.result_settings = replace(settings)
         self.result_settings.library_paths = normalize_library_paths(settings.library_paths)
         self._initial_music_root = settings.music_root.strip()
         self._initial_library_paths = set(self.result_settings.library_paths)
+        self._audio_outputs: list[tuple[str, str]] = audio_outputs or [("", "Default")]
+        self._audio_devices_map: dict[str, list[tuple[str, str]]] = audio_devices_map or {}
 
         tabs = QTabWidget()
         tabs.addTab(self._build_library_tab(settings), "Library")
@@ -113,6 +122,32 @@ class SettingsDialog(QDialog):
         form.setContentsMargins(12, 12, 12, 12)
         form.setVerticalSpacing(8)
 
+        # ---- Audio Output section
+        ao_label = QLabel("Audio Output")
+        ao_label.setObjectName("sectionHeader")
+        form.addRow(ao_label)
+
+        self.audio_output_combo = QComboBox()
+        for out_id, out_desc in self._audio_outputs:
+            self.audio_output_combo.addItem(out_desc, out_id)
+        current_output = settings.audio_output
+        for i in range(self.audio_output_combo.count()):
+            if self.audio_output_combo.itemData(i) == current_output:
+                self.audio_output_combo.setCurrentIndex(i)
+                break
+        form.addRow("Output module:", self.audio_output_combo)
+
+        self.audio_device_combo = QComboBox()
+        self._repopulate_device_combo(settings.audio_output, settings.audio_output_device)
+        form.addRow("Output device:", self.audio_device_combo)
+
+        self.audio_output_combo.currentIndexChanged.connect(self._on_audio_output_changed)
+
+        note = QLabel("Changes take effect on the next track.")
+        note.setObjectName("mutedText")
+        form.addRow("", note)
+
+        # ---- ReplayGain section
         rg_label = QLabel("ReplayGain")
         rg_label.setObjectName("sectionHeader")
         form.addRow(rg_label)
@@ -144,6 +179,25 @@ class SettingsDialog(QDialog):
         form.addRow("", self.rg_prevent_clipping)
 
         return w
+
+    def _repopulate_device_combo(self, audio_output: str, current_device: str) -> None:
+        self.audio_device_combo.blockSignals(True)
+        self.audio_device_combo.clear()
+        devices = self._audio_devices_map.get(audio_output, [("", "Default")])
+        if not devices:
+            devices = [("", "Default")]
+        for dev_id, dev_desc in devices:
+            self.audio_device_combo.addItem(dev_desc, dev_id)
+        # Select current device
+        for i in range(self.audio_device_combo.count()):
+            if self.audio_device_combo.itemData(i) == current_device:
+                self.audio_device_combo.setCurrentIndex(i)
+                break
+        self.audio_device_combo.blockSignals(False)
+
+    def _on_audio_output_changed(self) -> None:
+        selected_output = self.audio_output_combo.currentData() or ""
+        self._repopulate_device_combo(selected_output, "")
 
     def _build_ripping_tab(self, settings: Settings) -> QWidget:
         w = QWidget()
@@ -399,6 +453,8 @@ class SettingsDialog(QDialog):
             if answer != QMessageBox.Yes:
                 return
 
+        self.result_settings.audio_output = self.audio_output_combo.currentData() or ""
+        self.result_settings.audio_output_device = self.audio_device_combo.currentData() or ""
         self.result_settings.replaygain_mode = self.rg_mode.currentData() or "off"
         self.result_settings.replaygain_preamp_db = self.rg_preamp.value()
         self.result_settings.replaygain_prevent_clipping = self.rg_prevent_clipping.isChecked()

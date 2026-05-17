@@ -95,6 +95,10 @@ class MainWindow(QMainWindow):
             self.settings.replaygain_preamp_db,
             self.settings.replaygain_prevent_clipping,
         )
+        self.player.set_audio_device(
+            self.settings.audio_output,
+            self.settings.audio_output_device,
+        )
         self._scan_thread: _LibraryScanThread | None = None
         self._rg_scanner: ReplayGainScanner | None = None
         self._watch_index_thread: LibraryIndexThread | None = None
@@ -807,7 +811,15 @@ class MainWindow(QMainWindow):
         from .settings_dialog import SettingsDialog
         old_paths = list(self.settings.library_paths)
         old_watch = self.settings.watch_library_folders
-        dlg = SettingsDialog(self.settings, self)
+        audio_outputs = self.player.list_audio_outputs()
+        audio_devices_map: dict[str, list[tuple[str, str]]] = {}
+        for out_id, _desc in audio_outputs:
+            audio_devices_map[out_id] = self.player.list_audio_devices(out_id)
+        dlg = SettingsDialog(
+            self.settings, self,
+            audio_outputs=audio_outputs,
+            audio_devices_map=audio_devices_map,
+        )
         try:
             accepted = dlg.exec()
             result_settings = dlg.result_settings if accepted else None
@@ -829,6 +841,10 @@ class MainWindow(QMainWindow):
                 self.settings.replaygain_mode,
                 self.settings.replaygain_preamp_db,
                 self.settings.replaygain_prevent_clipping,
+            )
+            self.player.set_audio_device(
+                self.settings.audio_output,
+                self.settings.audio_output_device,
             )
             self.video_player_view.apply_equalizer(
                 self.settings.equalizer_enabled,
