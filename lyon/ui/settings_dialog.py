@@ -178,6 +178,23 @@ class SettingsDialog(QDialog):
         self.rg_prevent_clipping.setChecked(settings.replaygain_prevent_clipping)
         form.addRow("", self.rg_prevent_clipping)
 
+        # ---- Gapless section
+        gl_label = QLabel("Gapless Playback")
+        gl_label.setObjectName("sectionHeader")
+        form.addRow(gl_label)
+
+        self.gapless_playback = QCheckBox("Enable gapless playback")
+        self.gapless_playback.setChecked(settings.gapless_playback)
+        self.gapless_playback.setToolTip(
+            "Pre-buffers the next track to minimize the gap between songs. "
+            "Has no effect when crossfade is enabled."
+        )
+        form.addRow("", self.gapless_playback)
+
+        gl_note = QLabel("Works only when crossfade is set to 0 seconds.")
+        gl_note.setObjectName("mutedText")
+        form.addRow("", gl_note)
+
         return w
 
     def _repopulate_device_combo(self, audio_output: str, current_device: str) -> None:
@@ -458,6 +475,7 @@ class SettingsDialog(QDialog):
         self.result_settings.replaygain_mode = self.rg_mode.currentData() or "off"
         self.result_settings.replaygain_preamp_db = self.rg_preamp.value()
         self.result_settings.replaygain_prevent_clipping = self.rg_prevent_clipping.isChecked()
+        self.result_settings.gapless_playback = self.gapless_playback.isChecked()
         self.result_settings.music_root = self.root_edit.text().strip() or self.result_settings.music_root
         self.result_settings.rip_format = self.rip_fmt.currentData() or "flac"
         self.result_settings.flac_compression = self.compression.value()

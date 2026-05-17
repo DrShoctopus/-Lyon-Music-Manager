@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 
 from ..core.library import Library, Track
 from ..core.smart_playlist import spec_to_json
+from ..core.tagger import write_partial_tags
 from .metadata_fetch_dialog import MetadataFetchDialog
 from .smart_playlist_dialog import SmartPlaylistDialog
 from .widgets import StarRatingWidget, format_duration
@@ -1355,6 +1356,7 @@ class LibraryView(QWidget):
         album_artist_edit = QLineEdit(track.album_artist)
         album_edit = QLineEdit(track.album)
         genre_edit = QLineEdit(track.genre)
+        grouping_edit = QLineEdit(getattr(track, "grouping", "") or "")
 
         track_no_spin = QSpinBox()
         track_no_spin.setRange(0, 9999)
@@ -1376,6 +1378,7 @@ class LibraryView(QWidget):
         form.addRow("Disc #:", disc_no_spin)
         form.addRow("Year:", year_spin)
         form.addRow("Genre:", genre_edit)
+        form.addRow("Grouping:", grouping_edit)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
         buttons.accepted.connect(dialog.accept)
@@ -1383,12 +1386,12 @@ class LibraryView(QWidget):
 
         layout.addLayout(form)
         layout.addWidget(buttons)
-        dialog.resize(480, 320)
+        dialog.resize(480, 340)
 
         if _exec_dialog(dialog) != QDialog.Accepted:
             return
 
-        self.library.update_track(track.id, {
+        fields = {
             "title": title_edit.text().strip(),
             "artist": artist_edit.text().strip(),
             "album_artist": album_artist_edit.text().strip(),
@@ -1397,9 +1400,15 @@ class LibraryView(QWidget):
             "disc_no": disc_no_spin.value(),
             "year": year_spin.value(),
             "genre": genre_edit.text().strip(),
-        })
-        self.status_message.emit(f"Metadata saved for \"{title_edit.text().strip()}\"")
+            "grouping": grouping_edit.text().strip(),
+        }
+        self.library.update_track(track.id, fields)
+        write_partial_tags(Path(track.path), fields)
+        self.status_message.emit(f"Metadata saved for \"{fields['title']}\"")
         self.refresh()
+
+    def edit_track_metadata(self, track: Track) -> None:
+        self._show_edit_metadata_dialog(track)
 
     @staticmethod
     def _youtube_query_for_track(track: Track) -> str:
@@ -1646,10 +1655,17 @@ class LibraryView(QWidget):
 
         if not fields:
             return
+        failed = 0
         for t in tracks:
             self.library.update_track(t.id, fields)
+            if Path(t.path).is_file():
+                if not write_partial_tags(Path(t.path), fields):
+                    failed += 1
         n = len(tracks)
-        self.status_message.emit(f"Updated metadata for {n} track{'s' if n != 1 else ''}.")
+        msg = f"Updated metadata for {n} track{'s' if n != 1 else ''}."
+        if failed:
+            msg += f" ({failed} file{'s' if failed != 1 else ''} could not be written to disk.)"
+        self.status_message.emit(msg)
         self.refresh()
 
     # ------------------------------------------------------------------ playlists

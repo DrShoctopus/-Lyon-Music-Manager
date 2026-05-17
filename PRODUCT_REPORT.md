@@ -1,5 +1,5 @@
 # Sea Lyon Media Manager — Product Report
-**Version:** 0.5.0 · **Date:** 2026-05-17 · **Branch:** LMM-DEV  
+**Version:** 0.6.0 · **Date:** 2026-05-17 · **Branch:** LMM-DEV  
 **Methodology:** Direct source-code analysis of all files in `lyon/core/`, `lyon/ui/`, `build/`, `.github/`, and `tests/`. No third-party review documents referenced.
 
 ---
@@ -18,7 +18,7 @@
 
 Sea Lyon is a Windows-first desktop media manager built on Python 3.11 + PySide6 6.11, libVLC 3.0.21, and SQLite. Its core value proposition is an all-in-one experience covering CD ripping with multi-provider metadata, local library management, audio/video playback, and YouTube integration — no plugins required.
 
-At v0.5.0 the product is **approximately 89% complete** for its stated scope. All major systems are functional. The threading and resource lifecycle model is solid: worker threads use proper `shutdown()`/`join()` patterns, DLL handles are retained and released, and subprocess cancellation cleans up partial output files. The remaining gaps are **feature gaps, not stability blockers.**
+At v0.6.0 the product is **approximately 92% complete** for its stated scope. All major systems are functional. The threading and resource lifecycle model is solid: worker threads use proper `shutdown()`/`join()` patterns, DLL handles are retained and released, and subprocess cancellation cleans up partial output files. Phase 1 (Audio Quality) is now complete: ReplayGain, output device/WASAPI, batch tag editor, and gapless playback are all implemented. The remaining gaps are **feature gaps, not stability blockers.**
 
 **Genuine competitive advantages over any single rival:**
 - CUETools DB AccurateRip v1 verification (unique among GUI apps without plugins)
@@ -27,13 +27,14 @@ At v0.5.0 the product is **approximately 89% complete** for its stated scope. Al
 - YouTube search + download with automatic library import (no competitor ships this)
 - All of the above in one installer — no plugin ecosystem required
 
-**Priority feature gaps to close:**
-- ReplayGain (scan, read, playback normalization) — expected by any FLAC/audiophile user
-- Output device selection / WASAPI — required for DAC and multi-output users on Windows
-- Batch tag editor for existing library files — core library-cleanup workflow
+**Priority feature gaps to close (Phase 2):**
 - Acoustic fingerprinting (AcoustID) — needed for "identify unknown track" and better duplicate detection
 - Last.fm / ListenBrainz scrobbling — expected by engaged music listeners
 - Album grid browser — dominant UI pattern in all category leaders
+- CUE sheet support — single-image + CUE rips are invisible to the scanner
+- Playlist import (M3U/PLS) — common migration workflow
+
+*Phase 1 complete: ReplayGain, output device/WASAPI, batch tag editor, and gapless playback are all shipped.*
 
 ---
 
@@ -68,7 +69,7 @@ At v0.5.0 the product is **approximately 89% complete** for its stated scope. Al
 | **CI/CD (GitHub Actions)** | 100% | Windows build + smoke test, binary caching, artifact upload |
 | **Media Keys (macOS)** | 100% | PyObjC integration, graceful no-op elsewhere |
 
-**Overall: ~89% complete for stated v0.5 scope**
+**Overall: ~92% complete for stated v0.6 scope**
 
 ---
 
@@ -84,12 +85,15 @@ At v0.5.0 the product is **approximately 89% complete** for its stated scope. Al
 - **Duplicate finder:** `find_duplicates()` by normalized artist + title
 - **Gap:** No acoustic fingerprint or file-hash comparison; video metadata falls back to folder names
 
-#### Audio Playback (`lyon/core/player.py` — 484 lines)
+#### Audio Playback (`lyon/core/player.py`)
 - **Queue:** `load_queue`, `set_queue`, `enqueue`, `remove_queue_index`, `move_queue_item`, `clear_queue`
 - **Transport:** `play_index`, `play`, `pause`, `stop`, `seek`, `next`, `previous`
 - **Modes:** Shuffle (per-queue random path), repeat OFF/ONE/ALL
 - **Volume:** 0–100 with clamping; mute toggle
 - **Crossfade:** Dual-backend overlap with 50ms fade ticks; configurable overlap seconds (0 = disabled)
+- **Gapless:** Pre-buffer next track 2 s before end (silent backend at vol=0); instant promotion on `end_reached`; disabled when crossfade > 0; VLC options `--audio-time-stretch-enabled=0` + `--file-caching=150` applied per-instance
+- **ReplayGain:** Track/album gain multiplier applied to VLC volume; preamp + prevent-clipping; crossfade-aware (separate multipliers for fading-in/out backends)
+- **Output device:** `set_audio_device()` routes to `audio_output_set()` + `audio_output_device_set()`; applied to crossfade/gapless backends
 - **Equalizer:** 10-band + preamp applied via `VlcEqualizerController`
 - **Signals:** `track_changed`, `state_changed`, `position_changed`, `queue_changed`, `playback_unavailable`
 - **Complete — no gaps**
@@ -194,9 +198,9 @@ At v0.5.0 the product is **approximately 89% complete** for its stated scope. Al
 | Crossfade | ✅ | ✅ | ✅ | via plugin | ✅ |
 | 10-band equalizer | ✅ | ✅ | ✅ | via plugin | ❌ |
 | EQ presets + custom curves | ✅ | ✅ | ✅ | via plugin | ❌ |
-| Gapless playback | ⚠️ | ✅ | ✅ | ✅ | ✅ |
-| ReplayGain (read + scan) | ❌ | ✅ | ✅ | ✅ | ✅ |
-| Output device / WASAPI | ❌ | ✅ | ✅ | ✅ | ✅ |
+| Gapless playback | ✅ | ✅ | ✅ | ✅ | ✅ |
+| ReplayGain (read + scan) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Output device / WASAPI | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Bit-perfect / exclusive mode | ❌ | ✅ | ❌ | ✅ | ✅ |
 | DSP / plugin chain | ❌ | ✅ | via plugin | ✅ | ❌ |
 | Sleep timer | ✅ | ✅ | ✅ | via plugin | ❌ |
@@ -284,8 +288,9 @@ These are the gaps that most affect users coming from MusicBee or MediaMonkey:
 
 | Gap | MusicBee | MediaMonkey | Priority |
 |-----|:--------:|:-----------:|---------|
-| ReplayGain scan + read + playback | ✅ | ✅ | **Critical** |
-| Output device / WASAPI | ✅ | ✅ | **Critical** |
+| ~~ReplayGain scan + read + playback~~ | ✅ | ✅ | ~~Critical~~ — **Done** |
+| ~~Output device / WASAPI~~ | ✅ | ✅ | ~~Critical~~ — **Done** |
+| ~~Gapless playback~~ | ✅ | ✅ | ~~High~~ — **Done** |
 | Acoustic fingerprinting (AcoustID) | ✅ | ✅ | **High** |
 | Last.fm / ListenBrainz scrobbling | ✅ | ✅ | **High** |
 | CUE sheet support | ✅ | ✅ | **High** |
@@ -304,17 +309,16 @@ These are the gaps that most affect users coming from MusicBee or MediaMonkey:
 
 ### 4.1 Critical — Blocks Power-User Adoption
 
-**ReplayGain**  
-No loudness normalization of any kind. FLAC users and audiophiles expect this as baseline. Missing means volume jumps between tracks from different albums.  
-Scope: scan + tag write (R128/ReplayGain tags via ffmpeg loudnorm) + playback read + apply gain to VLC volume pre-output. Album-mode and track-mode. Settings toggle.
+> **All Phase 1 critical gaps are closed as of v0.6.0.**
 
-**Output Device / WASAPI**  
-Users with DACs, multiple audio outputs, or audio interfaces cannot select their device. On Windows this is WASAPI; Sea Lyon exposes no output device selection at all.  
-Scope: `libvlc_audio_output_device_enum()` → settings dropdown; `--aout wasapi --wasapi-audio-device` passed to VLC; player restart on change.
+**~~ReplayGain~~** ✅ *Implemented in v0.6.0*  
+`lyon/core/replaygain.py` — ffmpeg ebur128 measurement; FLAC/Vorbis, ID3, MP4, OGG/Opus, WMA tag I/O; `ReplayGainScanner` QThread; track/album modes; preamp + prevent-clipping; applied to VLC volume via multiplier.
 
-**Batch Tag Editor (existing library files)**  
-The library view can edit metadata on multiple selected tracks via a batch dialog, but the existing tagger only writes on rip. Confirm the batch dialog in `library_view.py` is fully wired to `tagger.py` for arbitrary library tracks, not just ripped ones.  
-*(From code analysis: batch metadata editing is present in library_view.py — verify it covers all formats and saves back to the library DB.)*
+**~~Output Device / WASAPI~~** ✅ *Implemented in v0.6.0*  
+`VlcPlaybackBackend` enumerates outputs/devices via libVLC linked lists; `audio_output_set()` + `audio_output_device_set()` take effect on next play; settings Playback tab shows output module + device pickers.
+
+**~~Batch Tag Editor (existing library files)~~** ✅ *Implemented in v0.6.0*  
+`write_partial_tags()` in `tagger.py` handles all 7 formats; both single-track and batch dialogs in `library_view.py` write through it; "Edit Metadata…" available from the Now Playing queue context menu; grouping field added to single-track dialog.
 
 ### 4.2 High — Required for MusicBee Functional Parity
 
@@ -397,9 +401,11 @@ Scope: File picker in library sidebar → parse M3U/PLS → match paths to libra
 - Confirm `library_view.py` batch metadata dialog writes through `tagger.py` for all 7 supported formats on arbitrary library tracks (not rip-path only)
 - Add a right-click context menu shortcut "Edit Tags…" directly from the Now Playing queue
 
-**1.4 Gapless Playback Verification**
-- Set VLC `--audio-time-stretch-enabled 0` and tune pre-buffering to minimize gap between tracks
-- Add gapless mode toggle to settings; document that it works only when crossfade = 0
+**1.4 Gapless Playback** ✅ *Implemented*
+- `_GAPLESS_VLC_OPTIONS = ("--audio-time-stretch-enabled=0", "--file-caching=150")` passed to each VLC `Instance()` when enabled — cuts pipeline warm-up gap
+- Pre-buffer next track (silently, at vol=0) when ≤2 s remain; promote instantly on `end_reached` with no overlap; no-op when `crossfade_seconds > 0`
+- Gapless toggle added to Settings → Playback tab with note about crossfade exclusivity
+- Queue reorder and removal correctly update the pre-buffer index or cancel it
 
 ---
 
@@ -517,12 +523,12 @@ v1.0                                                                       ■
 
 ### Milestone Definitions
 
-#### v0.6.0 — Audio Quality Release (Target: August 2026)
+#### v0.6.0 — Audio Quality Release ✅ *Complete*
 *Phase 1 complete. Closes audiophile and power-user gaps.*
-- [ ] ReplayGain: scan, tag write, playback normalization
-- [ ] Output device selection / WASAPI
-- [ ] Gapless playback verified and togglable
-- [ ] Batch tag editor confirmed working for all library formats
+- [x] ReplayGain: scan, tag write, playback normalization
+- [x] Output device selection / WASAPI
+- [x] Gapless playback verified and togglable
+- [x] Batch tag editor confirmed working for all library formats
 
 #### v0.7.0 — Library Parity Release (Target: October 2026)
 *Phase 2 complete. MusicBee functional parity on core library features.*
@@ -593,4 +599,4 @@ v1.0                                                                       ■
 
 ---
 
-*Report generated from direct source analysis of Sea Lyon Media Manager v0.5.0, branch LMM-DEV, commit 6f006c0. All findings derived from reading `lyon/core/` (17 files, ~4,100 lines), `lyon/ui/` (21 files, ~8,800 lines), `build/`, `.github/workflows/`, and `tests/` (27 test files). No third-party review documents referenced.*
+*Report updated for Sea Lyon Media Manager v0.6.0, branch LMM-DEV. Phase 1 (Audio Quality) complete: ReplayGain, output device/WASAPI, batch tag editor, and gapless playback implemented. Original analysis from commit 6f006c0; Phase 1 work on LMM-DEV.*

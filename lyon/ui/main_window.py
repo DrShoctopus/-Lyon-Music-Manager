@@ -99,6 +99,7 @@ class MainWindow(QMainWindow):
             self.settings.audio_output,
             self.settings.audio_output_device,
         )
+        self.player.set_gapless(self.settings.gapless_playback)
         self._scan_thread: _LibraryScanThread | None = None
         self._rg_scanner: ReplayGainScanner | None = None
         self._watch_index_thread: LibraryIndexThread | None = None
@@ -252,6 +253,7 @@ class MainWindow(QMainWindow):
         self.library_view.request_open_settings.connect(self.open_settings)
         self.library_view.request_diagnostics.connect(self.show_diagnostics)
         self.library_view.request_scan_replaygain.connect(self._on_scan_replaygain)
+        self.now_playing.request_edit_metadata.connect(self.library_view.edit_track_metadata)
         self.video_player_view.request_diagnostics.connect(self.show_diagnostics)
         self.disc_view.play_audio_tracks.connect(self._play_disc_audio_tracks)
         self.disc_view.enqueue_audio_tracks.connect(self._enqueue_disc_audio_tracks)
@@ -846,6 +848,7 @@ class MainWindow(QMainWindow):
                 self.settings.audio_output,
                 self.settings.audio_output_device,
             )
+            self.player.set_gapless(self.settings.gapless_playback)
             self.video_player_view.apply_equalizer(
                 self.settings.equalizer_enabled,
                 self.settings.equalizer_bands,

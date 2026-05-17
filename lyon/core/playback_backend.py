@@ -228,12 +228,13 @@ class VlcPlaybackBackend(PlaybackBackend):
         *,
         audio_output: str = "",
         audio_device: str = "",
+        vlc_instance_options: tuple[str, ...] = (),
     ):
         super().__init__(parent)
         from PySide6.QtCore import QTimer
 
         self._vlc = vlc_module
-        self._instance = vlc_module.Instance()
+        self._instance = vlc_module.Instance(*vlc_instance_options)
         self._player = self._instance.media_player_new()
         if audio_output:
             try:
@@ -451,6 +452,7 @@ def create_playback_backend(
     *,
     audio_output: str = "",
     audio_device: str = "",
+    vlc_instance_options: tuple[str, ...] = (),
 ) -> PlaybackBackend:
     """Create the required VLC backend, preserving app startup if it is unavailable."""
     _configure_vlc_runtime_path()
@@ -462,7 +464,13 @@ def create_playback_backend(
         return UnavailablePlaybackBackend(reason, parent)
 
     try:
-        return VlcPlaybackBackend(vlc_module, parent, audio_output=audio_output, audio_device=audio_device)
+        return VlcPlaybackBackend(
+            vlc_module,
+            parent,
+            audio_output=audio_output,
+            audio_device=audio_device,
+            vlc_instance_options=vlc_instance_options,
+        )
     except Exception as exc:
         reason = f"libVLC runtime could not be initialized: {exc}"
         LOG.warning("VLC playback backend unavailable: %s", reason)

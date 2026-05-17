@@ -306,6 +306,7 @@ class NowPlayingView(QWidget):
 
     # Emitted from the lyrics-fetch worker thread; always delivered on the main thread.
     _lyrics_ready = Signal(int, str, str)   # task_id, synced_lrc, plain_text
+    request_edit_metadata = Signal(object)  # Track
 
     # In-memory lyrics cache cap; oldest entries evicted FIFO when exceeded.
     _LYRICS_CACHE_MAX = 256
@@ -652,10 +653,16 @@ class NowPlayingView(QWidget):
         idx = item.data(Qt.UserRole)
         if not isinstance(idx, int):
             return
+        queue = self.player.queue()
+        track = queue[idx] if 0 <= idx < len(queue) else None
         from PySide6.QtWidgets import QMenu
         menu = QMenu(self)
         play_act = menu.addAction("Play Now")
         remove_act = menu.addAction("Remove from Queue")
+        edit_act = None
+        if track is not None and getattr(track, "is_library_item", False):
+            menu.addSeparator()
+            edit_act = menu.addAction("Edit Metadata…")
         try:
             action = menu.exec(self._queue_list.mapToGlobal(pos))
         finally:
@@ -664,6 +671,8 @@ class NowPlayingView(QWidget):
             self.player.play_index(idx)
         elif action == remove_act:
             self.player.remove_queue_index(idx)
+        elif edit_act is not None and action == edit_act:
+            self.request_edit_metadata.emit(track)
 
     def _on_queue_rows_moved(
         self, _parent, src_first: int, src_last: int, _dest, dest_row: int
