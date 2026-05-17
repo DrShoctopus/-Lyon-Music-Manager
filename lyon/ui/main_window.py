@@ -155,7 +155,7 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
         self.library_view = LibraryView(self.library)
         self._library_refresh_timer.timeout.connect(self.library_view.refresh)
-        self.now_playing = NowPlayingView(self.player, library=self.library)
+        self.now_playing = NowPlayingView(self.player, library=self.library, settings=self.settings)
         self.video_player_view = VideoPlayerView(
             library=self.library,
             initial_volume=self.settings.last_volume,
@@ -526,6 +526,7 @@ class MainWindow(QMainWindow):
             self.settings.save()
             metadata.reset_musicbrainz_useragent()
             self.ripper_view.apply_settings(self.settings)
+            self.now_playing._settings = self.settings
             self.player.set_equalizer(
                 self.settings.equalizer_enabled,
                 self.settings.equalizer_bands,
@@ -550,6 +551,7 @@ class MainWindow(QMainWindow):
             self.settings.save()
             metadata.reset_musicbrainz_useragent()
             self.ripper_view.apply_settings(self.settings)
+            self.now_playing._settings = self.settings
             if self.settings.library_paths:
                 self._start_scan(self.settings.library_paths, "Scanned")
             self.show_toast("Setup saved.", level="success")

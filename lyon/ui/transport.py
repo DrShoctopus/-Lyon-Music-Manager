@@ -135,21 +135,22 @@ def _draw_glyph(painter: QPainter, name: str, rect, color: QColor) -> None:
 
     elif name in ("heart-empty", "heart-filled"):
         path = QPainterPath()
-        # Drawn from the bottom tip, left arc, right arc, close.
-        # All offsets are proportional to `size` so the glyph scales with button size.
-        path.moveTo(cx, cy + size * 0.32)
-        path.cubicTo(cx - size * 0.50, cy + size * 0.08,
-                     cx - size * 0.56, cy - size * 0.24,
-                     cx - size * 0.24, cy - size * 0.24)
-        path.cubicTo(cx - size * 0.08, cy - size * 0.30,
-                     cx, cy - size * 0.10,
-                     cx, cy - size * 0.10)
-        path.cubicTo(cx, cy - size * 0.10,
-                     cx + size * 0.08, cy - size * 0.30,
-                     cx + size * 0.24, cy - size * 0.24)
-        path.cubicTo(cx + size * 0.56, cy - size * 0.24,
-                     cx + size * 0.50, cy + size * 0.08,
-                     cx, cy + size * 0.32)
+        # Four-segment heart: bottom tip → left lobe → center V → right lobe → tip.
+        # Tip control points sit above the tip (cy + 0.20s) so the curves arrive
+        # diagonally, producing a 90° pointed cusp instead of a rounded bottom.
+        path.moveTo(cx, cy + size * 0.38)
+        path.cubicTo(cx - size * 0.15, cy + size * 0.20,
+                     cx - size * 0.52, cy - size * 0.05,
+                     cx - size * 0.26, cy - size * 0.26)
+        path.cubicTo(cx - size * 0.50, cy - size * 0.48,
+                     cx - size * 0.08, cy - size * 0.48,
+                     cx, cy - size * 0.14)
+        path.cubicTo(cx + size * 0.08, cy - size * 0.48,
+                     cx + size * 0.50, cy - size * 0.48,
+                     cx + size * 0.26, cy - size * 0.26)
+        path.cubicTo(cx + size * 0.52, cy - size * 0.05,
+                     cx + size * 0.15, cy + size * 0.20,
+                     cx, cy + size * 0.38)
         path.closeSubpath()
         if name == "heart-filled":
             painter.drawPath(path)
