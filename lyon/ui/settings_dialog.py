@@ -271,8 +271,8 @@ class SettingsDialog(QDialog):
         layout.addSpacing(12)
 
         desc = QLabel(
-            "Sea Lyon is a music library manager, CD ripper, and player\n"
-            "for Windows, macOS, and Linux."
+            "Sea Lyon is a music library manager, CD ripper, and audio/video player\n"
+            "for Windows,Coming Soon to macOS"
         )
         desc.setWordWrap(True)
         layout.addWidget(desc)
