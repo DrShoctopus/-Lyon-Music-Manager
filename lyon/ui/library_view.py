@@ -32,6 +32,8 @@ _RECENTLY_PLAYED_KEY = "__recently_played__"
 _MOST_PLAYED_KEY = "__most_played__"
 _TOP_RATED_KEY = "__top_rated__"
 
+_SV_ALL_ALBUMS = "__sv_all_albums__"
+
 _VIRTUAL_COLLECTIONS: list[tuple[str, str]] = [
     (_RECENTLY_ADDED_KEY, "Recently Added"),
     (_RECENTLY_PLAYED_KEY, "Recently Played"),
@@ -267,17 +269,21 @@ class LibraryView(QWidget):
         self._show_videos_cb = QCheckBox("Show Videos")
         self._show_videos_cb.setChecked(False)
         self._show_videos_cb.toggled.connect(self._on_show_videos_toggled)
-        self._grid_mode_btn = QPushButton("⊞")
+        self._grid_mode_btn = QPushButton("⊞ Grid")
         self._grid_mode_btn.setCheckable(True)
         self._grid_mode_btn.setToolTip("Album grid view")
-        self._grid_mode_btn.setFixedWidth(32)
         self._grid_mode_btn.toggled.connect(self._on_view_mode_toggled)
+        self._simple_mode_btn = QPushButton("≡ Simple")
+        self._simple_mode_btn.setCheckable(True)
+        self._simple_mode_btn.setToolTip("Simplified 3-column view")
+        self._simple_mode_btn.toggled.connect(self._on_simple_mode_toggled)
         top.addWidget(self.search, 1)
+        top.addWidget(self._show_videos_cb)
         top.addWidget(self.play_btn)
         top.addWidget(self.enqueue_btn)
         top.addWidget(rescan_btn)
-        top.addWidget(self._show_videos_cb)
         top.addWidget(self._grid_mode_btn)
+        top.addWidget(self._simple_mode_btn)
 
         # ---- Genres / Artists / Albums lists
         self.genres = QListView()
@@ -447,6 +453,54 @@ class LibraryView(QWidget):
         grid_vl.setContentsMargins(0, 0, 0, 0)
         grid_vl.addWidget(grid_inner)
 
+        # ---- Simple-mode browser: 3-pane (Artists | Albums | Tracks)
+        self._sv_artists_model = QStandardItemModel()
+        self._sv_artists = QListView()
+        self._sv_artists.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self._sv_artists.setModel(self._sv_artists_model)
+
+        self._sv_albums_model = QStandardItemModel()
+        self._sv_albums = QListView()
+        self._sv_albums.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self._sv_albums.setModel(self._sv_albums_model)
+
+        self._sv_tracks_model = QStandardItemModel()
+        self._sv_tracks = QListView()
+        self._sv_tracks.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self._sv_tracks.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self._sv_tracks.setContextMenuPolicy(Qt.CustomContextMenu)
+        self._sv_tracks.customContextMenuRequested.connect(self._sv_show_track_context_menu)
+        self._sv_tracks.setModel(self._sv_tracks_model)
+        self._sv_current_tracks: list[Track] = []
+
+        QShortcut(QKeySequence(Qt.Key_Return), self._sv_tracks,
+                  activated=self._sv_play_selected, context=Qt.WidgetShortcut)
+        QShortcut(QKeySequence(Qt.Key_Enter), self._sv_tracks,
+                  activated=self._sv_play_selected, context=Qt.WidgetShortcut)
+        QShortcut(QKeySequence("Ctrl+E"), self._sv_tracks,
+                  activated=self._sv_enqueue_selected, context=Qt.WidgetShortcut)
+
+        sv_splitter = QSplitter(Qt.Horizontal)
+        for _sv_widget, _sv_label in (
+            (self._sv_artists, "Artists"),
+            (self._sv_albums, "Albums"),
+            (self._sv_tracks, "Tracks"),
+        ):
+            _sv_box = QWidget()
+            _sv_vbox = QVBoxLayout(_sv_box)
+            _sv_vbox.setContentsMargins(0, 0, 0, 0)
+            _sv_heading = QLabel(_sv_label)
+            _sv_heading.setObjectName("sectionHeading")
+            _sv_vbox.addWidget(_sv_heading)
+            _sv_vbox.addWidget(_sv_widget)
+            sv_splitter.addWidget(_sv_box)
+        sv_splitter.setSizes([300, 300, 400])
+
+        simple_widget = QWidget()
+        simple_vl = QVBoxLayout(simple_widget)
+        simple_vl.setContentsMargins(0, 0, 0, 0)
+        simple_vl.addWidget(sv_splitter)
+
         # ---- Empty-state (library has no tracks at all)
         empty_widget = QWidget()
         empty_layout = QVBoxLayout(empty_widget)
@@ -474,9 +528,10 @@ class LibraryView(QWidget):
         empty_layout.addLayout(empty_btns)
 
         self._browser_stack = QStackedWidget()
-        self._browser_stack.addWidget(empty_widget)  # 0: empty
+        self._browser_stack.addWidget(empty_widget)   # 0: empty
         self._browser_stack.addWidget(splitter)       # 1: list browser
         self._browser_stack.addWidget(grid_widget)    # 2: grid browser
+        self._browser_stack.addWidget(simple_widget)  # 3: simple browser
 
         # ---- Footer
         self._footer_label = QLabel("")
@@ -496,6 +551,13 @@ class LibraryView(QWidget):
             lambda *_: self._refresh_grid_albums()
         )
         self._grid_albums_view.doubleClicked.connect(self._on_grid_album_activated)
+        self._sv_artists.selectionModel().currentChanged.connect(
+            lambda *_: self._sv_refresh_albums()
+        )
+        self._sv_albums.selectionModel().currentChanged.connect(
+            lambda *_: self._sv_refresh_tracks()
+        )
+        self._sv_tracks.doubleClicked.connect(self._sv_on_track_double)
         self.playlists_view.selectionModel().currentChanged.connect(self._on_playlist_selected)
         self.playlists_view.tracks_dropped.connect(self._on_playlist_tracks_dropped)
         self.playlists_view.customContextMenuRequested.connect(self._on_playlist_context_menu)
@@ -578,6 +640,8 @@ class LibraryView(QWidget):
             self._refresh_artists()
             if self._browser_stack.currentIndex() == 2:
                 self._refresh_grid_albums()
+            elif self._browser_stack.currentIndex() == 3:
+                self._sv_refresh_artists()
         else:
             self._browser_stack.setCurrentIndex(0)
             self.artists_model.clear()
@@ -690,11 +754,33 @@ class LibraryView(QWidget):
                 self._grid_mode_btn.setChecked(False)
                 self._grid_mode_btn.blockSignals(False)
                 return
+            self._simple_mode_btn.blockSignals(True)
+            self._simple_mode_btn.setChecked(False)
+            self._simple_mode_btn.blockSignals(False)
             self._browser_stack.setCurrentIndex(2)
             self._refresh_grid_albums()
         else:
-            has_tracks = bool(self._library_all_artists(self._media_type_filter))
-            self._browser_stack.setCurrentIndex(1 if has_tracks else 0)
+            if not self._simple_mode_btn.isChecked():
+                has_tracks = bool(self._library_all_artists(self._media_type_filter))
+                self._browser_stack.setCurrentIndex(1 if has_tracks else 0)
+
+    def _on_simple_mode_toggled(self, checked: bool) -> None:
+        if checked:
+            if self._browser_stack.currentIndex() == 0:
+                # Empty library — revert toggle
+                self._simple_mode_btn.blockSignals(True)
+                self._simple_mode_btn.setChecked(False)
+                self._simple_mode_btn.blockSignals(False)
+                return
+            self._grid_mode_btn.blockSignals(True)
+            self._grid_mode_btn.setChecked(False)
+            self._grid_mode_btn.blockSignals(False)
+            self._browser_stack.setCurrentIndex(3)
+            self._sv_refresh_artists()
+        else:
+            if not self._grid_mode_btn.isChecked():
+                has_tracks = bool(self._library_all_artists(self._media_type_filter))
+                self._browser_stack.setCurrentIndex(1 if has_tracks else 0)
 
     def _refresh_grid_albums(self) -> None:
         """Populate the album art grid for the selected genre."""
@@ -739,6 +825,141 @@ class LibraryView(QWidget):
         self._grid_mode_btn.blockSignals(False)
         self._browser_stack.setCurrentIndex(1)
         self._navigate_to_album(artist, album)
+
+    # ------------------------------------------------------------------ simple view
+    def _sv_refresh_artists(self) -> None:
+        self._sv_artists_model.clear()
+        for a in self._library_all_artists(self._media_type_filter):
+            it = QStandardItem(a)
+            it.setData(a, Qt.UserRole)
+            self._sv_artists_model.appendRow(it)
+        if self._sv_artists_model.rowCount():
+            self._sv_artists.setCurrentIndex(self._sv_artists_model.index(0, 0))
+
+    def _sv_refresh_albums(self) -> None:
+        # Block the album selection signal while we rebuild the model: model.clear()
+        # invalidates the current index (1st currentChanged) and setCurrentIndex(row 0)
+        # would fire a 2nd. We call _sv_refresh_tracks() exactly once at the end.
+        sel = self._sv_albums.selectionModel()
+        sel.blockSignals(True)
+        try:
+            self._sv_albums_model.clear()
+            idx = self._sv_artists.currentIndex()
+            if not idx.isValid():
+                self._sv_tracks_model.clear()
+                self._sv_current_tracks = []
+                return
+            artist = idx.data(Qt.DisplayRole)
+            albums = list(self.library.albums_for_artist(artist, self._media_type_filter))
+            if len(albums) >= 2:
+                all_item = QStandardItem("All Albums")
+                all_item.setData(_SV_ALL_ALBUMS, Qt.UserRole)
+                f = all_item.font(); f.setItalic(True); all_item.setFont(f)
+                self._sv_albums_model.appendRow(all_item)
+            for album, _ in albums:
+                it = QStandardItem(album)
+                it.setData(album, Qt.UserRole)
+                self._sv_albums_model.appendRow(it)
+            if self._sv_albums_model.rowCount():
+                self._sv_albums.setCurrentIndex(self._sv_albums_model.index(0, 0))
+        finally:
+            sel.blockSignals(False)
+        self._sv_refresh_tracks()
+
+    def _sv_refresh_tracks(self) -> None:
+        self._sv_tracks_model.clear()
+        self._sv_current_tracks = []
+        artist_idx = self._sv_artists.currentIndex()
+        album_idx = self._sv_albums.currentIndex()
+        if not artist_idx.isValid():
+            return
+        artist = artist_idx.data(Qt.DisplayRole)
+        album_key = album_idx.data(Qt.UserRole) if album_idx.isValid() else _SV_ALL_ALBUMS
+        if album_key == _SV_ALL_ALBUMS:
+            tracks = self.library.tracks_for_artist(artist, self._media_type_filter)
+        else:
+            album = album_idx.data(Qt.DisplayRole)
+            tracks = self.library.tracks_for_album(artist, album, self._media_type_filter)
+        self._sv_current_tracks = tracks
+        for tr in tracks:
+            duration = format_duration(tr.duration)
+            num_prefix = f"{tr.track_no}. " if tr.track_no else ""
+            it = QStandardItem(f"{num_prefix}{tr.title}  [{duration}]")
+            it.setData(tr, _TRACK_REF_ROLE)
+            it.setEditable(False)
+            self._sv_tracks_model.appendRow(it)
+
+    def _sv_on_track_double(self, index: QModelIndex) -> None:
+        if not index.isValid():
+            return
+        item = self._sv_tracks_model.item(index.row(), 0)
+        if item is None:
+            return
+        track = item.data(_TRACK_REF_ROLE)
+        if not isinstance(track, Track):
+            return
+        if track.is_video:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(track.path))
+            return
+        self.play_tracks.emit(self._sv_current_tracks, index.row())
+
+    def _sv_track_at_row(self, row: int) -> Track | None:
+        item = self._sv_tracks_model.item(row, 0)
+        if item is None:
+            return None
+        track = item.data(_TRACK_REF_ROLE)
+        return track if isinstance(track, Track) else None
+
+    def _sv_selected_rows(self) -> list[int]:
+        rows = {idx.row() for idx in self._sv_tracks.selectionModel().selectedRows()}
+        if rows:
+            return sorted(rows)
+        idx = self._sv_tracks.currentIndex()
+        return [idx.row()] if idx.isValid() else []
+
+    def _sv_selected_tracks(self) -> list[Track]:
+        out: list[Track] = []
+        for r in self._sv_selected_rows():
+            t = self._sv_track_at_row(r)
+            if t is not None:
+                out.append(t)
+        return out
+
+    def _sv_play_selected(self) -> None:
+        if not self._sv_current_tracks:
+            return
+        selected = self._sv_selected_tracks()
+        if selected:
+            self.play_tracks.emit(selected, 0)
+            return
+        self.play_tracks.emit(self._sv_current_tracks, 0)
+
+    def _sv_enqueue_selected(self) -> None:
+        tracks = self._sv_selected_tracks() or self._sv_current_tracks
+        if tracks:
+            self.enqueue_tracks.emit(tracks)
+        else:
+            self.status_message.emit("No tracks selected to enqueue.")
+
+    def _sv_show_track_context_menu(self, pos) -> None:
+        idx = self._sv_tracks.indexAt(pos)
+        if not idx.isValid():
+            return
+        track = self._sv_track_at_row(idx.row())
+        if track is None:
+            return
+        selected = self._sv_selected_tracks()
+        if not any(t.id == track.id or t.path == track.path for t in selected):
+            self._sv_tracks.setCurrentIndex(idx)
+            selected = [track]
+        self._show_track_actions_menu(
+            self._sv_tracks.viewport().mapToGlobal(pos),
+            primary_track=track,
+            selected=selected,
+            play_fn=self._sv_play_selected,
+            enqueue_fn=self._sv_enqueue_selected,
+            show_go_to_album=False,
+        )
 
     def _navigate_to_album(self, artist: str, album: str) -> None:
         # Reset genre to "All Genres" so the artist is always visible
@@ -958,6 +1179,25 @@ class LibraryView(QWidget):
             self.tracks.setCurrentIndex(idx)
             selected = [track]
 
+        self._show_track_actions_menu(
+            self.tracks.viewport().mapToGlobal(pos),
+            primary_track=track,
+            selected=selected,
+            play_fn=self._play_selected,
+            enqueue_fn=self._enqueue_selected,
+            show_go_to_album=bool(self.search.text().strip()),
+        )
+
+    def _show_track_actions_menu(
+        self,
+        global_pos,
+        primary_track: Track,
+        selected: list[Track],
+        play_fn,
+        enqueue_fn,
+        show_go_to_album: bool = False,
+    ) -> None:
+        """Build and execute the shared right-click action menu for a track row."""
         menu = QMenu(self)
         play_now = menu.addAction("Play")
         enqueue = menu.addAction("Enqueue")
@@ -976,7 +1216,7 @@ class LibraryView(QWidget):
         new_pl_act = add_pl_menu.addAction("New Playlist…")
 
         go_to_album = None
-        if self.search.text().strip():
+        if show_go_to_album:
             menu.addSeparator()
             go_to_album = menu.addAction("Go to Album in Library")
 
@@ -985,31 +1225,31 @@ class LibraryView(QWidget):
         edit_metadata = menu.addAction("Edit Metadata")
         youtube_search = menu.addAction("Search YouTube for Artist, Album, and Track")
         properties = menu.addAction("Properties")
-        action = menu.exec(self.tracks.viewport().mapToGlobal(pos))
+        action = menu.exec(global_pos)
 
         if action is None:
             return
         if action == play_now:
-            self._play_selected()
+            play_fn()
         elif action == enqueue:
-            self._enqueue_selected()
+            enqueue_fn()
         elif action == new_pl_act:
             self._add_to_new_playlist([t.id for t in selected])
         elif action in pl_act_map:
             self._add_tracks_to_playlist([t.id for t in selected], pl_act_map[action])
         elif action == open_folder:
-            self._open_containing_folder(track)
+            self._open_containing_folder(primary_track)
         elif action == edit_metadata:
             if len(selected) >= 2:
                 self._show_batch_metadata_dialog(selected)
             else:
-                self._show_edit_metadata_dialog(track)
+                self._show_edit_metadata_dialog(primary_track)
         elif action == properties:
-            self._show_track_properties(track)
+            self._show_track_properties(primary_track)
         elif action == youtube_search:
-            self.request_youtube_search.emit(self._youtube_query_for_track(track))
+            self.request_youtube_search.emit(self._youtube_query_for_track(primary_track))
         elif go_to_album is not None and action == go_to_album:
-            self.reveal_track(track)
+            self.reveal_track(primary_track)
 
     def _open_containing_folder(self, track: Track) -> None:
         folder = Path(track.path).expanduser().parent
@@ -1118,6 +1358,10 @@ class LibraryView(QWidget):
             return
         self._current_tracks = self.library.search(q, self._media_type_filter)
         self._populate_tracks(self._current_tracks)
+        if self._browser_stack.currentIndex() == 3:
+            self._simple_mode_btn.blockSignals(True)
+            self._simple_mode_btn.setChecked(False)
+            self._simple_mode_btn.blockSignals(False)
         self._browser_stack.setCurrentIndex(1)
 
     # ------------------------------------------------------------------ playback
@@ -1258,6 +1502,9 @@ class LibraryView(QWidget):
             self._grid_mode_btn.blockSignals(True)
             self._grid_mode_btn.setChecked(False)
             self._grid_mode_btn.blockSignals(False)
+            self._simple_mode_btn.blockSignals(True)
+            self._simple_mode_btn.setChecked(False)
+            self._simple_mode_btn.blockSignals(False)
             has_tracks = bool(self._library_all_artists(self._media_type_filter))
             self._browser_stack.setCurrentIndex(1 if has_tracks else 0)
         self._navigate_to_album(track.display_artist, track.album or "Unknown Album")
@@ -1398,10 +1645,13 @@ class LibraryView(QWidget):
         self._active_playlist_id = playlist_id
         self._current_tracks = tracks
         self._populate_tracks(tracks)
-        if self._browser_stack.currentIndex() == 2:
+        if self._browser_stack.currentIndex() in (2, 3):
             self._grid_mode_btn.blockSignals(True)
             self._grid_mode_btn.setChecked(False)
             self._grid_mode_btn.blockSignals(False)
+            self._simple_mode_btn.blockSignals(True)
+            self._simple_mode_btn.setChecked(False)
+            self._simple_mode_btn.blockSignals(False)
             self._browser_stack.setCurrentIndex(1)
         return True
 
@@ -1422,10 +1672,13 @@ class LibraryView(QWidget):
         self._current_tracks = tracks
         self._populate_tracks(tracks)
         # Ensure list-mode browser is showing
-        if self._browser_stack.currentIndex() == 2:
+        if self._browser_stack.currentIndex() in (2, 3):
             self._grid_mode_btn.blockSignals(True)
             self._grid_mode_btn.setChecked(False)
             self._grid_mode_btn.blockSignals(False)
+            self._simple_mode_btn.blockSignals(True)
+            self._simple_mode_btn.setChecked(False)
+            self._simple_mode_btn.blockSignals(False)
             self._browser_stack.setCurrentIndex(1)
 
     def _on_playlist_tracks_dropped(self, playlist_id: int, track_ids: list) -> None:
