@@ -53,7 +53,7 @@ class YtDownloadDialog(QDialog):
         type_row = QHBoxLayout()
         self.radio_audio = QRadioButton("Audio")
         self.radio_video = QRadioButton("Video")
-        self.radio_audio.setChecked(True)
+        self.radio_video.setChecked(True)
         type_group = QButtonGroup(self)
         type_group.addButton(self.radio_audio)
         type_group.addButton(self.radio_video)
