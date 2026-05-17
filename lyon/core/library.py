@@ -88,6 +88,11 @@ _MIGRATIONS: list[tuple[int, str]] = [
     (6, "ALTER TABLE tracks ADD COLUMN file_mtime_ns INTEGER NOT NULL DEFAULT 0"),
     (6, "ALTER TABLE tracks ADD COLUMN last_scanned_at REAL"),
     (6, "ALTER TABLE tracks ADD COLUMN scan_error TEXT"),
+    # v7 — user-defined grouping tag (set per-rip on the Rip tab, surfaced as
+    # the Group column in the Track panel; mapped to ID3 TIT1 / Vorbis
+    # GROUPING / MP4 ©grp / ASF WM/ContentGroupDescription on disk)
+    (7, "ALTER TABLE tracks ADD COLUMN grouping TEXT NOT NULL DEFAULT ''"),
+    (7, "CREATE INDEX IF NOT EXISTS idx_tracks_grouping ON tracks(grouping)"),
 ]
 
 _PAGE_SIZE = 500  # rows per page in streaming queries
@@ -119,6 +124,7 @@ class Track:
     file_mtime_ns: int = 0
     last_scanned_at: float | None = None
     scan_error: str | None = None
+    grouping: str = ""
 
     @property
     def display_artist(self) -> str:
@@ -319,6 +325,7 @@ class Library:
                     "title": Path(path).stem,
                     "artist": "", "album_artist": "", "album": "",
                     "track_no": 0, "disc_no": 1, "year": 0, "genre": "",
+                    "grouping": "",
                     "duration": 0.0, "bitrate": 0, "samplerate": 0,
                 }
             else:
@@ -359,6 +366,7 @@ class Library:
                 meta["disc_no"],
                 meta["year"],
                 meta["genre"],
+                meta.get("grouping", "") or "",
                 meta["duration"],
                 meta["bitrate"],
                 meta["samplerate"],
@@ -374,10 +382,10 @@ class Library:
                 cur = self.conn.execute(
                     """INSERT OR IGNORE INTO tracks
                        (title, artist, album_artist, album, track_no, disc_no,
-                        year, genre, duration, bitrate, samplerate, artwork_path,
-                        media_type, disc_id, file_size, file_mtime_ns,
-                        last_scanned_at, scan_error, path)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        year, genre, grouping, duration, bitrate, samplerate,
+                        artwork_path, media_type, disc_id, file_size,
+                        file_mtime_ns, last_scanned_at, scan_error, path)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (*values, path),
                 )
                 if cur.rowcount > 0:
@@ -388,7 +396,7 @@ class Library:
                 """UPDATE tracks
                    SET title = ?, artist = ?, album_artist = ?, album = ?,
                        track_no = ?, disc_no = ?, year = ?, genre = ?,
-                       duration = ?, bitrate = ?, samplerate = ?,
+                       grouping = ?, duration = ?, bitrate = ?, samplerate = ?,
                        artwork_path = ?, media_type = ?, disc_id = ?,
                        file_size = ?, file_mtime_ns = ?, last_scanned_at = ?,
                        scan_error = ?
@@ -705,7 +713,7 @@ class Library:
         return (row["a"], row["b"]) if row else None
 
     def update_track(self, track_id: int, fields: dict) -> None:
-        allowed = {"title", "artist", "album_artist", "album", "track_no", "disc_no", "year", "genre", "artwork_path"}
+        allowed = {"title", "artist", "album_artist", "album", "track_no", "disc_no", "year", "genre", "grouping", "artwork_path"}
         safe = {k: v for k, v in fields.items() if k in allowed}
         if not safe:
             return
@@ -1016,6 +1024,7 @@ def _row_to_track(r: sqlite3.Row) -> Track:
         file_mtime_ns=int(r["file_mtime_ns"] or 0) if "file_mtime_ns" in keys else 0,
         last_scanned_at=r["last_scanned_at"] if "last_scanned_at" in keys else None,
         scan_error=r["scan_error"] if "scan_error" in keys else None,
+        grouping=(r["grouping"] or "") if "grouping" in keys else "",
     )
 
 
@@ -1077,6 +1086,7 @@ def _read_tags(path: str) -> dict | None:
         "disc_no": to_int(first("discnumber")) or 1,
         "year": to_int(first("date") or first("year")),
         "genre": first("genre"),
+        "grouping": first("grouping"),
         "duration": float(getattr(info, "length", 0.0) or 0.0),
         "bitrate": int(getattr(info, "bitrate", 0) or 0),
         "samplerate": int(getattr(info, "sample_rate", 0) or 0),

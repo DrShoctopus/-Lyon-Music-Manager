@@ -56,7 +56,8 @@ _COL_ALBUM = 3
 _COL_TIME = 4
 _COL_RATING = 5
 _COL_FORMAT = 6
-_NUM_COLS = 7
+_COL_GROUPING = 7
+_NUM_COLS = 8
 
 # Format badge colors (file extension → background hex)
 _FORMAT_COLORS: dict[str, str] = {
@@ -337,7 +338,7 @@ class LibraryView(QWidget):
 
         self.tracks_model = _TrackListModel(0, _NUM_COLS)
         self.tracks_model.setHorizontalHeaderLabels(
-            ["#", "Title", "Artist", "Album", "Time", "Rating", "Format"]
+            ["#", "Title", "Artist", "Album", "Time", "Rating", "Format", "Group"]
         )
         # Sort using a dedicated UserRole key so # / Time / Rating sort numerically and
         # text columns collate case-insensitively.
@@ -360,12 +361,14 @@ class LibraryView(QWidget):
         header.setSectionResizeMode(_COL_TIME,   QHeaderView.Fixed)
         header.setSectionResizeMode(_COL_RATING, QHeaderView.Fixed)
         header.setSectionResizeMode(_COL_FORMAT, QHeaderView.Fixed)
+        header.setSectionResizeMode(_COL_GROUPING, QHeaderView.Interactive)
         self.tracks.setColumnWidth(_COL_NUM,    50)
         self.tracks.setColumnWidth(_COL_ARTIST, 180)
         self.tracks.setColumnWidth(_COL_ALBUM,  200)
         self.tracks.setColumnWidth(_COL_TIME,   70)
         self.tracks.setColumnWidth(_COL_RATING, 90)
         self.tracks.setColumnWidth(_COL_FORMAT, 62)
+        self.tracks.setColumnWidth(_COL_GROUPING, 140)
         header.setContextMenuPolicy(Qt.CustomContextMenu)
         header.customContextMenuRequested.connect(self._show_header_context_menu)
         self.tracks.setDragEnabled(True)
@@ -1002,11 +1005,16 @@ class LibraryView(QWidget):
         format_act = menu.addAction("Format")
         format_act.setCheckable(True)
         format_act.setChecked(not self.tracks.isColumnHidden(_COL_FORMAT))
+        grouping_act = menu.addAction("Group")
+        grouping_act.setCheckable(True)
+        grouping_act.setChecked(not self.tracks.isColumnHidden(_COL_GROUPING))
         action = _exec_menu(menu, self.tracks.horizontalHeader().mapToGlobal(pos))
         if action == rating_act:
             self.tracks.setColumnHidden(_COL_RATING, not rating_act.isChecked())
         elif action == format_act:
             self.tracks.setColumnHidden(_COL_FORMAT, not format_act.isChecked())
+        elif action == grouping_act:
+            self.tracks.setColumnHidden(_COL_GROUPING, not grouping_act.isChecked())
 
     def _refresh_tracks(self) -> None:
         ai = self.artists.currentIndex()
@@ -1061,11 +1069,14 @@ class LibraryView(QWidget):
             format_item = QStandardItem(fmt)
             format_item.setData(fmt.lower(), Qt.UserRole)
 
-            for it in (n_item, title_item, artist_item, album_item, time_item, rating_item, format_item):
+            grouping_item = QStandardItem(tr.grouping or "")
+            grouping_item.setData((tr.grouping or "").lower(), Qt.UserRole)
+
+            for it in (n_item, title_item, artist_item, album_item, time_item, rating_item, format_item, grouping_item):
                 it.setEditable(False)
                 it.setToolTip(tooltip)
             self.tracks_model.appendRow(
-                [n_item, title_item, artist_item, album_item, time_item, rating_item, format_item]
+                [n_item, title_item, artist_item, album_item, time_item, rating_item, format_item, grouping_item]
             )
         self.tracks.setSortingEnabled(True)
         self._refresh_playing_indicator()

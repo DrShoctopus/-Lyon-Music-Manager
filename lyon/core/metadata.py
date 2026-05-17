@@ -72,6 +72,7 @@ class AlbumInfo:
     genre: str = ""
     artwork_url: str = ""
     metadata_source: str = "musicbrainz"
+    grouping: str = ""
 
     @property
     def year(self) -> int:

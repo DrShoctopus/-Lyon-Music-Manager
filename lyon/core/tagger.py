@@ -59,6 +59,8 @@ def write_flac_tags(
         f["musicbrainz_albumid"] = album.musicbrainz_albumid
     if album.genre:
         f["genre"] = album.genre
+    if album.grouping:
+        f["grouping"] = album.grouping
 
     if artwork:
         pic = Picture()
@@ -89,7 +91,7 @@ def _write_id3_tags(
     ``ID3.save(path)`` directly would corrupt WAV/AIFF files.
     """
     try:
-        from mutagen.id3 import APIC, TALB, TDRC, TIT2, TCON, TRCK, TPE1, TPE2
+        from mutagen.id3 import APIC, TALB, TDRC, TIT1, TIT2, TCON, TRCK, TPE1, TPE2
         audio = mutagen.File(str(path))
         if audio is None:
             return False
@@ -106,6 +108,8 @@ def _write_id3_tags(
         tags["TRCK"] = TRCK(encoding=3, text=f"{track.number}/{len(album.tracks)}")
         if album.genre:
             tags["TCON"] = TCON(encoding=3, text=album.genre)
+        if album.grouping:
+            tags["TIT1"] = TIT1(encoding=3, text=album.grouping)
         if artwork:
             mime = "image/png" if artwork[:4] == _PNG_MAGIC else "image/jpeg"
             tags["APIC"] = APIC(encoding=3, mime=mime, type=3, desc="Cover", data=artwork)
@@ -134,6 +138,8 @@ def _write_mp4_tags(
         audio["trkn"] = [(track.number, len(album.tracks))]
         if album.genre:
             audio["\xa9gen"] = [album.genre]
+        if album.grouping:
+            audio["\xa9grp"] = [album.grouping]
         if artwork:
             fmt = MP4Cover.FORMAT_PNG if artwork[:4] == _PNG_MAGIC else MP4Cover.FORMAT_JPEG
             audio["covr"] = [MP4Cover(artwork, imageformat=fmt)]
@@ -163,6 +169,8 @@ def _write_vorbis_comment_tags(
         audio["tracktotal"] = [str(len(album.tracks))]
         if album.genre:
             audio["genre"] = [album.genre]
+        if album.grouping:
+            audio["grouping"] = [album.grouping]
         if artwork:
             pic = Picture()
             pic.type = PictureType.COVER_FRONT
@@ -196,6 +204,8 @@ def _write_asf_tags(
         audio["WM/TrackNumber"] = [str(track.number)]
         if album.genre:
             audio["WM/Genre"] = [album.genre]
+        if album.grouping:
+            audio["WM/ContentGroupDescription"] = [album.grouping]
         audio.save()
         return True
     except (mutagen.MutagenError, OSError):

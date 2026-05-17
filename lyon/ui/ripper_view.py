@@ -322,6 +322,11 @@ class RipperView(QWidget):
         self.clear_meta_btn = QPushButton("Clear Metadata")
         self.clear_meta_btn.clicked.connect(self._clear_metadata)
         year_row.addWidget(self.clear_meta_btn)
+        year_row.addWidget(QLabel("Group:"))
+        self.grouping_edit = QLineEdit()
+        self.grouping_edit.setPlaceholderText("Custom tag applied to every track")
+        self.grouping_edit.setMinimumWidth(180)
+        year_row.addWidget(self.grouping_edit, 1)
         year_row.addStretch(1)
         meta.addLayout(year_row)
         self.dest_label = QLabel("")
@@ -474,6 +479,7 @@ class RipperView(QWidget):
         self.album_edit.clear()
         self.artist_edit.clear()
         self.year_edit.clear()
+        self.grouping_edit.clear()
         self.cover.setPixmap(cover_pixmap(None, 140, "CD"))
         self.progress.setValue(0)
         self.retry_btn.setVisible(False)
@@ -559,6 +565,7 @@ class RipperView(QWidget):
         self.album_edit.clear()
         self.artist_edit.clear()
         self.year_edit.clear()
+        self.grouping_edit.clear()
         self.cover.setPixmap(cover_pixmap(None, 140, "CD"))
 
     def search_online(self) -> None:
@@ -655,6 +662,7 @@ class RipperView(QWidget):
             date=self.year_edit.text().strip(),
             musicbrainz_albumid=(self._album.musicbrainz_albumid if self._album else ""),
             artwork=(self._album.artwork if self._album else None),
+            grouping=self.grouping_edit.text().strip(),
         )
         for r in range(self.tracks_model.rowCount()):
             raw = (self.tracks_model.item(r, 0).text() or "").strip()
