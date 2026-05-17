@@ -202,6 +202,19 @@ def test_unavailable_backend_preserves_volume_mute_and_equalizer_state():
     assert player.equalizer() == (True, [1, 2, 3, 0, 0, 0, 0, 0, 0, 0], 4)
 
 
+def test_player_volume_clamps_invalid_values_before_backend_call():
+    backend = FakeBackend()
+    player = Player(backend=backend)
+
+    player.set_volume(150)
+    assert player.volume() == 100
+    assert backend.volume() == 100
+
+    player.set_volume("bad")
+    assert player.volume() == 80
+    assert backend.volume() == 80
+
+
 def test_crossfade_starts_next_backend_before_stopping_current():
     backends: list[FakeBackend] = []
 

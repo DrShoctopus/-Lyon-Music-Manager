@@ -228,8 +228,9 @@ class Player(QObject):
 
     def set_volume(self, percent: int) -> None:
         self._cancel_crossfade(restore_active_volume=False)
-        self._user_volume = percent
-        self._backend.set_volume(percent)
+        volume = _clamp_volume(percent)
+        self._user_volume = volume
+        self._backend.set_volume(volume)
 
     def volume(self) -> int:
         return self._user_volume
@@ -441,3 +442,11 @@ class Player(QObject):
         self.position_changed.emit(0, 0)
         self.playback_unavailable.emit(reason)
         return False
+
+
+def _clamp_volume(value: object) -> int:
+    try:
+        volume = int(value)
+    except (TypeError, ValueError):
+        volume = 80
+    return max(0, min(100, volume))

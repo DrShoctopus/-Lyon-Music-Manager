@@ -19,6 +19,9 @@ from .equalizer import (
 )
 
 LOG = logging.getLogger(__name__)
+_RIP_FORMATS = {"flac", "mp3", "aac", "opus", "ogg", "alac", "wav", "aiff", "wma"}
+_YT_AUDIO_FORMATS = {"flac", "mp3"}
+_YT_VIDEO_FORMATS = {"mp4", "mkv", "webm"}
 
 
 def _default_music_root() -> Path:
@@ -55,6 +58,22 @@ def _app_version() -> str:
 
 def _is_custom_curve_name(name: str) -> bool:
     return bool(name) and name not in RESERVED_EQ_CURVE_NAMES
+
+
+def _clamp_int(value: object, default: int, minimum: int, maximum: int) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        number = default
+    return max(minimum, min(maximum, number))
+
+
+def _nonnegative_int(value: object, default: int = 0) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        number = default
+    return max(0, number)
 
 
 def normalize_library_paths(paths: object) -> list[str]:
@@ -108,6 +127,20 @@ class Settings:
     fetch_lyrics_online: bool = True    # query lrclib.net when no local .lrc / embedded lyrics
 
     def __post_init__(self) -> None:
+        self.rip_format = str(self.rip_format or "flac").lower()
+        if self.rip_format not in _RIP_FORMATS:
+            self.rip_format = "flac"
+        self.flac_compression = _clamp_int(self.flac_compression, 4, 0, 8)
+        self.rip_audio_bitrate = _clamp_int(self.rip_audio_bitrate, 320, 32, 1411)
+        self.last_volume = _clamp_int(self.last_volume, 80, 0, 100)
+        self.queue_current_index = _nonnegative_int(self.queue_current_index, 0)
+        self.crossfade_seconds = _nonnegative_int(self.crossfade_seconds, 0)
+        self.yt_audio_format = str(self.yt_audio_format or "flac").lower()
+        if self.yt_audio_format not in _YT_AUDIO_FORMATS:
+            self.yt_audio_format = "flac"
+        self.yt_video_format = str(self.yt_video_format or "mp4").lower()
+        if self.yt_video_format not in _YT_VIDEO_FORMATS:
+            self.yt_video_format = "mp4"
         self.library_paths = normalize_library_paths(self.library_paths)
         self.equalizer_preamp = clamp_preamp(self.equalizer_preamp)
         self.equalizer_bands = normalize_equalizer_bands(self.equalizer_bands)

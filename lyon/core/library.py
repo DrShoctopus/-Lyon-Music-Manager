@@ -16,7 +16,18 @@ from .settings import app_data_dir
 
 LOG = logging.getLogger(__name__)
 
-SUPPORTED_AUDIO_EXTS = {".flac", ".mp3", ".m4a", ".aac", ".ogg", ".opus", ".wav", ".wma"}
+SUPPORTED_AUDIO_EXTS = {
+    ".flac",
+    ".mp3",
+    ".m4a",
+    ".aac",
+    ".ogg",
+    ".opus",
+    ".wav",
+    ".aiff",
+    ".aif",
+    ".wma",
+}
 SUPPORTED_VIDEO_EXTS = {".mp4", ".mkv", ".webm", ".avi", ".mov"}
 SUPPORTED_EXTS = SUPPORTED_AUDIO_EXTS | SUPPORTED_VIDEO_EXTS
 

@@ -1044,10 +1044,6 @@ def _user_agent() -> str:
     return f"{s.musicbrainz_app}/{s.musicbrainz_version} ({s.musicbrainz_contact})"
 
 
-def _metadata_headers() -> dict[str, str]:
-    return {"User-Agent": _user_agent()}
-
-
 def _normalize(value: str) -> str:
     return " ".join(value.casefold().replace("&", "and").split())
 
