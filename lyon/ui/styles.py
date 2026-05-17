@@ -194,7 +194,7 @@ QSlider::groove:vertical {
     border-radius: 4px;
 }
 QSlider::sub-page:vertical {
-    background: qlineargradient(x1:0, y1:1, x2:0, y2:0,
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
         stop:0 #102c83, stop:0.5 #1b8dff, stop:1 #68f3ff);
     border: none;
     border-radius: 4px;
