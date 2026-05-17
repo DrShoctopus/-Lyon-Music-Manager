@@ -2,7 +2,11 @@
 from __future__ import annotations
 
 import bisect
+import json
 import re
+import threading
+import urllib.parse
+import urllib.request
 from pathlib import Path
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPixmap
@@ -63,6 +67,26 @@ def _read_embedded_lyrics(path: str) -> str | None:
     except Exception:
         pass
     return None
+
+
+def _fetch_lrclib(artist: str, title: str, album: str, duration_s: float) -> tuple[str, str]:
+    """Query LRCLIB for lyrics. Returns (synced_lrc, plain_text); empty string = not found."""
+    params: dict[str, str | int] = {
+        "artist_name": artist,
+        "track_name": title,
+        "album_name": album,
+        "duration": int(duration_s),
+    }
+    url = "https://lrclib.net/api/get?" + urllib.parse.urlencode(params)
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Sea-Lyon-Media-Manager"})
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            if resp.status != 200:
+                return "", ""
+            data = json.loads(resp.read().decode())
+            return data.get("syncedLyrics") or "", data.get("plainLyrics") or ""
+    except Exception:
+        return "", ""
 
 
 def _blur_pixmap(pm: QPixmap, target_w: int, target_h: int) -> QPixmap:
@@ -240,6 +264,9 @@ class _ClickableLabel(QLabel):
 class NowPlayingView(QWidget):
     """Now Playing screen with cinematic background, panel switcher, and interactive queue."""
 
+    # Emitted from the lyrics-fetch worker thread; always delivered on the main thread.
+    _lyrics_ready = Signal(int, str, str)   # task_id, synced_lrc, plain_text
+
     def __init__(
         self,
         player: Player,
@@ -253,6 +280,7 @@ class NowPlayingView(QWidget):
         self._bg_cache: QPixmap | None = None   # blurred result, invalidated on resize/track change
         self._bg_cache_size: tuple[int, int] = (0, 0)
         self._current_track: Track | None = None
+        self._lyrics_task_id: int = 0   # track.id of the in-flight LRCLIB request; 0 = none
 
         # ---- Album cover
         self.cover = QLabel()
@@ -385,6 +413,7 @@ class NowPlayingView(QWidget):
         player.track_changed.connect(self._on_track)
         player.queue_changed.connect(self._refresh_queue)
         player.position_changed.connect(self._on_position)
+        self._lyrics_ready.connect(self._on_lyrics_ready)
         self._refresh_queue()
         # Sync immediately if a track is already playing when this view is created.
         self._on_track(player.current())
@@ -456,6 +485,7 @@ class NowPlayingView(QWidget):
     # ---- Lyrics loading ------------------------------------------------
 
     def _load_lyrics(self, track: Track) -> None:
+        self._lyrics_task_id = 0  # cancel any in-flight LRCLIB request
         path = track.path
         # 1. Try .lrc sidecar file for synced lyrics
         lrc_path = Path(path).with_suffix(".lrc")
@@ -473,7 +503,37 @@ class NowPlayingView(QWidget):
                 pass
         # 2. Try embedded lyrics tags
         plain = _read_embedded_lyrics(path)
-        self._lyrics_panel.set_lyrics([], plain)
+        if plain:
+            self._lyrics_panel.set_lyrics([], plain)
+            return
+        # 3. Fetch from LRCLIB in a background thread
+        self._lyrics_panel.set_lyrics([], "Searching for lyrics…")
+        self._fetch_lyrics_online(track)
+
+    def _fetch_lyrics_online(self, track: Track) -> None:
+        task_id = track.id
+        self._lyrics_task_id = task_id
+
+        def _worker() -> None:
+            synced, plain = _fetch_lrclib(
+                track.display_artist,
+                track.title or "",
+                track.album or "",
+                track.duration,
+            )
+            self._lyrics_ready.emit(task_id, synced, plain)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_lyrics_ready(self, task_id: int, synced_lrc: str, plain: str) -> None:
+        if task_id != self._lyrics_task_id:
+            return  # stale result — track changed while fetch was in flight
+        if synced_lrc:
+            parsed = _parse_lrc(synced_lrc)
+            if parsed:
+                self._lyrics_panel.set_lyrics(parsed)
+                return
+        self._lyrics_panel.set_lyrics([], plain or None)
 
     # ---- Rating --------------------------------------------------------
 
