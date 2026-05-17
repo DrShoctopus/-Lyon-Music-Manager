@@ -326,6 +326,9 @@ class Player(QObject):
 
     def _on_track_ended(self) -> None:
         if self._library is not None and 0 <= self._index < len(self._queue):
+            if not self._queue[self._index].is_library_item:
+                self.next()
+                return
             self._library.increment_play_count(self._queue[self._index].id)
         self.next()
 
@@ -348,7 +351,11 @@ class Player(QObject):
         volume: int,
         muted: bool | None = None,
     ) -> None:
-        backend.set_source(track.path)
+        backend.set_source(
+            track.playback_uri or track.path,
+            is_location=track.playback_is_location,
+            options=track.playback_options,
+        )
         backend.apply_equalizer(
             self._equalizer_enabled,
             self._equalizer_bands,
@@ -383,7 +390,11 @@ class Player(QObject):
         nxt = self._next_index()
         if nxt is None or nxt == self._index:
             return
-        if self._library is not None and 0 <= self._index < len(self._queue):
+        if (
+            self._library is not None
+            and 0 <= self._index < len(self._queue)
+            and self._queue[self._index].is_library_item
+        ):
             self._library.increment_play_count(self._queue[self._index].id)
         self._crossfade_to_index(nxt)
 

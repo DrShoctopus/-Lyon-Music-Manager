@@ -20,14 +20,22 @@ class FakeBackend(QObject):
         super().__init__()
         self.equalizer_calls: list[tuple[bool, list[int]]] = []
         self.sources: list[str] = []
+        self.source_calls: list[tuple[str, bool, tuple[str, ...]]] = []
         self.play_count = 0
         self._position = 0
         self._volume = 80
         self._muted = False
         self._playing = False
 
-    def set_source(self, path: str) -> None:
+    def set_source(
+        self,
+        path: str,
+        *,
+        is_location: bool = False,
+        options: tuple[str, ...] = (),
+    ) -> None:
         self.sources.append(path)
+        self.source_calls.append((path, is_location, options))
 
     def play(self) -> None:
         self.play_count += 1
@@ -106,6 +114,31 @@ def test_equalizer_is_reapplied_on_track_load():
     assert backend.sources == ["C:/Music/test.flac"]
     assert backend.play_count == 1
     assert backend.equalizer_calls[-1] == (True, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 3)
+
+
+def test_disc_track_uses_location_source_options_and_skips_library_play_count():
+    class Library:
+        def __init__(self):
+            self.incremented: list[int] = []
+
+        def increment_play_count(self, track_id: int) -> None:
+            self.incremented.append(track_id)
+
+    backend = FakeBackend()
+    library = Library()
+    player = Player(backend=backend, library=library)
+    track = _track("cdda:///D:/#01")
+    track.id = 0
+    track.playback_uri = "cdda:///D:/"
+    track.playback_is_location = True
+    track.playback_options = (":cdda-track=1",)
+    track.is_library_item = False
+
+    player.set_queue([track])
+    backend.end_reached.emit()
+
+    assert backend.source_calls[0] == ("cdda:///D:/", True, (":cdda-track=1",))
+    assert library.incremented == []
 
 
 def test_queue_items_can_move_and_remove_without_losing_current_track():

@@ -28,6 +28,7 @@ from ..core.player import Player
 from ..core.settings import Settings
 from .branding import app_icon
 from .diagnostics_dialog import DiagnosticsDialog
+from .disc_view import DiscView
 from .duplicate_dialog import DuplicateDialog
 from .equalizer_dialog import EqualizerDialog
 from .first_run_dialog import FirstRunDialog
@@ -77,7 +78,7 @@ class _LibraryScanThread(QThread):
 
 class MainWindow(QMainWindow):
     # Tab display order — index matches the QStackedWidget page index.
-    _TAB_ORDER = ("Library", "Now Playing", "Video", "Rip", "YouTube")
+    _TAB_ORDER = ("Library", "Now Playing", "Video", "Disc", "Rip", "YouTube")
 
     def __init__(self):
         super().__init__()
@@ -179,6 +180,7 @@ class MainWindow(QMainWindow):
         )
         self.video_player_view.apply_equalizer(self.settings.equalizer_enabled, self.settings.equalizer_bands, self.settings.equalizer_preamp)
         self._library_refresh_timer.timeout.connect(self.video_player_view.refresh_catalog)
+        self.disc_view = DiscView(self.settings)
         self.ripper_view = RipperView(self.settings, self.library)
         self.youtube_view = YouTubeView()
 
@@ -187,6 +189,7 @@ class MainWindow(QMainWindow):
             self.library_view,
             self.now_playing,
             self.video_player_view,
+            self.disc_view,
             self.ripper_view,
             self.youtube_view,
         )
@@ -237,6 +240,12 @@ class MainWindow(QMainWindow):
         self.library_view.request_open_settings.connect(self.open_settings)
         self.library_view.request_diagnostics.connect(self.show_diagnostics)
         self.video_player_view.request_diagnostics.connect(self.show_diagnostics)
+        self.disc_view.play_audio_tracks.connect(self._play_disc_audio_tracks)
+        self.disc_view.enqueue_audio_tracks.connect(self._enqueue_disc_audio_tracks)
+        self.disc_view.play_video_disc.connect(self._play_video_disc)
+        self.disc_view.stop_video_disc.connect(self.video_player_view.stop_playback)
+        self.disc_view.rip_drive_requested.connect(self._rip_disc_drive)
+        self.disc_view.status_message.connect(lambda m: self.show_toast(m, level="info"))
         self.ripper_view.rip_completed.connect(self.library_view.refresh)
         self.ripper_view.log.connect(lambda m: sb.showMessage(m, 4000))
         self.youtube_view.download_requested.connect(self._on_yt_download)
@@ -715,6 +724,44 @@ class MainWindow(QMainWindow):
             self.show_toast("No missing tracks were found.", level="info")
         self.library_view.refresh()
 
+    def _play_disc_audio_tracks(self, tracks: list, start_index: int) -> None:
+        self.video_player_view.pause_playback()
+        self.player.set_queue(tracks, start_index)
+
+    def _enqueue_disc_audio_tracks(self, tracks: list) -> None:
+        self.player.enqueue(tracks)
+        self.show_toast(f"Enqueued {len(tracks)} disc track(s).", level="success")
+
+    def _play_video_disc(self, source) -> None:
+        if not self.video_player_view.playback_available():
+            reason = self.video_player_view.unavailable_reason() or "VLC video playback is unavailable."
+            self.show_toast(
+                "Video disc playback requires VLC/libVLC. Run diagnostics for setup details.",
+                level="error",
+                duration_ms=6000,
+                action=("Diagnostics", self.show_diagnostics),
+            )
+            self.statusBar().showMessage(reason, 6000)
+            return
+        self.player.stop()
+        self.tab_bar.setCurrentIndex(self._tab_index["Video"])
+        QTimer.singleShot(
+            0,
+            lambda: self.video_player_view.load_location(source.uri, label=source.label),
+        )
+        if source.fallback_uri:
+            self.show_toast(
+                "If the disc menu does not open, retry with Play Without Menus from Disc.",
+                level="info",
+                duration_ms=5000,
+            )
+
+    def _rip_disc_drive(self, drive: str) -> None:
+        if drive:
+            self.settings.cd_drive = drive
+            self.ripper_view.drive_combo.setCurrentText(drive)
+        self.tab_bar.setCurrentIndex(self._tab_index["Rip"])
+
     def open_settings(self) -> None:
         from .settings_dialog import SettingsDialog
         old_paths = list(self.settings.library_paths)
@@ -962,11 +1009,17 @@ class MainWindow(QMainWindow):
                 return
         self.player.stop()
         self.youtube_view.shutdown()
+        self.disc_view.shutdown()
         self.ripper_view.shutdown()
         self.settings.last_volume = self.player.volume()
         queue = self.player.queue()
-        self.settings.queue_track_paths = [t.path for t in queue]
-        self.settings.queue_current_index = max(0, self.player.current_index())
+        library_queue = [t for t in queue if t.is_library_item]
+        self.settings.queue_track_paths = [t.path for t in library_queue]
+        current = self.player.current()
+        if current is not None and current.is_library_item:
+            self.settings.queue_current_index = max(0, self.settings.queue_track_paths.index(current.path))
+        else:
+            self.settings.queue_current_index = 0
         self.settings.save()
         self.video_player_view.cleanup()
         self.player.cleanup()

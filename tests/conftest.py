@@ -52,7 +52,7 @@ def fake_backend():
             self._position = 0
             self._duration = 0
 
-        def set_source(self, _path): pass
+        def set_source(self, _path, *, is_location=False, options=()): pass
         def play(self): self._playing = True
         def pause(self): self._playing = False
         def stop(self): self._playing = False

@@ -55,6 +55,7 @@ class QueueDialog(QDialog):
         remove_btn = QPushButton("Remove")
         clear_btn = QPushButton("Clear Queue")
         save_pl_btn = QPushButton("Save as Playlist…")
+        self._save_pl_btn = save_pl_btn
         save_pl_btn.setEnabled(library is not None)
         save_pl_btn.clicked.connect(self._save_as_playlist)
         play_btn.clicked.connect(self._play_selected)
@@ -83,6 +84,9 @@ class QueueDialog(QDialog):
         queue = self.player.queue()
         current = self.player.current_index()
         self.summary.setText(self._summary_text(queue, current))
+        self._save_pl_btn.setEnabled(
+            self._library is not None and any(t.is_library_item for t in queue)
+        )
         self.table.setRowCount(len(queue))
         for row, track in enumerate(queue):
             values = [
@@ -136,6 +140,9 @@ class QueueDialog(QDialog):
         queue = self.player.queue()
         if not queue:
             return
+        library_tracks = [track for track in queue if track.is_library_item]
+        if not library_tracks:
+            return
         from PySide6.QtWidgets import QInputDialog
         name, ok = QInputDialog.getText(self, "Save Queue as Playlist", "Playlist name:")
         if not ok or not name.strip():
@@ -146,7 +153,7 @@ class QueueDialog(QDialog):
             from PySide6.QtWidgets import QMessageBox
             QMessageBox.warning(self, "Could not save playlist", str(exc))
             return
-        self._library.add_to_playlist(pl_id, [t.id for t in queue])
+        self._library.add_to_playlist(pl_id, [t.id for t in library_tracks])
         self.playlist_saved.emit(name.strip())
 
     def _move_selected(self, delta: int) -> None:

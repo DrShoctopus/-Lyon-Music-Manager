@@ -76,7 +76,13 @@ class PlaybackBackend(QObject):
     position_changed = Signal(int, int)
     end_reached = Signal()
 
-    def set_source(self, path: str) -> None:
+    def set_source(
+        self,
+        path: str,
+        *,
+        is_location: bool = False,
+        options: tuple[str, ...] = (),
+    ) -> None:
         raise NotImplementedError
 
     def play(self) -> None:
@@ -136,7 +142,13 @@ class UnavailablePlaybackBackend(PlaybackBackend):
         self._source = ""
         self._warned = False
 
-    def set_source(self, path: str) -> None:
+    def set_source(
+        self,
+        path: str,
+        *,
+        is_location: bool = False,
+        options: tuple[str, ...] = (),
+    ) -> None:
         self._source = path
 
     def play(self) -> None:
@@ -217,8 +229,23 @@ class VlcPlaybackBackend(PlaybackBackend):
         self._timer.setInterval(200)
         self._timer.timeout.connect(self._poll)
 
-    def set_source(self, path: str) -> None:
-        media = self._instance.media_new_path(str(Path(path)))
+    def set_source(
+        self,
+        path: str,
+        *,
+        is_location: bool = False,
+        options: tuple[str, ...] = (),
+    ) -> None:
+        media = (
+            self._instance.media_new_location(path)
+            if is_location
+            else self._instance.media_new_path(str(Path(path)))
+        )
+        for option in options:
+            try:
+                media.add_option(option)
+            except Exception as exc:
+                LOG.debug("Could not add VLC media option %s: %s", option, exc)
         self._player.set_media(media)
         media.release()  # drop our reference; VLC holds its own via set_media
         self._ended = False

@@ -29,7 +29,7 @@ class FakeBackend(QtCore.QObject):
         self._muted = False
         self._playing = False
 
-    def set_source(self, path: str) -> None: pass
+    def set_source(self, path: str, *, is_location=False, options=()) -> None: pass
     def play(self) -> None: self._playing = True
     def pause(self) -> None: self._playing = False
     def stop(self) -> None: self._playing = False

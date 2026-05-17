@@ -39,7 +39,7 @@ class _FakeBackend(QtCore.QObject):
         super().__init__()
         self._v, self._m, self._p = 80, False, False
 
-    def set_source(self, _): pass
+    def set_source(self, _, *, is_location=False, options=()): pass
     def play(self): self._p = True
     def pause(self): self._p = False
     def stop(self): self._p = False

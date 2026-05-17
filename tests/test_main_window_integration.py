@@ -3,7 +3,7 @@
 Constructs a real MainWindow with a stub Player backend (so no libVLC
 is needed) and asserts the cross-cutting wiring established across
 Phases 1–7 still holds together:
-- tab order matches the documented Library/Now Playing/Video/Rip/YouTube
+- tab order matches the documented Library/Now Playing/Video/Disc/Rip/YouTube
 - clicking a tab swaps the QStackedWidget page
 - transport bar hides on the rip + video tabs, shows elsewhere
 - show_toast creates a Toast and replaces any prior toast
@@ -56,7 +56,7 @@ def main_window(qapp, fake_backend, monkeypatch, tmp_path):
 
 
 def test_tab_bar_renders_documented_order(main_window):
-    expected = ("Library", "Now Playing", "Video", "Rip", "YouTube")
+    expected = ("Library", "Now Playing", "Video", "Disc", "Rip", "YouTube")
     actual = tuple(
         main_window.tab_bar.tabText(i)
         for i in range(main_window.tab_bar.count())
@@ -80,8 +80,57 @@ def test_transport_visible_on_library_hidden_on_rip(main_window):
     assert main_window.transport.isHidden()
     main_window.tab_bar.setCurrentIndex(main_window._tab_index["Video"])
     assert main_window.transport.isHidden()
+    main_window.tab_bar.setCurrentIndex(main_window._tab_index["Disc"])
+    assert not main_window.transport.isHidden()
     main_window.tab_bar.setCurrentIndex(main_window._tab_index["Now Playing"])
     assert not main_window.transport.isHidden()
+
+
+def test_disc_tab_no_drive_state(main_window):
+    main_window.tab_bar.setCurrentIndex(main_window._tab_index["Disc"])
+
+    assert main_window.stack.currentWidget() is main_window.disc_view
+    assert not main_window.disc_view.probe_btn.isEnabled()
+
+
+def test_video_disc_handoff_uses_video_player_after_switching_tabs(main_window, monkeypatch, qapp):
+    from lyon.core.disc_playback import DiscKind, VideoDiscSource
+
+    calls = []
+    monkeypatch.setattr(main_window.video_player_view, "playback_available", lambda: True)
+    monkeypatch.setattr(
+        main_window.video_player_view,
+        "load_location",
+        lambda uri, **kwargs: calls.append((uri, kwargs, main_window.stack.currentWidget())),
+    )
+    source = VideoDiscSource("D:", DiscKind.DVD, "dvd:///D:/", "dvdsimple:///D:/", "DVD")
+    main_window.tab_bar.setCurrentIndex(main_window._tab_index["Disc"])
+
+    main_window._play_video_disc(source)
+
+    assert calls == []
+    assert main_window.stack.currentWidget() is main_window.video_player_view
+    qapp.processEvents(QtCore.QEventLoop.AllEvents, 50)
+    assert calls == [("dvd:///D:/", {"label": "DVD"}, main_window.video_player_view)]
+
+
+def test_video_disc_handoff_reports_unavailable_video_player(main_window, monkeypatch):
+    from lyon.core.disc_playback import DiscKind, VideoDiscSource
+
+    monkeypatch.setattr(main_window.video_player_view, "playback_available", lambda: False)
+    monkeypatch.setattr(main_window.video_player_view, "unavailable_reason", lambda: "libVLC missing")
+    monkeypatch.setattr(
+        main_window.video_player_view,
+        "load_location",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("should not load")),
+    )
+    source = VideoDiscSource("D:", DiscKind.DVD, "dvd:///D:/", "dvdsimple:///D:/", "DVD")
+
+    main_window._play_video_disc(source)
+
+    assert main_window._current_toast is not None
+    assert "Video disc playback requires VLC/libVLC" in main_window._current_toast.message()
+    assert "libVLC missing" in main_window.statusBar().currentMessage()
 
 
 def test_show_toast_creates_and_replaces_previous(main_window, qapp):
@@ -131,8 +180,9 @@ def test_ctrl_number_shortcuts_wired(main_window):
         "Library":     "Ctrl+1",
         "Now Playing": "Ctrl+2",
         "Video":       "Ctrl+3",
-        "Rip":         "Ctrl+4",
-        "YouTube":     "Ctrl+5",
+        "Disc":        "Ctrl+4",
+        "Rip":         "Ctrl+5",
+        "YouTube":     "Ctrl+6",
     }
     # Walk the menubar actions to find the View menu.
     view_menu = None

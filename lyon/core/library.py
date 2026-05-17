@@ -125,6 +125,10 @@ class Track:
     last_scanned_at: float | None = None
     scan_error: str | None = None
     grouping: str = ""
+    playback_uri: str | None = None
+    playback_is_location: bool = False
+    playback_options: tuple[str, ...] = ()
+    is_library_item: bool = True
 
     @property
     def display_artist(self) -> str:

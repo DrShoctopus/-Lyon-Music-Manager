@@ -315,6 +315,7 @@ class VideoPlayerView(QWidget):
         self._instance: Any = None
         self._player: Any = None
         self._available = False
+        self._unavailable_reason = ""
         self._user_dragging = False
         self._current_path = ""
         self._fs_window: _FullscreenWindow | None = None
@@ -348,6 +349,7 @@ class VideoPlayerView(QWidget):
             )
             self._available = True
         except Exception as exc:
+            self._unavailable_reason = str(exc)
             LOG.warning("Video player: libVLC unavailable: %s", exc)
 
         if self._available:
@@ -909,18 +911,59 @@ class VideoPlayerView(QWidget):
             self._load_path(path)
 
     def _load_path(self, path: str) -> None:
+        self._load_media_source(path, label=Path(path).name)
+
+    def load_location(
+        self,
+        uri: str,
+        *,
+        label: str | None = None,
+        options: tuple[str, ...] = (),
+    ) -> None:
+        """Play a VLC location/MRL such as dvd:///D:/ or vcd:///D:/."""
+        self._load_media_source(
+            uri,
+            is_location=True,
+            options=options,
+            label=label or uri,
+        )
+
+    def playback_available(self) -> bool:
+        """Return True when the VLC video player can accept playback sources."""
+        return bool(self._available and self._player is not None)
+
+    def unavailable_reason(self) -> str:
+        return self._unavailable_reason
+
+    def _load_media_source(
+        self,
+        source: str,
+        *,
+        is_location: bool = False,
+        options: tuple[str, ...] = (),
+        label: str | None = None,
+    ) -> None:
         self._video_stack.setCurrentIndex(1)
         if not self._surface_attached:
             self._attach_vlc_to(self._surface)
             self._surface_attached = True
-        self._current_path = path
-        media = self._instance.media_new_path(path)
+        self._current_path = source
+        media = (
+            self._instance.media_new_location(source)
+            if is_location
+            else self._instance.media_new_path(source)
+        )
+        for option in options:
+            try:
+                media.add_option(option)
+            except Exception as exc:
+                LOG.debug("Could not add VLC video media option %s: %s", option, exc)
         self._player.set_media(media)
         media.release()  # drop our reference; VLC holds its own via set_media
         self._player.audio_set_volume(self._vol_slider.value())
         if self._eq_controller is not None:
             self._eq_controller.attach_to_player()
-        self._info_lbl.setText(Path(path).name)
+        self._info_lbl.setText(label or source)
         self._set_controls_enabled(True)
         self._player.play()
         self._play_btn.set_playing(True)
@@ -945,6 +988,8 @@ class VideoPlayerView(QWidget):
             self._play_btn.set_playing(True)
 
     def _stop(self) -> None:
+        if not self._available or self._player is None:
+            return
         self._player.stop()
         self._timer.stop()
         self._play_btn.set_playing(False)
@@ -1231,6 +1276,10 @@ class VideoPlayerView(QWidget):
         if self._available and self._player and self._player.is_playing():
             self._player.pause()
             self._play_btn.set_playing(False)
+
+    def stop_playback(self) -> None:
+        """Stop video playback when another playback surface takes over."""
+        self._stop()
 
     def showEvent(self, event) -> None:
         super().showEvent(event)

@@ -107,6 +107,8 @@ assets.
 ### Video
 
 - libVLC video player tab with local video catalog sidebar.
+- Optical **Disc** tab for Windows-first Audio CD playback plus DVD/VCD launch
+  through the VLC video player.
 - Thumbnail cards from library artwork or yt-dlp sidecar images.
 - Open file, play/pause/stop, seek, volume, mute, and playback rate from
   0.25x to 2x.
@@ -235,12 +237,14 @@ downloads default to `<music_root>\YouTube` unless changed in Settings.
 4. Use the bottom transport or **Now Playing** for playback, queue, ratings,
    lyrics, shuffle/repeat, seek, volume, and track info.
 5. Use **EQ** for the 10-band equalizer, preamp, presets, and custom curves.
-6. Use **Rip** on Windows after adding ffmpeg and libdiscid/VLC runtime files.
-7. Use **Video** for local video playback, fullscreen, subtitles, screenshots,
+6. Use **Disc** on Windows for Audio CD playback through the queue/transport,
+   or to open DVD/VCD media through the VLC video player.
+7. Use **Rip** on Windows after adding ffmpeg and libdiscid/VLC runtime files.
+8. Use **Video** for local video playback, fullscreen, subtitles, screenshots,
    and catalog browsing.
-8. Use **YouTube** to search with yt-dlp and download audio or video into the
+9. Use **YouTube** to search with yt-dlp and download audio or video into the
    configured output folder.
-9. Use **Help > Runtime Diagnostics** when a native dependency is missing or a
+10. Use **Help > Runtime Diagnostics** when a native dependency is missing or a
    packaged build behaves differently from a source run.
 
 ## Repository Layout

@@ -272,7 +272,7 @@ class _InfoPanel(QWidget):
             lines.append(f"Year: {track.year}")
         if track.genre:
             lines.append(f"Genre: {track.genre}")
-        if library is not None:
+        if library is not None and track.is_library_item:
             try:
                 album_tracks = library.tracks_for_album(
                     track.display_artist, track.album or "", track.media_type
@@ -521,7 +521,10 @@ class NowPlayingView(QWidget):
             self.cover.setPixmap(cover_pixmap(track.artwork_path, 280, "♪"))
             self._rating_widget.set_rating(track.rating)
             self._update_background(track.artwork_path)
-            self._load_lyrics(track)
+            if track.is_library_item:
+                self._load_lyrics(track)
+            else:
+                self._lyrics_panel.clear()
             self._info_panel.set_track(track, self._library)
         self._refresh_queue()
 
@@ -608,7 +611,11 @@ class NowPlayingView(QWidget):
     # ---- Rating --------------------------------------------------------
 
     def _on_rating_changed(self, rating: int) -> None:
-        if self._current_track is not None and self._library is not None:
+        if (
+            self._current_track is not None
+            and self._current_track.is_library_item
+            and self._library is not None
+        ):
             self._library.update_rating(self._current_track.id, rating)
             self._current_track.rating = rating
 
@@ -676,6 +683,8 @@ class NowPlayingView(QWidget):
         ext = Path(track.path).suffix.lstrip(".").upper()
         if ext:
             bits.append(ext)
+        elif not track.is_library_item and track.playback_is_location:
+            bits.append("Audio CD")
         if getattr(track, "bitrate", 0):
             kbps = round(track.bitrate / 1000)
             if kbps > 0:
@@ -864,7 +873,7 @@ class TransportBar(QWidget):
             self.heart_btn.blockSignals(True)
             self.heart_btn.setChecked(track.liked)
             self.heart_btn.blockSignals(False)
-            self.heart_btn.setEnabled(self._library is not None)
+            self.heart_btn.setEnabled(self._library is not None and track.is_library_item)
 
     def _on_position(self, pos_ms: int, dur_ms: int) -> None:
         if not self._user_dragging:
@@ -881,7 +890,7 @@ class TransportBar(QWidget):
 
     def _on_heart_toggled(self, liked: bool) -> None:
         track = self.player.current()
-        if track is not None and self._library is not None:
+        if track is not None and track.is_library_item and self._library is not None:
             track.liked = liked
             self._library.update_liked(track.id, liked)
 
