@@ -176,6 +176,14 @@ class SettingsDialog(QDialog):
         self.metadata_diagnostics.setChecked(settings.metadata_diagnostics_enabled)
         form.addRow("", self.metadata_diagnostics)
 
+        self.fetch_lyrics_online = QCheckBox("Fetch lyrics online (LRCLIB)")
+        self.fetch_lyrics_online.setChecked(settings.fetch_lyrics_online)
+        self.fetch_lyrics_online.setToolTip(
+            "When a track has no .lrc sidecar or embedded lyrics, query lrclib.net "
+            "(free, no API key). Disable to keep all lyrics lookups local."
+        )
+        form.addRow("", self.fetch_lyrics_online)
+
         self.contact = QLineEdit(settings.musicbrainz_contact)
         form.addRow("MusicBrainz contact:", self.contact)
 
@@ -358,6 +366,7 @@ class SettingsDialog(QDialog):
         self.result_settings.cuetools_db_metadata_enabled = self.cuetools_db.isChecked()
         self.result_settings.download_artwork = self.artwork.isChecked()
         self.result_settings.metadata_diagnostics_enabled = self.metadata_diagnostics.isChecked()
+        self.result_settings.fetch_lyrics_online = self.fetch_lyrics_online.isChecked()
         self.result_settings.ctdb_verify_rips = self.ctdb_verify.isChecked()
         self.result_settings.musicbrainz_contact = self.contact.text().strip() or self.result_settings.musicbrainz_contact
         self.result_settings.theaudiodb_api_key = self.audiodb_key.text().strip() or "123"

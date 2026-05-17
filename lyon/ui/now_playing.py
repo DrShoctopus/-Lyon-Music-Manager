@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 
 from ..core.library import Library, Track
 from ..core.player import Player, RepeatMode
+from ..core.settings import Settings
 from .transport import (
     HeartButton, NextButton, PlayPauseButton, PrevButton, RepeatButton,
     ShuffleButton, StopButton, VolumeButton,
@@ -80,7 +81,7 @@ def _fetch_lrclib(artist: str, title: str, album: str, duration_s: float) -> tup
     url = "https://lrclib.net/api/get?" + urllib.parse.urlencode(params)
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "Sea-Lyon-Media-Manager"})
-        with urllib.request.urlopen(req, timeout=8) as resp:
+        with urllib.request.urlopen(req, timeout=5) as resp:
             if resp.status != 200:
                 return "", ""
             data = json.loads(resp.read().decode())
@@ -267,20 +268,27 @@ class NowPlayingView(QWidget):
     # Emitted from the lyrics-fetch worker thread; always delivered on the main thread.
     _lyrics_ready = Signal(int, str, str)   # task_id, synced_lrc, plain_text
 
+    # In-memory lyrics cache cap; oldest entries evicted FIFO when exceeded.
+    _LYRICS_CACHE_MAX = 256
+
     def __init__(
         self,
         player: Player,
         library: Library | None = None,
+        settings: Settings | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.player = player
         self._library = library
+        self._settings = settings
         self._bg_pixmap: QPixmap | None = None
         self._bg_cache: QPixmap | None = None   # blurred result, invalidated on resize/track change
         self._bg_cache_size: tuple[int, int] = (0, 0)
         self._current_track: Track | None = None
         self._lyrics_task_id: int = 0   # track.id of the in-flight LRCLIB request; 0 = none
+        # track.id → (synced_lrc, plain_text); empty strings mean "we asked LRCLIB and got nothing".
+        self._lyrics_cache: dict[int, tuple[str, str]] = {}
 
         # ---- Album cover
         self.cover = QLabel()
@@ -506,7 +514,17 @@ class NowPlayingView(QWidget):
         if plain:
             self._lyrics_panel.set_lyrics([], plain)
             return
-        # 3. Fetch from LRCLIB in a background thread
+        # 3. Online lookup, if enabled. Requires Settings (main_window injects it);
+        # constructed without Settings (e.g. in unit tests) the network call is skipped.
+        if self._settings is None or not self._settings.fetch_lyrics_online:
+            self._lyrics_panel.set_lyrics([], None)
+            return
+        # 3a. Serve from in-memory cache when we've already asked LRCLIB this session.
+        cached = self._lyrics_cache.get(track.id)
+        if cached is not None:
+            self._apply_lyrics_result(*cached)
+            return
+        # 3b. Otherwise, fetch in a background thread.
         self._lyrics_panel.set_lyrics([], "Searching for lyrics…")
         self._fetch_lyrics_online(track)
 
@@ -526,8 +544,17 @@ class NowPlayingView(QWidget):
         threading.Thread(target=_worker, daemon=True).start()
 
     def _on_lyrics_ready(self, task_id: int, synced_lrc: str, plain: str) -> None:
+        # Cache the response unconditionally — even empty results, so we don't
+        # re-hit LRCLIB for a track we've already determined has no online lyrics.
+        self._lyrics_cache[task_id] = (synced_lrc, plain)
+        if len(self._lyrics_cache) > self._LYRICS_CACHE_MAX:
+            for key in list(self._lyrics_cache.keys())[:-self._LYRICS_CACHE_MAX]:
+                del self._lyrics_cache[key]
         if task_id != self._lyrics_task_id:
             return  # stale result — track changed while fetch was in flight
+        self._apply_lyrics_result(synced_lrc, plain)
+
+    def _apply_lyrics_result(self, synced_lrc: str, plain: str) -> None:
         if synced_lrc:
             parsed = _parse_lrc(synced_lrc)
             if parsed:

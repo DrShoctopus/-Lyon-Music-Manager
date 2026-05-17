@@ -136,9 +136,10 @@ def _draw_glyph(painter: QPainter, name: str, rect, color: QColor) -> None:
     elif name in ("heart-empty", "heart-filled"):
         path = QPainterPath()
         # Four-segment heart: bottom tip → left lobe → center V → right lobe → tip.
-        # Control points are tuned to produce wide, round lobes and a clear V notch.
+        # Tip control points sit above the tip (cy + 0.20s) so the curves arrive
+        # diagonally, producing a 90° pointed cusp instead of a rounded bottom.
         path.moveTo(cx, cy + size * 0.38)
-        path.cubicTo(cx - size * 0.46, cy + size * 0.38,
+        path.cubicTo(cx - size * 0.15, cy + size * 0.20,
                      cx - size * 0.52, cy - size * 0.05,
                      cx - size * 0.26, cy - size * 0.26)
         path.cubicTo(cx - size * 0.50, cy - size * 0.48,
@@ -148,7 +149,7 @@ def _draw_glyph(painter: QPainter, name: str, rect, color: QColor) -> None:
                      cx + size * 0.50, cy - size * 0.48,
                      cx + size * 0.26, cy - size * 0.26)
         path.cubicTo(cx + size * 0.52, cy - size * 0.05,
-                     cx + size * 0.46, cy + size * 0.38,
+                     cx + size * 0.15, cy + size * 0.20,
                      cx, cy + size * 0.38)
         path.closeSubpath()
         if name == "heart-filled":
