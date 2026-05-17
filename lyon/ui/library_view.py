@@ -249,7 +249,6 @@ class LibraryView(QWidget):
     play_tracks = Signal(list, int)        # (tracks, start_index)
     enqueue_tracks = Signal(list)
     status_message = Signal(str)
-    request_rescan = Signal()
     request_add_folder = Signal()
     request_youtube_search = Signal(str)
     request_open_settings = Signal()
@@ -275,28 +274,31 @@ class LibraryView(QWidget):
         self._search_timer.timeout.connect(self._do_search)
         self.search.textChanged.connect(self._on_search)
 
-        self.play_btn = QPushButton("Play")
-        self.play_btn.clicked.connect(self._play_selected)
         self.enqueue_btn = QPushButton("Enqueue")
         self.enqueue_btn.clicked.connect(self._enqueue_selected)
-        rescan_btn = QPushButton("Rescan")
-        rescan_btn.clicked.connect(self.request_rescan.emit)
         self._show_videos_cb = QCheckBox("Show Videos")
         self._show_videos_cb.setChecked(False)
         self._show_videos_cb.toggled.connect(self._on_show_videos_toggled)
+        self._list_mode_btn = QPushButton("▤ List")
+        self._list_mode_btn.setObjectName("viewModeBtn")
+        self._list_mode_btn.setCheckable(True)
+        self._list_mode_btn.setChecked(True)
+        self._list_mode_btn.setToolTip("Default 4-column library view")
+        self._list_mode_btn.toggled.connect(self._on_list_mode_toggled)
         self._grid_mode_btn = QPushButton("⊞ Grid")
+        self._grid_mode_btn.setObjectName("viewModeBtn")
         self._grid_mode_btn.setCheckable(True)
         self._grid_mode_btn.setToolTip("Album grid view")
         self._grid_mode_btn.toggled.connect(self._on_view_mode_toggled)
         self._simple_mode_btn = QPushButton("≡ Simple")
+        self._simple_mode_btn.setObjectName("viewModeBtn")
         self._simple_mode_btn.setCheckable(True)
         self._simple_mode_btn.setToolTip("Simplified 3-column view")
         self._simple_mode_btn.toggled.connect(self._on_simple_mode_toggled)
         top.addWidget(self.search, 1)
         top.addWidget(self._show_videos_cb)
-        top.addWidget(self.play_btn)
         top.addWidget(self.enqueue_btn)
-        top.addWidget(rescan_btn)
+        top.addWidget(self._list_mode_btn)
         top.addWidget(self._grid_mode_btn)
         top.addWidget(self._simple_mode_btn)
 
@@ -762,42 +764,61 @@ class LibraryView(QWidget):
         self._current_tracks = tracks
         self._populate_tracks(tracks)
 
-    # ------------------------------------------------------------------ grid view
+    # ------------------------------------------------------------------ view modes
+    def _set_view_mode_checked(self, active: QPushButton) -> None:
+        """Make the three view-mode buttons act like a radio group."""
+        for btn in (self._list_mode_btn, self._grid_mode_btn, self._simple_mode_btn):
+            if btn is active:
+                continue
+            btn.blockSignals(True)
+            btn.setChecked(False)
+            btn.blockSignals(False)
+        if not active.isChecked():
+            active.blockSignals(True)
+            active.setChecked(True)
+            active.blockSignals(False)
+
+    def _on_list_mode_toggled(self, checked: bool) -> None:
+        if not checked:
+            # Don't allow toggling off via re-click — only switching to another view does that.
+            if not (self._grid_mode_btn.isChecked() or self._simple_mode_btn.isChecked()):
+                self._list_mode_btn.blockSignals(True)
+                self._list_mode_btn.setChecked(True)
+                self._list_mode_btn.blockSignals(False)
+            return
+        self._set_view_mode_checked(self._list_mode_btn)
+        has_tracks = bool(self._library_all_artists(self._media_type_filter))
+        self._browser_stack.setCurrentIndex(1 if has_tracks else 0)
+
     def _on_view_mode_toggled(self, checked: bool) -> None:
-        if checked:
-            if self._browser_stack.currentIndex() == 0:
-                # Empty library — revert toggle
+        if not checked:
+            if not (self._list_mode_btn.isChecked() or self._simple_mode_btn.isChecked()):
                 self._grid_mode_btn.blockSignals(True)
-                self._grid_mode_btn.setChecked(False)
+                self._grid_mode_btn.setChecked(True)
                 self._grid_mode_btn.blockSignals(False)
-                return
-            self._simple_mode_btn.blockSignals(True)
-            self._simple_mode_btn.setChecked(False)
-            self._simple_mode_btn.blockSignals(False)
-            self._browser_stack.setCurrentIndex(2)
-            self._refresh_grid_albums()
-        else:
-            if not self._simple_mode_btn.isChecked():
-                has_tracks = bool(self._library_all_artists(self._media_type_filter))
-                self._browser_stack.setCurrentIndex(1 if has_tracks else 0)
+            return
+        if self._browser_stack.currentIndex() == 0:
+            # Empty library — revert toggle back to list
+            self._set_view_mode_checked(self._list_mode_btn)
+            return
+        self._set_view_mode_checked(self._grid_mode_btn)
+        self._browser_stack.setCurrentIndex(2)
+        self._refresh_grid_albums()
 
     def _on_simple_mode_toggled(self, checked: bool) -> None:
-        if checked:
-            if self._browser_stack.currentIndex() == 0:
-                # Empty library — revert toggle
+        if not checked:
+            if not (self._list_mode_btn.isChecked() or self._grid_mode_btn.isChecked()):
                 self._simple_mode_btn.blockSignals(True)
-                self._simple_mode_btn.setChecked(False)
+                self._simple_mode_btn.setChecked(True)
                 self._simple_mode_btn.blockSignals(False)
-                return
-            self._grid_mode_btn.blockSignals(True)
-            self._grid_mode_btn.setChecked(False)
-            self._grid_mode_btn.blockSignals(False)
-            self._browser_stack.setCurrentIndex(3)
-            self._sv_refresh_artists()
-        else:
-            if not self._grid_mode_btn.isChecked():
-                has_tracks = bool(self._library_all_artists(self._media_type_filter))
-                self._browser_stack.setCurrentIndex(1 if has_tracks else 0)
+            return
+        if self._browser_stack.currentIndex() == 0:
+            # Empty library — revert toggle back to list
+            self._set_view_mode_checked(self._list_mode_btn)
+            return
+        self._set_view_mode_checked(self._simple_mode_btn)
+        self._browser_stack.setCurrentIndex(3)
+        self._sv_refresh_artists()
 
     def _refresh_grid_albums(self) -> None:
         """Populate the album art grid for the selected genre."""
@@ -837,9 +858,7 @@ class LibraryView(QWidget):
             return
         artist, album = data
         # Switch back to list mode and navigate to the album
-        self._grid_mode_btn.blockSignals(True)
-        self._grid_mode_btn.setChecked(False)
-        self._grid_mode_btn.blockSignals(False)
+        self._set_view_mode_checked(self._list_mode_btn)
         self._browser_stack.setCurrentIndex(1)
         self._navigate_to_album(artist, album)
 
@@ -904,6 +923,7 @@ class LibraryView(QWidget):
             it = QStandardItem(f"{num_prefix}{tr.title}  [{duration}]")
             it.setData(tr, _TRACK_REF_ROLE)
             it.setEditable(False)
+            it.setToolTip(self._track_tooltip(tr, duration))
             self._sv_tracks_model.appendRow(it)
 
     def _sv_on_track_double(self, index: QModelIndex) -> None:
@@ -999,22 +1019,36 @@ class LibraryView(QWidget):
 
     def _show_header_context_menu(self, pos) -> None:
         menu = QMenu(self)
-        rating_act = menu.addAction("Rating")
-        rating_act.setCheckable(True)
-        rating_act.setChecked(not self.tracks.isColumnHidden(_COL_RATING))
-        format_act = menu.addAction("Format")
-        format_act.setCheckable(True)
-        format_act.setChecked(not self.tracks.isColumnHidden(_COL_FORMAT))
-        grouping_act = menu.addAction("Group")
-        grouping_act.setCheckable(True)
-        grouping_act.setChecked(not self.tracks.isColumnHidden(_COL_GROUPING))
+        # All toggleable columns (Title is always visible — it's the row identifier).
+        toggleable = [
+            (_COL_NUM,      "#"),
+            (_COL_ARTIST,   "Artist"),
+            (_COL_ALBUM,    "Album"),
+            (_COL_TIME,     "Time"),
+            (_COL_RATING,   "Rating"),
+            (_COL_FORMAT,   "Format"),
+            (_COL_GROUPING, "Group"),
+        ]
+        col_actions: list[tuple[int, "QAction"]] = []
+        for col, label in toggleable:
+            act = menu.addAction(label)
+            act.setCheckable(True)
+            act.setChecked(not self.tracks.isColumnHidden(col))
+            col_actions.append((col, act))
+        menu.addSeparator()
+        show_all_act = menu.addAction("Show All Columns")
         action = _exec_menu(menu, self.tracks.horizontalHeader().mapToGlobal(pos))
-        if action == rating_act:
-            self.tracks.setColumnHidden(_COL_RATING, not rating_act.isChecked())
-        elif action == format_act:
-            self.tracks.setColumnHidden(_COL_FORMAT, not format_act.isChecked())
-        elif action == grouping_act:
-            self.tracks.setColumnHidden(_COL_GROUPING, not grouping_act.isChecked())
+        if action is None:
+            return
+        if action is show_all_act:
+            for col, _ in toggleable:
+                self.tracks.setColumnHidden(col, False)
+            self.tracks.setColumnHidden(_COL_TITLE, False)
+            return
+        for col, act in col_actions:
+            if action is act:
+                self.tracks.setColumnHidden(col, not act.isChecked())
+                return
 
     def _refresh_tracks(self) -> None:
         ai = self.artists.currentIndex()
@@ -1383,10 +1417,8 @@ class LibraryView(QWidget):
             return
         self._current_tracks = self.library.search(q, self._media_type_filter)
         self._populate_tracks(self._current_tracks)
-        if self._browser_stack.currentIndex() == 3:
-            self._simple_mode_btn.blockSignals(True)
-            self._simple_mode_btn.setChecked(False)
-            self._simple_mode_btn.blockSignals(False)
+        if self._browser_stack.currentIndex() != 1:
+            self._set_view_mode_checked(self._list_mode_btn)
         self._browser_stack.setCurrentIndex(1)
 
     # ------------------------------------------------------------------ playback
@@ -1524,12 +1556,7 @@ class LibraryView(QWidget):
             self.search.blockSignals(False)
         # Ensure list mode is active
         if self._browser_stack.currentIndex() != 1:
-            self._grid_mode_btn.blockSignals(True)
-            self._grid_mode_btn.setChecked(False)
-            self._grid_mode_btn.blockSignals(False)
-            self._simple_mode_btn.blockSignals(True)
-            self._simple_mode_btn.setChecked(False)
-            self._simple_mode_btn.blockSignals(False)
+            self._set_view_mode_checked(self._list_mode_btn)
             has_tracks = bool(self._library_all_artists(self._media_type_filter))
             self._browser_stack.setCurrentIndex(1 if has_tracks else 0)
         self._navigate_to_album(track.display_artist, track.album or "Unknown Album")
@@ -1671,12 +1698,7 @@ class LibraryView(QWidget):
         self._current_tracks = tracks
         self._populate_tracks(tracks)
         if self._browser_stack.currentIndex() in (2, 3):
-            self._grid_mode_btn.blockSignals(True)
-            self._grid_mode_btn.setChecked(False)
-            self._grid_mode_btn.blockSignals(False)
-            self._simple_mode_btn.blockSignals(True)
-            self._simple_mode_btn.setChecked(False)
-            self._simple_mode_btn.blockSignals(False)
+            self._set_view_mode_checked(self._list_mode_btn)
             self._browser_stack.setCurrentIndex(1)
         return True
 
@@ -1698,12 +1720,7 @@ class LibraryView(QWidget):
         self._populate_tracks(tracks)
         # Ensure list-mode browser is showing
         if self._browser_stack.currentIndex() in (2, 3):
-            self._grid_mode_btn.blockSignals(True)
-            self._grid_mode_btn.setChecked(False)
-            self._grid_mode_btn.blockSignals(False)
-            self._simple_mode_btn.blockSignals(True)
-            self._simple_mode_btn.setChecked(False)
-            self._simple_mode_btn.blockSignals(False)
+            self._set_view_mode_checked(self._list_mode_btn)
             self._browser_stack.setCurrentIndex(1)
 
     def _on_playlist_tracks_dropped(self, playlist_id: int, track_ids: list) -> None:

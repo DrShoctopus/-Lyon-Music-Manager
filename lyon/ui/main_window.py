@@ -233,7 +233,6 @@ class MainWindow(QMainWindow):
         self.player.track_changed.connect(self.library_view.highlight_track)
         self.player.playback_unavailable.connect(self._on_playback_unavailable)
         self.library_view.request_add_folder.connect(self.add_folder)
-        self.library_view.request_rescan.connect(self.rescan)
         self.library_view.request_youtube_search.connect(self._search_youtube_for_track)
         self.library_view.request_open_settings.connect(self.open_settings)
         self.library_view.request_diagnostics.connect(self.show_diagnostics)

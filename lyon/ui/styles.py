@@ -150,6 +150,20 @@ QPushButton#accent:hover {
         stop:0 #ffffff, stop:0.43 #8df5ff, stop:0.44 #2b8fff, stop:1 #1853a2);
 }
 
+/* View-mode toggle buttons (Library: List / Grid / Simple) */
+QPushButton#viewModeBtn:checked {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #2b8fff, stop:0.5 #1364c4, stop:1 #07306b);
+    color: #ffffff;
+    border: 1px solid #79fbff;
+    font-weight: 600;
+}
+QPushButton#viewModeBtn:checked:hover {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #3ba1ff, stop:0.5 #1f78d8, stop:1 #0a3f8a);
+    border: 1px solid #aafcff;
+}
+
 /* Inputs */
 QLineEdit, QComboBox, QSpinBox {
     background: #070a0f;
