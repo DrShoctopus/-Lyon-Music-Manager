@@ -217,15 +217,27 @@ class Library:
         meta = _read_tags(path)
         if meta is None:
             if media_type == "video":
-                folder_name = Path(path).parent.name or "Videos"
                 meta = {
                     "title": Path(path).stem,
-                    "artist": folder_name, "album_artist": folder_name, "album": folder_name,
+                    "artist": "", "album_artist": "", "album": "",
                     "track_no": 0, "disc_no": 1, "year": 0, "genre": "",
                     "duration": 0.0, "bitrate": 0, "samplerate": 0,
                 }
             else:
                 return False
+
+        # Videos without artist metadata (e.g. yt-dlp downloads where mutagen
+        # parses the container but no tags are present) fall back to the parent
+        # folder name so they group under "YouTube Downloads" rather than the
+        # catch-all "Unknown Artist" display.
+        if media_type == "video" and not (meta["artist"] or meta["album_artist"]):
+            folder_name = Path(path).parent.name or "Videos"
+            if not meta["artist"]:
+                meta["artist"] = folder_name
+            if not meta["album_artist"]:
+                meta["album_artist"] = folder_name
+            if not meta["album"]:
+                meta["album"] = folder_name
         # Look for adjacent cover art.  YouTube video downloads keep their
         # thumbnail as a same-stem sidecar image next to the media file, so
         # prefer that exact match before falling back to album-folder art.
