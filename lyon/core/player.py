@@ -1,6 +1,7 @@
 """High-level music player with queue and transport logic."""
 from __future__ import annotations
 
+import inspect
 import random
 from enum import Enum
 from pathlib import Path
@@ -347,9 +348,10 @@ class Player(QObject):
 
     # --------------------------------------------------------------- internals
     def _create_backend(self) -> PlaybackBackend:
-        if self._backend_factory is None or self._backend_factory is create_playback_backend:
-            return create_playback_backend(self, vlc_instance_options=self._gapless_vlc_options)
-        return self._backend_factory(self)
+        factory = self._backend_factory or create_playback_backend
+        if factory is create_playback_backend and _accepts_vlc_instance_options(factory):
+            return factory(self, vlc_instance_options=self._gapless_vlc_options)
+        return factory(self)
 
     def _adopt_backend(self, backend: PlaybackBackend) -> None:
         backend_parent = getattr(backend, "parent", None)
@@ -607,6 +609,8 @@ class Player(QObject):
         backend.set_muted(True)
         backend.set_volume(0)
         backend.play()
+        backend.pause()
+        backend.set_position(0)
         self._gapless_prebuffer_backend = backend
         self._gapless_prebuffer_index = idx
 
@@ -630,6 +634,7 @@ class Player(QObject):
         self._rg_multiplier = self._rg_multiplier_for_track(track)
         backend.set_muted(muted)
         backend.set_volume(self._rg_applied_vol(self._user_volume, self._rg_multiplier))
+        backend.play()
         old_backend.stop()
         self._dispose_transient_backend(old_backend)
         self.track_changed.emit(track)
@@ -681,3 +686,15 @@ def _clamp_volume(value: object) -> int:
     except (TypeError, ValueError):
         volume = 80
     return max(0, min(100, volume))
+
+
+def _accepts_vlc_instance_options(factory: Callable[..., PlaybackBackend]) -> bool:
+    try:
+        parameters = inspect.signature(factory).parameters.values()
+    except (TypeError, ValueError):
+        return True
+    return any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD
+        or parameter.name == "vlc_instance_options"
+        for parameter in parameters
+    )

@@ -10,6 +10,7 @@ QtCore = pytest.importorskip("PySide6.QtCore", exc_type=ImportError)
 QtWidgets = pytest.importorskip("PySide6.QtWidgets", exc_type=ImportError)
 
 from lyon.core.library import Track
+from lyon.ui import library_view as library_view_module
 from lyon.ui.library_view import LibraryView, _ALL_ALBUMS_KEY, _PLAYING_GLYPH
 
 
@@ -26,6 +27,7 @@ def _track(id_: int, title: str, artist: str, album: str,
 class FakeLibrary:
     def __init__(self, artists_map: dict[str, dict[str, list[Track]]]):
         self._map = artists_map
+        self.updated_tracks: list[tuple[int, dict]] = []
 
     def all_artists(self, _media=None) -> list[str]:
         return list(self._map.keys())
@@ -52,6 +54,9 @@ class FakeLibrary:
                     if q_lower in t.title.lower():
                         out.append(t)
         return out
+
+    def update_track(self, track_id: int, fields: dict) -> None:
+        self.updated_tracks.append((track_id, dict(fields)))
 
 
 @pytest.fixture(scope="module")
@@ -158,3 +163,26 @@ def test_empty_search_renders_no_results_footer(view):
     view._do_search()
     assert view.tracks_model.rowCount() == 0
     assert 'No tracks match "nonexistent-xyz"' in view._footer_label.text()
+
+
+def test_single_metadata_edit_reports_file_tag_write_failure(app, monkeypatch, tmp_path):
+    path = tmp_path / "song.flac"
+    path.write_bytes(b"not real flac")
+    track = _track(1, "Song", "Artist", "Album")
+    track.path = str(path)
+    library = FakeLibrary({"Artist": {"Album": [track]}})
+    view = LibraryView(library)
+    messages: list[str] = []
+    view.status_message.connect(messages.append)
+
+    def accept_dialog(dialog):
+        dialog.deleteLater()
+        return QtWidgets.QDialog.Accepted
+
+    monkeypatch.setattr(library_view_module, "_exec_dialog", accept_dialog)
+    monkeypatch.setattr(library_view_module, "write_partial_tags", lambda *_args: False)
+
+    view._show_edit_metadata_dialog(track)
+
+    assert library.updated_tracks
+    assert "file tags could not be written to disk" in messages[-1]

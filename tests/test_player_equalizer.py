@@ -258,6 +258,55 @@ def test_audio_device_methods_tolerate_minimal_backend():
     assert player.list_audio_devices("wasapi") == []
 
 
+def test_default_backend_factory_accepts_legacy_one_arg_stub(monkeypatch):
+    from lyon.core import player as player_mod
+
+    backend = FakeBackend()
+
+    def factory(parent=None):
+        return backend
+
+    monkeypatch.setattr(player_mod, "create_playback_backend", factory)
+
+    player = player_mod.Player()
+
+    assert player._backend is backend
+    assert backend.parent() is player
+
+
+def test_gapless_prebuffer_does_not_advance_next_track_before_promotion():
+    backends: list[FakeBackend] = []
+
+    def factory(parent=None):
+        backend = FakeBackend()
+        backends.append(backend)
+        return backend
+
+    player = Player(backend_factory=factory)
+    player.set_gapless(True)
+    player.set_queue([
+        _track("C:/Music/one.flac"),
+        _track("C:/Music/two.flac"),
+    ])
+
+    backends[0].position_changed.emit(118_000, 120_000)
+
+    assert len(backends) == 2
+    assert backends[1].sources == ["C:/Music/two.flac"]
+    assert backends[1].play_count == 1
+    assert not backends[1].is_playing()
+    assert backends[1].position() == 0
+    assert backends[1].is_muted()
+
+    backends[0].end_reached.emit()
+
+    assert player.current_index() == 1
+    assert backends[1].play_count == 2
+    assert backends[1].is_playing()
+    assert not backends[1].is_muted()
+    assert backends[0].parent() is None
+
+
 def test_crossfade_starts_next_backend_before_stopping_current():
     backends: list[FakeBackend] = []
 

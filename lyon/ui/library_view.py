@@ -1403,8 +1403,12 @@ class LibraryView(QWidget):
             "grouping": grouping_edit.text().strip(),
         }
         self.library.update_track(track.id, fields)
-        write_partial_tags(Path(track.path), fields)
-        self.status_message.emit(f"Metadata saved for \"{fields['title']}\"")
+        track_path = Path(track.path)
+        write_failed = track_path.is_file() and not write_partial_tags(track_path, fields)
+        msg = f"Metadata saved for \"{fields['title']}\""
+        if write_failed:
+            msg += " (file tags could not be written to disk.)"
+        self.status_message.emit(msg)
         self.refresh()
 
     def edit_track_metadata(self, track: Track) -> None:
