@@ -32,7 +32,7 @@ def main() -> int:
 
     win = MainWindow()
     win.setWindowIcon(icon)
-    win.show()
+    win.showMaximized()
     finish_startup_splash(app, win)
     return app.exec()
 
