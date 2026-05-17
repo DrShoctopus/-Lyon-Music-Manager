@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 from ..core.library import Library
 from ..core.settings import Settings
 from ..core.yt_downloader import YtDownloadWorker
+from .toast import Toast
 
 _AUDIO_FORMATS = ["flac", "mp3"]
 _VIDEO_FORMATS = ["mp4", "mkv", "webm"]
@@ -36,6 +37,7 @@ class YtDownloadDialog(QDialog):
         self.library = library
         self._worker: YtDownloadWorker | None = None
         self._canceling = False
+        self._current_toast: Toast | None = None
 
         self.setWindowTitle("Download from YouTube")
         self.setMinimumWidth(560)
@@ -225,9 +227,29 @@ class YtDownloadDialog(QDialog):
         self._close_btn.setEnabled(True)
         self._canceling = False
 
+        if failed == 0 and succeeded > 0:
+            noun = "file" if succeeded == 1 else "files"
+            self._show_toast(f"Downloaded {succeeded} {noun}", "success")
+        elif succeeded == 0 and failed > 0:
+            self._show_toast(f"{failed} download{'s' if failed != 1 else ''} failed", "error")
+        elif succeeded > 0 and failed > 0:
+            self._show_toast(f"{succeeded} downloaded, {failed} failed", "warning")
+
     def _on_thread_finished(self, worker: YtDownloadWorker) -> None:
         if self._worker is worker:
             self._worker = None
+
+    def _show_toast(self, message: str, level: str = "info") -> None:
+        if self._current_toast is not None:
+            self._current_toast.dismiss()
+        toast = Toast(message, level=level, parent=self)
+        toast.closed.connect(lambda t=toast: self._on_toast_closed(t))
+        self._current_toast = toast
+        toast.show_at(self)
+
+    def _on_toast_closed(self, toast: Toast) -> None:
+        if self._current_toast is toast:
+            self._current_toast = None
 
     def _has_active_worker(self) -> bool:
         return self._worker is not None and self._worker.isRunning()
