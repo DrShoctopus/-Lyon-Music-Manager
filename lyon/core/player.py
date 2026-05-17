@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import random
 from enum import Enum
+from pathlib import Path
 from typing import Callable, Optional
 
 from PySide6.QtCore import QObject, QTimer, Signal
@@ -56,6 +57,12 @@ class Player(QObject):
         self._fade_step = 0
         self._fade_total_steps = 1
         self._fade_out_backend: PlaybackBackend | None = None
+
+        self._rg_mode: str = "off"
+        self._rg_preamp_db: float = 0.0
+        self._rg_prevent_clipping: bool = True
+        self._rg_multiplier: float = 1.0          # multiplier for the active backend
+        self._rg_fade_out_multiplier: float = 1.0  # multiplier for the fading-out backend
 
         self._connect_backend(self._backend)
 
@@ -167,6 +174,7 @@ class Player(QObject):
         self._cancel_crossfade()
         self._index = idx
         track = self._queue[idx]
+        self._rg_multiplier = self._rg_multiplier_for_track(track)
         self._start_backend_track(self._backend, track, self._user_volume)
         self.track_changed.emit(track)
 
@@ -230,7 +238,7 @@ class Player(QObject):
         self._cancel_crossfade(restore_active_volume=False)
         volume = _clamp_volume(percent)
         self._user_volume = volume
-        self._backend.set_volume(volume)
+        self._backend.set_volume(self._rg_applied_vol(volume, self._rg_multiplier))
 
     def volume(self) -> int:
         return self._user_volume
@@ -244,6 +252,20 @@ class Player(QObject):
 
     def equalizer(self) -> tuple[bool, list[int], int]:
         return self._equalizer_enabled, list(self._equalizer_bands), self._equalizer_preamp
+
+    def set_replaygain(
+        self,
+        mode: str,
+        preamp_db: float = 0.0,
+        prevent_clipping: bool = True,
+    ) -> None:
+        self._rg_mode = mode
+        self._rg_preamp_db = preamp_db
+        self._rg_prevent_clipping = prevent_clipping
+        track = self.current()
+        self._rg_multiplier = self._rg_multiplier_for_track(track) if track else 1.0
+        if self._fade_timer is None:
+            self._backend.set_volume(self._rg_applied_vol(self._user_volume, self._rg_multiplier))
 
     def set_muted(self, muted: bool) -> None:
         self._backend.set_muted(muted)
@@ -362,7 +384,7 @@ class Player(QObject):
             self._equalizer_preamp,
         )
         backend.set_muted(self.is_muted() if muted is None else muted)
-        backend.set_volume(volume)
+        backend.set_volume(self._rg_applied_vol(volume, self._rg_multiplier))
         backend.play()
 
     def _should_crossfade_to(self, idx: int) -> bool:
@@ -419,8 +441,10 @@ class Player(QObject):
         self._backend = next_backend
         self._connect_backend(next_backend)
 
+        self._rg_fade_out_multiplier = self._rg_multiplier
         self._index = idx
         track = self._queue[idx]
+        self._rg_multiplier = self._rg_multiplier_for_track(track)
         self._start_backend_track(next_backend, track, 0, muted=muted)
         self.track_changed.emit(track)
 
@@ -438,8 +462,10 @@ class Player(QObject):
     def _on_fade_tick(self) -> None:
         self._fade_step += 1
         progress = min(1.0, self._fade_step / self._fade_total_steps)
-        in_vol = int(self._fade_target * progress)
-        out_vol = int(self._fade_target * (1.0 - progress))
+        in_vol = self._rg_applied_vol(int(self._fade_target * progress), self._rg_multiplier)
+        out_vol = self._rg_applied_vol(
+            int(self._fade_target * (1.0 - progress)), self._rg_fade_out_multiplier
+        )
         self._backend.set_volume(in_vol)
         if self._fade_out_backend is not None:
             self._fade_out_backend.set_volume(out_vol)
@@ -453,7 +479,7 @@ class Player(QObject):
             self._fade_out_backend = None
             backend.stop()
             self._dispose_transient_backend(backend)
-        self._backend.set_volume(self._fade_target)
+        self._backend.set_volume(self._rg_applied_vol(self._fade_target, self._rg_multiplier))
 
     def _cancel_crossfade(self, *, restore_active_volume: bool = True) -> None:
         self._clear_fade_timer()
@@ -463,7 +489,29 @@ class Player(QObject):
             backend.stop()
             self._dispose_transient_backend(backend)
         if restore_active_volume:
-            self._backend.set_volume(self._user_volume)
+            self._backend.set_volume(self._rg_applied_vol(self._user_volume, self._rg_multiplier))
+
+    def _rg_multiplier_for_track(self, track: Track) -> float:
+        if self._rg_mode == "off":
+            return 1.0
+        try:
+            path = track.path
+        except AttributeError:
+            return 1.0
+        if not path or not Path(path).is_file():
+            return 1.0
+        from .replaygain import read_track_gain, read_album_gain, gain_multiplier
+        if self._rg_mode == "track":
+            gain_db = read_track_gain(path)
+        else:
+            gain_db = read_album_gain(path) or read_track_gain(path)
+        if gain_db is None:
+            return 1.0
+        return gain_multiplier(gain_db, self._rg_preamp_db, self._rg_prevent_clipping)
+
+    @staticmethod
+    def _rg_applied_vol(raw: int, multiplier: float) -> int:
+        return max(0, min(100, round(raw * multiplier)))
 
     def _ensure_playback_available(self) -> bool:
         if self.playback_available():

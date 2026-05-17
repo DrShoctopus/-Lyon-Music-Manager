@@ -25,6 +25,8 @@ from ..core.library_watcher import (
 )
 from ..core.playback_backend import close_dll_handles
 from ..core.player import Player
+from ..core.replaygain import ReplayGainScanner
+from ..core.ripper import find_ffmpeg
 from ..core.settings import Settings
 from .branding import app_icon
 from .diagnostics_dialog import DiagnosticsDialog
@@ -88,7 +90,13 @@ class MainWindow(QMainWindow):
         self.player.set_volume(self.settings.last_volume)
         self.player.set_equalizer(self.settings.equalizer_enabled, self.settings.equalizer_bands, self.settings.equalizer_preamp)
         self.player.set_crossfade(self.settings.crossfade_seconds)
+        self.player.set_replaygain(
+            self.settings.replaygain_mode,
+            self.settings.replaygain_preamp_db,
+            self.settings.replaygain_prevent_clipping,
+        )
         self._scan_thread: _LibraryScanThread | None = None
+        self._rg_scanner: ReplayGainScanner | None = None
         self._watch_index_thread: LibraryIndexThread | None = None
         self._library_watcher = LibraryFolderWatcher(self)
         self._watch_pending = WatchBatch()
@@ -239,6 +247,7 @@ class MainWindow(QMainWindow):
         self.library_view.request_youtube_search.connect(self._search_youtube_for_track)
         self.library_view.request_open_settings.connect(self.open_settings)
         self.library_view.request_diagnostics.connect(self.show_diagnostics)
+        self.library_view.request_scan_replaygain.connect(self._on_scan_replaygain)
         self.video_player_view.request_diagnostics.connect(self.show_diagnostics)
         self.disc_view.play_audio_tracks.connect(self._play_disc_audio_tracks)
         self.disc_view.enqueue_audio_tracks.connect(self._enqueue_disc_audio_tracks)
@@ -467,6 +476,38 @@ class MainWindow(QMainWindow):
 
     def rescan(self) -> None:
         self._start_scan(self.settings.library_paths or [self.settings.music_root], "Rescanned", prune=True)
+
+    def _on_scan_replaygain(self, tracks: list) -> None:
+        if self._rg_scanner is not None and self._rg_scanner.isRunning():
+            self.show_toast("ReplayGain scan already in progress.", level="warning")
+            return
+        ffmpeg = find_ffmpeg()
+        if not ffmpeg:
+            self.show_toast(
+                "ffmpeg not found — ReplayGain scan requires ffmpeg.", level="error"
+            )
+            return
+        paths = [t.path for t in tracks if getattr(t, "path", None)]
+        if not paths:
+            return
+        album_mode = self.settings.replaygain_mode == "album"
+        count = len(paths)
+        noun = "track" if count == 1 else "tracks"
+        self.show_toast(f"Scanning {count} {noun} for ReplayGain…", level="info")
+        self._rg_scanner = ReplayGainScanner(paths, ffmpeg, album_mode=album_mode, parent=self)
+        self._rg_scanner.finished_scanning.connect(self._on_rg_scan_finished)
+        self._rg_scanner.start()
+
+    def _on_rg_scan_finished(self, written: int, failed: int) -> None:
+        if failed:
+            self.show_toast(
+                f"ReplayGain scan complete: {written} tagged, {failed} failed.", level="warning"
+            )
+        else:
+            self.show_toast(f"ReplayGain scan complete: {written} tracks tagged.", level="success")
+        if self._rg_scanner is not None:
+            self._rg_scanner.deleteLater()
+            self._rg_scanner = None
 
     def _on_yt_download(self, url: str) -> None:
         dlg = YtDownloadDialog(url, self.settings, self.library, self)
@@ -784,6 +825,11 @@ class MainWindow(QMainWindow):
                 self.settings.equalizer_preamp,
             )
             self.player.set_crossfade(self.settings.crossfade_seconds)
+            self.player.set_replaygain(
+                self.settings.replaygain_mode,
+                self.settings.replaygain_preamp_db,
+                self.settings.replaygain_prevent_clipping,
+            )
             self.video_player_view.apply_equalizer(
                 self.settings.equalizer_enabled,
                 self.settings.equalizer_bands,

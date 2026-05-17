@@ -253,6 +253,7 @@ class LibraryView(QWidget):
     request_youtube_search = Signal(str)
     request_open_settings = Signal()
     request_diagnostics = Signal()
+    request_scan_replaygain = Signal(list)  # list[Track]
 
     def __init__(self, library: Library, parent: QWidget | None = None):
         super().__init__(parent)
@@ -1282,6 +1283,7 @@ class LibraryView(QWidget):
         menu.addSeparator()
         open_folder = menu.addAction("Open Containing Folder")
         edit_metadata = menu.addAction("Edit Metadata")
+        scan_rg = menu.addAction("Scan ReplayGain…")
         youtube_search = menu.addAction("Search YouTube for Artist, Album, and Track")
         properties = menu.addAction("Properties")
         action = _exec_menu(menu, global_pos)
@@ -1303,6 +1305,8 @@ class LibraryView(QWidget):
                 self._show_batch_metadata_dialog(selected)
             else:
                 self._show_edit_metadata_dialog(primary_track)
+        elif action == scan_rg:
+            self.request_scan_replaygain.emit(list(selected))
         elif action == properties:
             self._show_track_properties(primary_track)
         elif action == youtube_search:

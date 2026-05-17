@@ -139,6 +139,9 @@ class Settings:
     queue_current_index: int = 0
     crossfade_seconds: int = 0          # 0 = disabled; >0 = overlap duration on track change
     fetch_lyrics_online: bool = True    # query lrclib.net when no local .lrc / embedded lyrics
+    replaygain_mode: str = "off"        # "off" | "track" | "album"
+    replaygain_preamp_db: float = 0.0   # additional offset applied after gain, -6.0 to +6.0
+    replaygain_prevent_clipping: bool = True
 
     def __post_init__(self) -> None:
         self.rip_format = str(self.rip_format or "flac").lower()
@@ -149,6 +152,14 @@ class Settings:
         self.last_volume = _clamp_int(self.last_volume, 80, 0, 100)
         self.queue_current_index = _nonnegative_int(self.queue_current_index, 0)
         self.crossfade_seconds = _nonnegative_int(self.crossfade_seconds, 0)
+        self.replaygain_mode = str(self.replaygain_mode or "off").lower()
+        if self.replaygain_mode not in {"off", "track", "album"}:
+            self.replaygain_mode = "off"
+        try:
+            self.replaygain_preamp_db = max(-6.0, min(6.0, float(self.replaygain_preamp_db)))
+        except (TypeError, ValueError):
+            self.replaygain_preamp_db = 0.0
+        self.replaygain_prevent_clipping = _bool_value(self.replaygain_prevent_clipping, True)
         self.yt_audio_format = str(self.yt_audio_format or "flac").lower()
         if self.yt_audio_format not in _YT_AUDIO_FORMATS:
             self.yt_audio_format = "flac"

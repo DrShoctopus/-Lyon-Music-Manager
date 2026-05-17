@@ -6,9 +6,9 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
-    QHBoxLayout, QLabel, QLineEdit, QListWidget, QMessageBox, QPushButton,
-    QSpinBox, QTabWidget, QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFileDialog,
+    QFormLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QMessageBox,
+    QPushButton, QSpinBox, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from .. import __app_name__, __version__
@@ -43,6 +43,7 @@ class SettingsDialog(QDialog):
 
         tabs = QTabWidget()
         tabs.addTab(self._build_library_tab(settings), "Library")
+        tabs.addTab(self._build_playback_tab(settings), "Playback")
         tabs.addTab(self._build_ripping_tab(settings), "CD Ripping")
         tabs.addTab(self._build_metadata_tab(settings), "Metadata")
         tabs.addTab(self._build_youtube_tab(settings), "YouTube")
@@ -103,6 +104,44 @@ class SettingsDialog(QDialog):
             "inside saved library folders."
         )
         form.addRow("", self.watch_library_folders)
+
+        return w
+
+    def _build_playback_tab(self, settings: Settings) -> QWidget:
+        w = QWidget()
+        form = QFormLayout(w)
+        form.setContentsMargins(12, 12, 12, 12)
+        form.setVerticalSpacing(8)
+
+        rg_label = QLabel("ReplayGain")
+        rg_label.setObjectName("sectionHeader")
+        form.addRow(rg_label)
+
+        self.rg_mode = QComboBox()
+        self.rg_mode.addItem("Off", "off")
+        self.rg_mode.addItem("Track Gain", "track")
+        self.rg_mode.addItem("Album Gain", "album")
+        for i in range(self.rg_mode.count()):
+            if self.rg_mode.itemData(i) == settings.replaygain_mode:
+                self.rg_mode.setCurrentIndex(i)
+                break
+        form.addRow("Normalization mode:", self.rg_mode)
+
+        self.rg_preamp = QDoubleSpinBox()
+        self.rg_preamp.setRange(-6.0, 6.0)
+        self.rg_preamp.setSingleStep(0.5)
+        self.rg_preamp.setDecimals(1)
+        self.rg_preamp.setSuffix(" dB")
+        self.rg_preamp.setValue(settings.replaygain_preamp_db)
+        self.rg_preamp.setToolTip(
+            "Additional offset applied after the ReplayGain adjustment. "
+            "Use a negative value to add headroom."
+        )
+        form.addRow("Pre-amp:", self.rg_preamp)
+
+        self.rg_prevent_clipping = QCheckBox("Prevent clipping (never boost above original volume)")
+        self.rg_prevent_clipping.setChecked(settings.replaygain_prevent_clipping)
+        form.addRow("", self.rg_prevent_clipping)
 
         return w
 
@@ -360,6 +399,9 @@ class SettingsDialog(QDialog):
             if answer != QMessageBox.Yes:
                 return
 
+        self.result_settings.replaygain_mode = self.rg_mode.currentData() or "off"
+        self.result_settings.replaygain_preamp_db = self.rg_preamp.value()
+        self.result_settings.replaygain_prevent_clipping = self.rg_prevent_clipping.isChecked()
         self.result_settings.music_root = self.root_edit.text().strip() or self.result_settings.music_root
         self.result_settings.rip_format = self.rip_fmt.currentData() or "flac"
         self.result_settings.flac_compression = self.compression.value()
