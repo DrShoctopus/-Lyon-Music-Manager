@@ -4,15 +4,16 @@
 
 # Sea Lyon Media Manager
 
-Sea Lyon Media Manager is a source-first desktop media manager for local music,
+Sea Lyon Media Manager is a Windows focused desktop media manager for local music,
 audio CD ripping, video playback, YouTube search/download, and library
 organization. It is written in Python with PySide6 and uses SQLite, Mutagen,
 libVLC, ffmpeg, yt-dlp, CUETools DB, MusicBrainz, TheAudioDB, Cover Art Archive,
-and libdiscid.
+LRCLIB and libdiscid.
 
 The app is optimized for Windows 10/11 because CD drive detection, libdiscid,
 and CD ripping are Windows-centered workflows. Most library, playback, video,
-YouTube, and UI work can still be developed on macOS or Linux when the required
+YouTube downloading, and UI work can still be developed on macOS or Linux when they're required
+
 Python packages and native runtimes are available.
 
 Current application version: `0.5.0` in `lyon/__init__.py`.
@@ -38,7 +39,7 @@ assets.
 - Runtime diagnostics for ffmpeg, libdiscid/discid, VLC/libVLC, Python
   packages, and related runtime paths.
 - Persistent Settings dialog for library paths, ripping, metadata providers,
-  YouTube download defaults, playback, equalizer, and about/donate information.
+  YouTube download defaults, playback, equalizer, and about documentation.
 
 ### Library Management
 
