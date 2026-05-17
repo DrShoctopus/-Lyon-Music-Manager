@@ -350,3 +350,23 @@ def test_new_crossfade_cancels_previous_retired_backend():
     assert player._fade_out_backend is backends[1]
     assert backends[1].parent() is player
     assert backends[2].parent() is player
+
+
+def test_album_replaygain_uses_zero_album_gain_without_track_fallback(tmp_path, monkeypatch):
+    from lyon.core import replaygain
+
+    path = tmp_path / "song.flac"
+    path.write_bytes(b"")
+    backend = FakeBackend()
+    player = Player(backend=backend)
+    monkeypatch.setattr(replaygain, "read_album_gain", lambda _path: 0.0)
+
+    def fail_track_fallback(_path):
+        raise AssertionError("track gain should not be read when album gain is present")
+
+    monkeypatch.setattr(replaygain, "read_track_gain", fail_track_fallback)
+
+    player.set_replaygain("album", prevent_clipping=False)
+    player.set_queue([_track(str(path))])
+
+    assert backend.volume() == 80

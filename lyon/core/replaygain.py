@@ -4,7 +4,6 @@ from __future__ import annotations
 import re
 import subprocess
 import sys
-from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import QObject, QThread, Signal
@@ -115,9 +114,12 @@ def _extract_tag(f, key: str) -> Optional[str]:
     if isinstance(f, MP4):
         if not f.tags:
             return None
+        needle = key.lower()
         for atom_key, values in f.tags.items():
-            if ":" in atom_key and atom_key.rsplit(":", 1)[-1].lower() == key.upper():
-                return str(values[0]) if values else None
+            atom_key_lower = atom_key.lower()
+            tag_name = atom_key_lower.rsplit(":", 1)[-1] if ":" in atom_key_lower else atom_key_lower
+            if tag_name == needle:
+                return _tag_value_to_str(values[0]) if values else None
         return None
 
     if isinstance(f, ASF):
@@ -136,6 +138,12 @@ def _extract_tag(f, key: str) -> Optional[str]:
             v = f.tags[tag_key]
             return str(v[0]) if isinstance(v, list) else str(v)
     return None
+
+
+def _tag_value_to_str(value: object) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
 
 
 def _parse_rg_gain(raw: str) -> Optional[float]:
@@ -270,7 +278,13 @@ class ReplayGainScanner(QThread):
 
         written = 0
         failed = 0
-        for path, lufs in lufs_map.items():
+        measured_items = list(lufs_map.items())
+        for i, (path, lufs) in enumerate(measured_items):
+            if self.isInterruptionRequested():
+                failed += len(measured_items) - i
+                failed += len(self._paths) - len(lufs_map)
+                self.finished_scanning.emit(written, failed)
+                return
             track_gain_db = gain_for_lufs(lufs)
             self.track_done.emit(path, track_gain_db)
             if write_replaygain_tags(path, track_gain_db, album_gain_db):

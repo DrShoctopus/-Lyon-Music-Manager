@@ -504,7 +504,8 @@ class Player(QObject):
         if self._rg_mode == "track":
             gain_db = read_track_gain(path)
         else:
-            gain_db = read_album_gain(path) or read_track_gain(path)
+            album_gain_db = read_album_gain(path)
+            gain_db = album_gain_db if album_gain_db is not None else read_track_gain(path)
         if gain_db is None:
             return 1.0
         return gain_multiplier(gain_db, self._rg_preamp_db, self._rg_prevent_clipping)

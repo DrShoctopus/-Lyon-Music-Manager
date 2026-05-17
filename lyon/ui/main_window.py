@@ -1053,6 +1053,20 @@ class MainWindow(QMainWindow):
                 )
                 ev.ignore()
                 return
+        if self._rg_scanner is not None and self._rg_scanner.isRunning():
+            scanner = self._rg_scanner
+            scanner.requestInterruption()
+            if not scanner.wait(3000):
+                self.show_toast(
+                    "ReplayGain scan is still stopping. Try closing again in a moment.",
+                    level="warning",
+                    duration_ms=5000,
+                )
+                ev.ignore()
+                return
+            if self._rg_scanner is scanner:
+                scanner.deleteLater()
+                self._rg_scanner = None
         self.player.stop()
         self.youtube_view.shutdown()
         self.disc_view.shutdown()

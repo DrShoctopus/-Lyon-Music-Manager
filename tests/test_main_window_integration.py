@@ -206,6 +206,41 @@ def test_status_bar_carries_scan_progress_widgets(main_window):
     assert main_window._scan_status_label.parent() is sb
 
 
+def test_close_event_waits_for_replaygain_scanner_to_stop(main_window):
+    class StuckScanner:
+        def __init__(self):
+            self.interrupted = False
+            self.waited_ms = None
+
+        def isRunning(self):
+            return True
+
+        def requestInterruption(self):
+            self.interrupted = True
+
+        def wait(self, ms):
+            self.waited_ms = ms
+            return False
+
+    class CloseEvent:
+        def __init__(self):
+            self.ignored = False
+
+        def ignore(self):
+            self.ignored = True
+
+    scanner = StuckScanner()
+    event = CloseEvent()
+    main_window._rg_scanner = scanner
+
+    main_window.closeEvent(event)
+
+    assert scanner.interrupted
+    assert scanner.waited_ms == 3000
+    assert event.ignored
+    assert "ReplayGain scan is still stopping" in main_window._current_toast.message()
+
+
 def test_watcher_events_are_filtered_to_current_library_roots(main_window, tmp_path):
     from lyon.core.library_watcher import WatchBatch
 
