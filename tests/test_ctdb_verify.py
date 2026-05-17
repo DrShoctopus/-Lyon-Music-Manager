@@ -1,5 +1,7 @@
 """Tests for lyon.core.ctdb_verify — CRC computation and CTDB lookup parsing."""
 import io
+import importlib.machinery
+import importlib.util
 import struct
 import sys
 import threading
@@ -9,8 +11,9 @@ import unittest.mock as mock
 
 
 def _install_dependency_stubs() -> None:
-    if "requests" not in sys.modules:
+    if "requests" not in sys.modules and importlib.util.find_spec("requests") is None:
         req = types.ModuleType("requests")
+        req.__spec__ = importlib.machinery.ModuleSpec("requests", loader=None)
         req.RequestException = Exception
 
         class _Session:

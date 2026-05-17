@@ -102,6 +102,10 @@ class Settings:
     yt_video_format: str = "mp4"         # mp4 | mkv | webm
     yt_output_dir: str = ""              # defaults to music_root/YouTube at runtime
     yt_auto_add: bool = True             # add downloaded files to library automatically
+    queue_track_paths: list[str] = field(default_factory=list)
+    queue_current_index: int = 0
+    crossfade_seconds: int = 0          # 0 = disabled; >0 = overlap duration on track change
+    fetch_lyrics_online: bool = True    # query lrclib.net when no local .lrc / embedded lyrics
 
     def __post_init__(self) -> None:
         self.library_paths = normalize_library_paths(self.library_paths)

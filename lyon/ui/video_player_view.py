@@ -649,7 +649,12 @@ class VideoPlayerView(QWidget):
             card.deleteLater()
         self._catalog_cards.clear()
 
-        self._catalog_pending_tracks = list(self._library.all_tracks(media_type="video"))
+        all_videos = list(self._library.all_tracks(media_type="video"))
+        missing_ids = {t.id for t in all_videos if not Path(t.path).exists()}
+        for track_id in missing_ids:
+            self._library.delete_track(track_id)
+
+        self._catalog_pending_tracks = [t for t in all_videos if t.id not in missing_ids]
         self._catalog_total = len(self._catalog_pending_tracks)
         self._update_catalog_count()
         self._append_catalog_batch()
