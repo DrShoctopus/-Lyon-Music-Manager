@@ -241,3 +241,27 @@ def test_crossfade_starts_next_backend_before_stopping_current():
     assert backends[1].is_playing()
     assert backends[1].sources == ["C:/Music/two.flac"]
     assert backends[1].volume() == 0
+
+
+def test_crossfade_preserves_muted_state_on_next_backend():
+    backends: list[FakeBackend] = []
+
+    def factory(parent=None):
+        backend = FakeBackend()
+        backends.append(backend)
+        return backend
+
+    player = Player(backend_factory=factory)
+    player.set_crossfade(5)
+    player.set_queue([
+        _track("C:/Music/one.flac"),
+        _track("C:/Music/two.flac"),
+    ])
+    player.set_muted(True)
+
+    backends[0].position_changed.emit(115_000, 120_000)
+
+    assert len(backends) == 2
+    assert backends[0].is_muted()
+    assert backends[1].is_muted()
+    assert player.is_muted()

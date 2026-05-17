@@ -327,6 +327,7 @@ class Player(QObject):
         backend: PlaybackBackend,
         track: Track,
         volume: int,
+        muted: bool | None = None,
     ) -> None:
         backend.set_source(track.path)
         backend.apply_equalizer(
@@ -334,7 +335,7 @@ class Player(QObject):
             self._equalizer_bands,
             self._equalizer_preamp,
         )
-        backend.set_muted(self.is_muted())
+        backend.set_muted(self.is_muted() if muted is None else muted)
         backend.set_volume(volume)
         backend.play()
 
@@ -381,13 +382,14 @@ class Player(QObject):
             return False
 
         previous_backend = self._backend
+        muted = previous_backend.is_muted()
         self._disconnect_backend(previous_backend)
         self._backend = next_backend
         self._connect_backend(next_backend)
 
         self._index = idx
         track = self._queue[idx]
-        self._start_backend_track(next_backend, track, 0)
+        self._start_backend_track(next_backend, track, 0, muted=muted)
         self.track_changed.emit(track)
 
         self._fade_out_backend = previous_backend
