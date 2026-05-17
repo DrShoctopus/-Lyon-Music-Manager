@@ -56,7 +56,7 @@ Three approaches were considered. **A1 is the recommended strategy.** The rest o
 - Branch from `main` to `feat/win81-spike`.
 - Convert exactly two files to `qtpy`:
   - `lyon/app.py` (the entry point and font/policy setup)
-  - `lyon/core/playback_backend.py` (the Qt Multimedia fallback backend — the highest-risk file because the Qt 5 / Qt 6 multimedia APIs differ)
+  - `lyon/core/playback_backend.py` (verify the VLC-only backend and unavailable-backend diagnostics remain Qt 5 compatible)
 - Add `qtpy>=2.4` and `PySide2==5.15.2.1` to a separate `requirements-qt5.txt`.
 - Confirm `pip install -r requirements-qt5.txt` succeeds inside the Win 8.1 VM.
 - Manual smoke test: open the app, play one local FLAC via the libVLC backend, open one dialog.
@@ -130,29 +130,9 @@ from qtpy.QtWidgets import QApplication
 
 ### 5.3 Qt 6-only API audit and conditional handling
 
-Real incompatibilities found in the codebase:
-
-| API | Where | Qt 6 form | Qt 5 form |
-|---|---|---|---|
-| `QMediaPlayer` + `QAudioOutput` split | [playback_backend.py:135-138](lyon/core/playback_backend.py:135) | Separate `QAudioOutput`, attached via `setAudioOutput()` | `QMediaPlayer` has `setVolume()` / `setMuted()` directly |
-| `QMediaPlayer.PlaybackState` enum scoping | [playback_backend.py:179](lyon/core/playback_backend.py:179) | `QMediaPlayer.PlayingState` (scoped) | Same name; scoped enum syntax works in Qt 5.14+ |
-| `mediaStatusChanged` end-of-media | [playback_backend.py:200](lyon/core/playback_backend.py:200) | `QMediaPlayer.EndOfMedia` | Same enum exists |
-
-The `QtMultimedia` fallback backend is the highest-risk file. Branch using `qtpy.PYQT5`/`PYSIDE2` flags:
-
-```python
-import qtpy
-if qtpy.PYSIDE2 or qtpy.PYQT5:
-    # Qt 5: QMediaPlayer holds its own volume/mute
-    self._player = qtmultimedia.QMediaPlayer(self)
-    self._player.setVolume(80)
-else:
-    # Qt 6: volume lives on QAudioOutput
-    self._player = qtmultimedia.QMediaPlayer(self)
-    self._audio = qtmultimedia.QAudioOutput(self)
-    self._player.setAudioOutput(self._audio)
-    self._audio.setVolume(0.8)
-```
+The former QtMultimedia fallback backend has been removed. Playback now requires
+libVLC; if python-vlc or libVLC cannot be created, the app uses a non-playing
+backend so the rest of the application can still launch and show diagnostics.
 
 **Note on `HighDpiScaleFactorRoundingPolicy`:** the `Qt.HighDpiScaleFactorRoundingPolicy.PassThrough` reference at [app.py:17](lyon/app.py:17) is available in Qt 5.14 and later — **no conditional branch needed**. The scoped-enum syntax works in PySide2 5.15.
 
@@ -162,7 +142,7 @@ After all import rewrites, run the existing Win 10/11 build path:
 
 - `pip install -r requirements-qt6.txt`
 - `python main.py` on the dev machine
-- Manually exercise every menu item, every dialog, both backends (VLC and QtMultimedia fallback)
+- Manually exercise every menu item, every dialog, VLC playback, and the VLC-unavailable diagnostics path
 - Build the existing PyInstaller bundle: `pyinstaller build/lyon.spec`
 - Run the bundle, repeat the smoke test
 
@@ -298,7 +278,7 @@ Docs updated, runtime affordances merged, smoke-test checklist in repo, EOL poli
 
 | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|
-| Qt 5 `QMediaPlayer` behaves subtly different from Qt 6 | High | Low–Medium | libVLC backend is primary; QtMultimedia is fallback. Most users never hit it. |
+| libVLC cannot initialize on Win 8.1 | Medium | Medium | App launches with playback disabled and diagnostics guidance; packaged releases must bundle/test libVLC. |
 | `PySide2 5.15.2.1` develops a non-patchable security CVE | Medium | High | EOL policy already published. Have a graceful sunset plan. |
 | A new feature requires a Qt 6-only API | High | Medium | Engineering policy: every new feature must check the qtpy compatibility table in `docs/win81-support-policy.md`. |
 | Win 8.1 user reports an obscure bug | Medium | Low | Bug is filed with `legacy/win81` label and triaged at lower priority. |

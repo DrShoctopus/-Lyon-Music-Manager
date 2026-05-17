@@ -59,6 +59,7 @@ class EqualizerDialog(QDialog):
         self.resize(760, 440)
         self.result_settings = replace(
             settings,
+            equalizer_preamp=DEFAULT_EQ_PREAMP_DB,
             equalizer_bands=normalize_equalizer_bands(settings.equalizer_bands),
             equalizer_custom_curves={
                 name: normalize_equalizer_bands(curve)

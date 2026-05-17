@@ -41,6 +41,75 @@ Set-Location $Root
 Write-Host "==> Lyon Music Manager - Windows build" -ForegroundColor Green
 Write-Host "    Project root: $Root"
 
+function Get-ExpectedSha256FromText {
+    param(
+        [Parameter(Mandatory = $true)][string]$Text,
+        [string]$FileName
+    )
+
+    $lines = $Text -split "`r?`n"
+    if ($FileName) {
+        foreach ($line in $lines) {
+            if ($line -match '^\s*([A-Fa-f0-9]{64})\s+[* ]?(.+?)\s*$') {
+                $hash = $Matches[1].ToLowerInvariant()
+                $name = [System.IO.Path]::GetFileName($Matches[2].Trim())
+                if ($name -eq $FileName) { return $hash }
+            }
+        }
+    }
+
+    foreach ($line in $lines) {
+        if ($line -match '([A-Fa-f0-9]{64})') {
+            return $Matches[1].ToLowerInvariant()
+        }
+    }
+
+    throw "No SHA-256 checksum found for $FileName."
+}
+
+function Get-ExpectedSha256 {
+    param(
+        [Parameter(Mandatory = $true)][string]$Uri,
+        [string]$FileName
+    )
+
+    Write-Host "    Fetching checksum $Uri"
+    $response = Invoke-WebRequest -Uri $Uri -UseBasicParsing -ErrorAction Stop
+    $contentType = [string]$response.Headers['Content-Type']
+    if ($contentType -match 'text/html') {
+        throw "Checksum URI returned HTML instead of checksum text: $Uri"
+    }
+    return Get-ExpectedSha256FromText -Text $response.Content -FileName $FileName
+}
+
+function Assert-FileSha256 {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Expected,
+        [Parameter(Mandatory = $true)][string]$Label
+    )
+
+    $actual = (Get-FileHash -Algorithm SHA256 -Path $Path).Hash.ToLowerInvariant()
+    $expectedLower = $Expected.ToLowerInvariant()
+    if ($actual -ne $expectedLower) {
+        throw "$Label checksum mismatch. Expected $expectedLower, got $actual."
+    }
+    Write-Host "    Verified $Label SHA-256: $actual"
+}
+
+function Invoke-VerifiedDownload {
+    param(
+        [Parameter(Mandatory = $true)][string]$Uri,
+        [Parameter(Mandatory = $true)][string]$OutFile,
+        [Parameter(Mandatory = $true)][string]$ChecksumUri,
+        [string]$ChecksumFileName
+    )
+
+    Invoke-WebRequest -Uri $Uri -OutFile $OutFile -UseBasicParsing -ErrorAction Stop
+    $expected = Get-ExpectedSha256 -Uri $ChecksumUri -FileName $ChecksumFileName
+    Assert-FileSha256 -Path $OutFile -Expected $expected -Label ([System.IO.Path]::GetFileName($OutFile))
+}
+
 # 0. Optional clean -----------------------------------------------------------
 if ($Clean) {
     Write-Host "==> Cleaning previous build artefacts" -ForegroundColor Yellow
@@ -103,12 +172,18 @@ $needVlc = -not (Test-Path (Join-Path $vlcDir 'libvlc.dll')) -or
 if ($SkipBinaries) {
     if ($needFfmpeg) { Write-Warning "bin\ffmpeg.exe missing; CD ripping won't work in the built app." }
     if ($needDiscid) { Write-Warning "bin\discid.dll missing; CD detection won't work in the built app." }
-    if ($needVlc) { Write-Warning "bin\vlc runtime missing; packaged playback will fall back to Qt Multimedia without audible EQ." }
+    if ($needVlc) { Write-Warning "bin\vlc runtime missing; packaged audio/video playback and EQ will be disabled." }
 } else {
     if ($needFfmpeg) {
         Write-Host "==> Downloading ffmpeg.exe" -ForegroundColor Cyan
         $tmp = Join-Path $env:TEMP "lyon-ffmpeg.zip"
-        Invoke-WebRequest -Uri 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip' -OutFile $tmp
+        $ffmpegArchive = 'ffmpeg-release-essentials.zip'
+        $ffmpegUrl = "https://www.gyan.dev/ffmpeg/builds/$ffmpegArchive"
+        Invoke-VerifiedDownload `
+            -Uri $ffmpegUrl `
+            -OutFile $tmp `
+            -ChecksumUri "$ffmpegUrl.sha256" `
+            -ChecksumFileName $ffmpegArchive
         $extract = Join-Path $env:TEMP 'lyon-ffmpeg-extract'
         if (Test-Path $extract) { Remove-Item $extract -Recurse -Force }
         Expand-Archive $tmp -DestinationPath $extract
@@ -123,18 +198,24 @@ if ($SkipBinaries) {
     if ($needDiscid) {
         Write-Host "==> Downloading libdiscid (Windows x64)" -ForegroundColor Cyan
         $tmp = Join-Path $env:TEMP "lyon-discid.zip"
+        $discidArchive = 'libdiscid-0.6.4-win.zip'
+        $discidChecksumUrl = 'https://ftp.musicbrainz.org/pub/musicbrainz/libdiscid/libdiscid-0.6.4.SHA256SUMS'
         # GitHub releases page ships the Windows binary zip since 0.6.4.
         # MusicBrainz FTP mirrors kept as fallbacks in case GitHub CDN is unavailable.
         $urls = @(
-            'https://github.com/metabrainz/libdiscid/releases/download/v0.6.4/libdiscid-0.6.4-win.zip',
-            'https://ftp.musicbrainz.org/pub/musicbrainz/libdiscid/libdiscid-0.6.4-win.zip',
-            'https://ftp.osuosl.org/pub/musicbrainz/libdiscid/libdiscid-0.6.4-win.zip'
+            "https://github.com/metabrainz/libdiscid/releases/download/v0.6.4/$discidArchive",
+            "https://ftp.musicbrainz.org/pub/musicbrainz/libdiscid/$discidArchive",
+            "https://ftp.osuosl.org/pub/musicbrainz/libdiscid/$discidArchive"
         )
         $ok = $false
         foreach ($u in $urls) {
             try {
                 Write-Host "    Trying $u"
-                Invoke-WebRequest -Uri $u -OutFile $tmp -ErrorAction Stop
+                Invoke-VerifiedDownload `
+                    -Uri $u `
+                    -OutFile $tmp `
+                    -ChecksumUri $discidChecksumUrl `
+                    -ChecksumFileName $discidArchive
                 $ok = $true
                 break
             } catch {
@@ -167,7 +248,13 @@ if ($SkipBinaries) {
         $tmp = Join-Path $env:TEMP "lyon-vlc.zip"
         $extract = Join-Path $env:TEMP 'lyon-vlc-extract'
         if (Test-Path $extract) { Remove-Item $extract -Recurse -Force }
-        Invoke-WebRequest -Uri "https://download.videolan.org/pub/videolan/vlc/$vlcVersion/win64/vlc-$vlcVersion-win64.zip" -OutFile $tmp
+        $vlcArchive = "vlc-$vlcVersion-win64.zip"
+        $vlcUrl = "https://download.videolan.org/pub/videolan/vlc/$vlcVersion/win64/$vlcArchive"
+        Invoke-VerifiedDownload `
+            -Uri $vlcUrl `
+            -OutFile $tmp `
+            -ChecksumUri "$vlcUrl.sha256" `
+            -ChecksumFileName $vlcArchive
         Expand-Archive $tmp -DestinationPath $extract
         $root = Get-ChildItem -Path $extract -Directory | Select-Object -First 1
         if (-not $root) { throw "VLC archive did not contain an extracted root directory." }

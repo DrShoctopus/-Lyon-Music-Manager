@@ -131,12 +131,15 @@ class Settings:
                 known = {f for f in cls.__dataclass_fields__}
                 data = {k: v for k, v in data.items() if k in known}
                 return cls(**data)
+            except OSError as exc:
+                LOG.warning("Could not read settings.json; using defaults: %s", exc)
+                return cls()
             except (json.JSONDecodeError, TypeError, ValueError):
                 backup = path.with_suffix(".json.bad")
                 try:
                     path.replace(backup)
-                except OSError:
-                    pass
+                except OSError as exc:
+                    LOG.debug("Could not back up corrupt settings file %s: %s", path, exc)
                 LOG.warning(
                     "settings.json was corrupt; reset to defaults. Bad file saved to %s",
                     backup,

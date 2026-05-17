@@ -23,6 +23,7 @@ class Player(QObject):
     state_changed = Signal(str)           # "playing"/"paused"/"stopped"
     position_changed = Signal(int, int)   # (ms, total_ms)
     queue_changed = Signal()
+    playback_unavailable = Signal(str)
 
     def __init__(self, parent: Optional[QObject] = None, backend: PlaybackBackend | None = None):
         super().__init__(parent)
@@ -119,12 +120,24 @@ class Player(QObject):
             return self._queue[self._index]
         return None
 
+    def playback_available(self) -> bool:
+        is_available = getattr(self._backend, "is_available", None)
+        return bool(is_available()) if callable(is_available) else True
+
+    def playback_unavailable_reason(self) -> str:
+        reason = getattr(self._backend, "unavailable_reason", None)
+        if callable(reason):
+            return str(reason())
+        return ""
+
     def is_playing(self) -> bool:
         return self._backend.is_playing()
 
     # --------------------------------------------------------------- transport
     def play_index(self, idx: int) -> None:
         if not (0 <= idx < len(self._queue)):
+            return
+        if not self._ensure_playback_available():
             return
         self._index = idx
         track = self._queue[idx]
@@ -136,6 +149,8 @@ class Player(QObject):
     def play(self) -> None:
         if self._index < 0 and self._queue:
             self.play_index(0)
+            return
+        if not self._ensure_playback_available():
             return
         self._backend.play()
 
@@ -229,3 +244,12 @@ class Player(QObject):
         if self._repeat == RepeatMode.ALL:
             return 0
         return None
+
+    def _ensure_playback_available(self) -> bool:
+        if self.playback_available():
+            return True
+        reason = self.playback_unavailable_reason() or "VLC playback is unavailable."
+        self.state_changed.emit("stopped")
+        self.position_changed.emit(0, 0)
+        self.playback_unavailable.emit(reason)
+        return False

@@ -8,6 +8,7 @@ Signal = QtCore.Signal
 
 from lyon.core.library import Track
 from lyon.core.player import Player
+from lyon.core.playback_backend import UnavailablePlaybackBackend
 
 
 class FakeBackend(QObject):
@@ -167,3 +168,32 @@ def test_removing_current_queue_item_while_playing_advances_to_next_track():
     assert player.current().path == "C:/Music/two.flac"
     assert backend.sources[-1] == "C:/Music/two.flac"
     assert backend.is_playing()
+
+
+def test_unavailable_backend_keeps_queue_but_does_not_fake_current_track():
+    backend = UnavailablePlaybackBackend("libVLC missing")
+    player = Player(backend=backend)
+    unavailable: list[str] = []
+    tracks = [_track("C:/Music/one.flac"), _track("C:/Music/two.flac")]
+
+    player.playback_unavailable.connect(unavailable.append)
+    player.set_queue(tracks, 1)
+
+    assert player.queue() == tracks
+    assert player.current() is None
+    assert player.current_index() == -1
+    assert not player.is_playing()
+    assert unavailable == ["libVLC missing"]
+
+
+def test_unavailable_backend_preserves_volume_mute_and_equalizer_state():
+    backend = UnavailablePlaybackBackend("libVLC missing")
+    player = Player(backend=backend)
+
+    player.set_volume(33)
+    player.set_muted(True)
+    player.set_equalizer(True, [1, 2, 3], preamp=4)
+
+    assert player.volume() == 33
+    assert player.is_muted()
+    assert player.equalizer() == (True, [1, 2, 3, 0, 0, 0, 0, 0, 0, 0], 4)

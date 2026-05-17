@@ -177,6 +177,8 @@ class YtDownloadWorker(QThread):
                 ydl.download([self.url])
         except Exception as exc:  # noqa: BLE001
             if not self._cancelled:
+                if self._succeeded == 0 and self._failed == 0:
+                    self._failed = 1
                 self.error.emit(str(exc))
         finally:
             self.download_finished.emit(self._succeeded, self._failed)
