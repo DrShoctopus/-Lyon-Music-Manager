@@ -8,7 +8,7 @@ import threading
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QEasingCurve, QPropertyAnimation, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QFrame, QHBoxLayout, QLabel, QListWidget,
@@ -125,12 +125,18 @@ class _LyricsPanel(QWidget):
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QFrame.NoFrame)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._scroll_animation = QPropertyAnimation(
+            self._scroll.verticalScrollBar(), b"value", self
+        )
+        self._scroll_animation.setDuration(240)
+        self._scroll_animation.setEasingCurve(QEasingCurve.OutCubic)
 
         self._container = QWidget()
         self._container.setObjectName("lyricsContainer")
         self._vl = QVBoxLayout(self._container)
         self._vl.setAlignment(Qt.AlignTop)
         self._vl.setSpacing(6)
+        self._update_center_padding()
         self._scroll.setWidget(self._container)
 
         layout = QVBoxLayout(self)
@@ -146,6 +152,7 @@ class _LyricsPanel(QWidget):
         self._current_line = -1
         self._synced = synced
         self._timestamps = [ms for ms, _ in synced]
+        self._scroll_animation.stop()
 
         if synced:
             lines_text = [t for _, t in synced]
@@ -160,6 +167,7 @@ class _LyricsPanel(QWidget):
             placeholder.setAlignment(Qt.AlignCenter)
             self._vl.addWidget(placeholder)
             self._labels.append(placeholder)
+            self._scroll.verticalScrollBar().setValue(0)
             return
 
         for text in lines_text:
@@ -169,6 +177,7 @@ class _LyricsPanel(QWidget):
             lbl.setObjectName("lyricsLine")
             self._vl.addWidget(lbl)
             self._labels.append(lbl)
+        self._scroll.verticalScrollBar().setValue(0)
 
     def clear(self) -> None:
         self.set_lyrics([], None)
@@ -186,7 +195,37 @@ class _LyricsPanel(QWidget):
         self._current_line = idx
         self._labels[idx].setObjectName("lyricsLineCurrent")
         self._repolish_label(self._labels[idx])
-        self._scroll.ensureWidgetVisible(self._labels[idx])
+        self._center_current_line(self._labels[idx])
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._update_center_padding()
+        if 0 <= self._current_line < len(self._labels):
+            QTimer.singleShot(0, self._recenter_current_line)
+
+    def _update_center_padding(self) -> None:
+        viewport_height = self._scroll.viewport().height()
+        padding = max(0, viewport_height // 2 - 24)
+        self._vl.setContentsMargins(0, padding, 0, padding)
+
+    def _center_current_line(self, label: QLabel, *, animate: bool = True) -> None:
+        self._vl.activate()
+        self._container.adjustSize()
+        viewport_height = self._scroll.viewport().height()
+        target = label.geometry().center().y() - (viewport_height // 2)
+        bar = self._scroll.verticalScrollBar()
+        target = max(bar.minimum(), min(target, bar.maximum()))
+        self._scroll_animation.stop()
+        if animate:
+            self._scroll_animation.setStartValue(bar.value())
+            self._scroll_animation.setEndValue(target)
+            self._scroll_animation.start()
+        else:
+            bar.setValue(target)
+
+    def _recenter_current_line(self) -> None:
+        if 0 <= self._current_line < len(self._labels):
+            self._center_current_line(self._labels[self._current_line], animate=False)
 
     @staticmethod
     def _repolish_label(label: QLabel) -> None:
@@ -343,19 +382,21 @@ class NowPlayingView(QWidget):
         queue_btn.setCheckable(True)
         queue_btn.setChecked(True)
         queue_btn.setObjectName("panelTab")
+        queue_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         lyrics_btn = QPushButton("Lyrics")
         lyrics_btn.setCheckable(True)
         lyrics_btn.setObjectName("panelTab")
+        lyrics_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         info_btn = QPushButton("Info")
         info_btn.setCheckable(True)
         info_btn.setObjectName("panelTab")
+        info_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         tab_row = QHBoxLayout()
         tab_row.setSpacing(4)
-        tab_row.addWidget(queue_btn)
-        tab_row.addWidget(lyrics_btn)
-        tab_row.addWidget(info_btn)
-        tab_row.addStretch(1)
+        tab_row.addWidget(queue_btn, 1)
+        tab_row.addWidget(lyrics_btn, 1)
+        tab_row.addWidget(info_btn, 1)
 
         # Queue panel
         self._queue_list = QListWidget()
@@ -402,16 +443,18 @@ class NowPlayingView(QWidget):
         right_vl.addWidget(self._panel_stack, 1)
 
         right_w = QWidget()
+        right_w.setObjectName("nowPlayingSidePanel")
         right_w.setLayout(right_vl)
-        right_w.setMinimumWidth(220)
-        right_w.setMaximumWidth(360)
+        right_w.setMinimumWidth(440)
+        right_w.setMaximumWidth(720)
+        right_w.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         # ---- Top-level layout
         row = QHBoxLayout()
         row.setSpacing(24)
         row.addWidget(self.cover, 0, Qt.AlignTop)
         row.addWidget(info_w, 1)
-        row.addWidget(right_w, 0)
+        row.addWidget(right_w, 1)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(28, 28, 28, 28)
