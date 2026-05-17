@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import os
 
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QAction, QDragEnterEvent, QDropEvent
@@ -15,7 +16,13 @@ from PySide6.QtWidgets import (
 from .. import __app_name__, __version__
 from ..core import metadata
 from ..core.cd_detect import close_dll_handles as close_cd_dll_handles
-from ..core.library import Library
+from ..core.library import Library, ScanSummary
+from ..core.library_watcher import (
+    LibraryFolderWatcher,
+    LibraryIndexThread,
+    WatchBatch,
+    coalesce_batch,
+)
 from ..core.playback_backend import close_dll_handles
 from ..core.player import Player
 from ..core.settings import Settings
@@ -36,7 +43,7 @@ from .youtube_view import YouTubeView
 
 
 class _LibraryScanThread(QThread):
-    finished_with = Signal(int, int, str)  # (new_tracks, removed_tracks, label)
+    finished_with = Signal(int, int, int, str)  # (new_tracks, updated_tracks, removed_tracks, label)
     failed_with = Signal(str, str)         # (label, error)
 
     def __init__(self, library: Library, roots: list[str], label: str, prune: bool = False, parent=None):
@@ -55,13 +62,15 @@ class _LibraryScanThread(QThread):
     def run(self) -> None:
         try:
             should_cancel = lambda: self._cancel or self.isInterruptionRequested()
-            removed = self.library.remove_missing() if self.prune and not should_cancel() else 0
-            n = (
-                self.library.scan_paths(self.roots, should_cancel=should_cancel)
+            summary = ScanSummary()
+            summary.removed = self.library.remove_missing() if self.prune and not should_cancel() else 0
+            scan_summary = (
+                self.library.scan_paths_summary(self.roots, should_cancel=should_cancel)
                 if not should_cancel()
-                else 0
+                else ScanSummary()
             )
-            self.finished_with.emit(n, removed, self.label)
+            summary.merge(scan_summary)
+            self.finished_with.emit(summary.added, summary.updated, summary.removed, self.label)
         except Exception as exc:  # pragma: no cover - defensive worker boundary
             self.failed_with.emit(self.label, str(exc))
 
@@ -79,6 +88,10 @@ class MainWindow(QMainWindow):
         self.player.set_equalizer(self.settings.equalizer_enabled, self.settings.equalizer_bands, self.settings.equalizer_preamp)
         self.player.set_crossfade(self.settings.crossfade_seconds)
         self._scan_thread: _LibraryScanThread | None = None
+        self._watch_index_thread: LibraryIndexThread | None = None
+        self._library_watcher = LibraryFolderWatcher(self)
+        self._watch_pending = WatchBatch()
+        self._watcher_unavailable_notified = False
         self._equalizer_dialog: EqualizerDialog | None = None
         self._queue_dialog: QueueDialog | None = None
         self._current_toast: Toast | None = None
@@ -86,6 +99,10 @@ class MainWindow(QMainWindow):
         self._library_refresh_timer = QTimer(self)
         self._library_refresh_timer.setSingleShot(True)
         self._library_refresh_timer.setInterval(300)
+        self._watch_debounce_timer = QTimer(self)
+        self._watch_debounce_timer.setSingleShot(True)
+        self._watch_debounce_timer.setInterval(750)
+        self._watch_debounce_timer.timeout.connect(self._flush_library_watch_events)
         # Sleep timer
         self._sleep_remaining_s = 0
         self._sleep_timer = QTimer(self)
@@ -224,6 +241,12 @@ class MainWindow(QMainWindow):
         self.ripper_view.rip_completed.connect(self.library_view.refresh)
         self.ripper_view.log.connect(lambda m: sb.showMessage(m, 4000))
         self.youtube_view.download_requested.connect(self._on_yt_download)
+        self._library_watcher.paths_changed.connect(self._on_watched_paths_changed)
+        self._library_watcher.paths_deleted.connect(self._on_watched_paths_deleted)
+        self._library_watcher.paths_moved.connect(self._on_watched_paths_moved)
+        self._library_watcher.folders_moved.connect(self._on_watched_folders_moved)
+        self._library_watcher.folders_changed.connect(self._on_watched_folders_changed)
+        self._library_watcher.watch_error.connect(self._on_library_watch_error)
 
         self.setAcceptDrops(True)
 
@@ -233,6 +256,7 @@ class MainWindow(QMainWindow):
 
         # Menu + keyboard shortcuts
         self._build_menu()
+        self._restart_library_watcher()
 
         # Ensure transport visibility matches initial tab (Library, index 0).
         self._on_view_changed(0)
@@ -430,6 +454,7 @@ class MainWindow(QMainWindow):
         if folder not in self.settings.library_paths:
             self.settings.library_paths.append(folder)
             self.settings.save()
+            self._restart_library_watcher()
         self._start_scan([folder], f"Added tracks from {folder}")
 
     def rescan(self) -> None:
@@ -469,6 +494,9 @@ class MainWindow(QMainWindow):
         if self._scan_thread is not None and self._scan_thread.isRunning():
             self.show_toast("Library scan already running.", level="warning")
             return
+        if self._watch_index_thread is not None and self._watch_index_thread.isRunning():
+            self.show_toast("Library update already running.", level="warning")
+            return
         self._scan_status_label.setText("Scanning library…")
         self._scan_status_label.setVisible(True)
         self._scan_progress.setVisible(True)
@@ -478,15 +506,17 @@ class MainWindow(QMainWindow):
         self._scan_thread.finished.connect(self._scan_thread.deleteLater)
         self._scan_thread.start()
 
-    def _on_scan_finished(self, n: int, removed: int, label: str) -> None:
+    def _on_scan_finished(self, n: int, updated: int, removed: int, label: str) -> None:
         self._scan_status_label.setVisible(False)
         self._scan_status_label.setText("")
         self._scan_progress.setVisible(False)
         parts = [f"{label}: {n} new track{'' if n == 1 else 's'}"]
+        if updated:
+            parts.append(f"{updated} updated")
         if removed:
             parts.append(f"{removed} removed")
         message = ", ".join(parts)
-        toast_level = "success" if (n > 0 or removed > 0) else "info"
+        toast_level = "success" if (n > 0 or updated > 0 or removed > 0) else "info"
         self.show_toast(message, level=toast_level, duration_ms=4000)
         self.library_view.refresh()
         self.video_player_view.refresh_catalog()
@@ -498,6 +528,172 @@ class MainWindow(QMainWindow):
         self._scan_progress.setVisible(False)
         self.show_toast(f"{label} failed: {error}", level="error", duration_ms=6000)
         self._scan_thread = None
+
+    # ------------------------------------------------------------------ watched folders
+    def _restart_library_watcher(self) -> None:
+        self._library_watcher.stop()
+        if not self.settings.watch_library_folders or not self.settings.library_paths:
+            return
+        if not LibraryFolderWatcher.is_available():
+            if not self._watcher_unavailable_notified:
+                self.statusBar().showMessage(
+                    "Install watchdog to enable watched library folders.",
+                    6000,
+                )
+                self._watcher_unavailable_notified = True
+            return
+        self._library_watcher.start(self.settings.library_paths)
+
+    def _on_library_watch_error(self, message: str) -> None:
+        if not message:
+            return
+        self.statusBar().showMessage(message, 6000)
+
+    def _on_watched_paths_changed(self, paths: list) -> None:
+        self._queue_library_watch_batch(
+            WatchBatch(changed_paths={str(path) for path in paths})
+        )
+
+    def _on_watched_paths_deleted(self, paths: list) -> None:
+        self._queue_library_watch_batch(
+            WatchBatch(deleted_paths={str(path) for path in paths})
+        )
+
+    def _on_watched_paths_moved(self, pairs: list) -> None:
+        moved: dict[str, str] = {}
+        for pair in pairs:
+            try:
+                old_path, new_path = pair
+            except (TypeError, ValueError):
+                continue
+            moved[str(old_path)] = str(new_path)
+        self._queue_library_watch_batch(WatchBatch(moved_paths=moved))
+
+    def _on_watched_folders_changed(self, paths: list) -> None:
+        self._queue_library_watch_batch(
+            WatchBatch(scan_roots={str(path) for path in paths})
+        )
+
+    def _on_watched_folders_moved(self, pairs: list) -> None:
+        moved: dict[str, str] = {}
+        for pair in pairs:
+            try:
+                old_path, new_path = pair
+            except (TypeError, ValueError):
+                continue
+            moved[str(old_path)] = str(new_path)
+        self._queue_library_watch_batch(WatchBatch(moved_folders=moved))
+
+    def _queue_library_watch_batch(self, batch: WatchBatch) -> None:
+        batch = self._filter_watch_batch_to_current_roots(batch)
+        if batch.is_empty() or not self.settings.watch_library_folders:
+            return
+        coalesce_batch(self._watch_pending, batch)
+        self._watch_debounce_timer.start()
+
+    def _filter_watch_batch_to_current_roots(self, batch: WatchBatch) -> WatchBatch:
+        filtered = WatchBatch()
+        for path in batch.changed_paths:
+            if self._path_is_under_library_roots(path):
+                filtered.changed_paths.add(path)
+        for path in batch.deleted_paths:
+            if self._path_is_under_library_roots(path):
+                filtered.deleted_paths.add(path)
+        for path in batch.scan_roots:
+            if self._path_is_under_library_roots(path):
+                filtered.scan_roots.add(path)
+        for old_path, new_path in batch.moved_paths.items():
+            old_in = self._path_is_under_library_roots(old_path)
+            new_in = self._path_is_under_library_roots(new_path)
+            if old_in and new_in:
+                filtered.moved_paths[old_path] = new_path
+            elif old_in:
+                filtered.deleted_paths.add(old_path)
+            elif new_in:
+                filtered.changed_paths.add(new_path)
+        for old_path, new_path in batch.moved_folders.items():
+            old_in = self._path_is_under_library_roots(old_path)
+            new_in = self._path_is_under_library_roots(new_path)
+            if old_in and new_in:
+                filtered.moved_folders[old_path] = new_path
+            elif old_in:
+                filtered.deleted_paths.add(old_path)
+            elif new_in:
+                filtered.scan_roots.add(new_path)
+        return filtered
+
+    def _path_is_under_library_roots(self, path: str) -> bool:
+        if not path:
+            return False
+        try:
+            path_norm = os.path.normcase(os.path.abspath(path))
+        except OSError:
+            return False
+        for root in self.settings.library_paths:
+            if not root:
+                continue
+            try:
+                root_norm = os.path.normcase(os.path.abspath(root))
+                if os.path.commonpath([root_norm, path_norm]) == root_norm:
+                    return True
+            except (OSError, ValueError):
+                continue
+        return False
+
+    def _flush_library_watch_events(self) -> None:
+        if self._watch_pending.is_empty():
+            return
+        if self._scan_thread is not None and self._scan_thread.isRunning():
+            self._watch_debounce_timer.start(1000)
+            return
+        if self._watch_index_thread is not None and self._watch_index_thread.isRunning():
+            self._watch_debounce_timer.start(1000)
+            return
+
+        batch = self._watch_pending
+        self._watch_pending = WatchBatch()
+        self._scan_status_label.setText("Updating library…")
+        self._scan_status_label.setVisible(True)
+        self._scan_progress.setVisible(True)
+        self._watch_index_thread = LibraryIndexThread(
+            self.library,
+            batch,
+            settle_ms=750,
+            parent=self,
+        )
+        self._watch_index_thread.finished_with.connect(self._on_watch_index_finished)
+        self._watch_index_thread.failed_with.connect(self._on_watch_index_failed)
+        self._watch_index_thread.finished.connect(self._watch_index_thread.deleteLater)
+        self._watch_index_thread.start()
+
+    def _on_watch_index_finished(self, summary: ScanSummary) -> None:
+        self._scan_status_label.setVisible(False)
+        self._scan_status_label.setText("")
+        self._scan_progress.setVisible(False)
+        parts: list[str] = []
+        if summary.added:
+            parts.append(f"{summary.added} new")
+        if summary.updated:
+            parts.append(f"{summary.updated} updated")
+        if summary.removed:
+            parts.append(f"{summary.removed} removed")
+        if summary.failed:
+            parts.append(f"{summary.failed} failed")
+        if parts:
+            self.show_toast(
+                "Library updated: " + ", ".join(parts),
+                level="warning" if summary.failed else "success",
+                duration_ms=4000,
+            )
+            self._library_refresh_timer.start()
+        self._watch_index_thread = None
+
+    def _on_watch_index_failed(self, error: str) -> None:
+        self._scan_status_label.setVisible(False)
+        self._scan_status_label.setText("")
+        self._scan_progress.setVisible(False)
+        self.show_toast(f"Library update failed: {error}", level="error", duration_ms=6000)
+        self._watch_index_thread = None
 
     def remove_missing(self) -> None:
         confirm = QMessageBox.question(
@@ -523,6 +719,7 @@ class MainWindow(QMainWindow):
     def open_settings(self) -> None:
         from .settings_dialog import SettingsDialog
         old_paths = list(self.settings.library_paths)
+        old_watch = self.settings.watch_library_folders
         dlg = SettingsDialog(self.settings, self)
         try:
             accepted = dlg.exec()
@@ -546,7 +743,11 @@ class MainWindow(QMainWindow):
                 self.settings.equalizer_bands,
                 self.settings.equalizer_preamp,
             )
-            if self.settings.library_paths != old_paths and self.settings.library_paths:
+            paths_changed = self.settings.library_paths != old_paths
+            watch_changed = self.settings.watch_library_folders != old_watch
+            if paths_changed or watch_changed:
+                self._restart_library_watcher()
+            if paths_changed and self.settings.library_paths:
                 self._start_scan(self.settings.library_paths, "Scanned")
             self.show_toast("Settings saved.", level="success")
 
@@ -567,6 +768,7 @@ class MainWindow(QMainWindow):
             self.now_playing._settings = self.settings
             if self.settings.library_paths:
                 self._start_scan(self.settings.library_paths, "Scanned")
+            self._restart_library_watcher()
             self.show_toast("Setup saved.", level="success")
 
     def show_diagnostics(self) -> None:
@@ -722,6 +924,7 @@ class MainWindow(QMainWindow):
                 if folder not in self.settings.library_paths:
                     self.settings.library_paths.append(folder)
             self.settings.save()
+            self._restart_library_watcher()
             self._start_scan(folders, f"Added {len(folders)} folder(s)")
         if files:
             for f in files:
@@ -736,6 +939,18 @@ class MainWindow(QMainWindow):
         ev.acceptProposedAction()
 
     def closeEvent(self, ev) -> None:
+        self._watch_debounce_timer.stop()
+        self._library_watcher.stop()
+        if self._watch_index_thread is not None and self._watch_index_thread.isRunning():
+            self._watch_index_thread.request_stop()
+            if not self._watch_index_thread.wait(3000):
+                self.show_toast(
+                    "Library update is still stopping. Try closing again in a moment.",
+                    level="warning",
+                    duration_ms=5000,
+                )
+                ev.ignore()
+                return
         if self._scan_thread is not None and self._scan_thread.isRunning():
             self._scan_thread.request_stop()
             if not self._scan_thread.wait(3000):

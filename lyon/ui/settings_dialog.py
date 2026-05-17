@@ -96,6 +96,14 @@ class SettingsDialog(QDialog):
         folders_w = QWidget(); folders_w.setLayout(folders_box)
         form.addRow("Library folders:", folders_w)
 
+        self.watch_library_folders = QCheckBox("Watch library folders for changes")
+        self.watch_library_folders.setChecked(settings.watch_library_folders)
+        self.watch_library_folders.setToolTip(
+            "Automatically add, refresh, and remove library records when files change "
+            "inside saved library folders."
+        )
+        form.addRow("", self.watch_library_folders)
+
         return w
 
     def _build_ripping_tab(self, settings: Settings) -> QWidget:
@@ -361,6 +369,7 @@ class SettingsDialog(QDialog):
             self.result_settings.rip_audio_bitrate = 320
         self.result_settings.cd_drive = self.drive.text().strip()
         self.result_settings.library_paths = library_paths
+        self.result_settings.watch_library_folders = self.watch_library_folders.isChecked()
         self.result_settings.eject_after_rip = self.eject.isChecked()
         self.result_settings.auto_lookup_metadata = self.lookup.isChecked()
         self.result_settings.cuetools_db_metadata_enabled = self.cuetools_db.isChecked()

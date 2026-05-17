@@ -71,6 +71,11 @@ def test_library_paths_are_normalized_without_duplicates():
     assert settings.library_paths == ["/music/a", "/music/b"]
 
 
+def test_watch_library_folders_setting_normalizes_string_values():
+    assert Settings(watch_library_folders="false").watch_library_folders is False
+    assert Settings(watch_library_folders="yes").watch_library_folders is True
+
+
 def test_settings_clamps_user_editable_numeric_and_format_fields():
     settings = Settings(
         rip_format="invalid",

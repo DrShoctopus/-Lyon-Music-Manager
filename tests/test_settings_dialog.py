@@ -72,6 +72,15 @@ def test_settings_dialog_persists_library_paths_without_duplicates(app, monkeypa
     assert dialog.result_settings.library_paths == ["/music/one", "/music/two"]
 
 
+def test_settings_dialog_persists_watched_folder_toggle(app, monkeypatch):
+    dialog = SettingsDialog(Settings(watch_library_folders=True), None)
+
+    dialog.watch_library_folders.setChecked(False)
+    dialog._accept()
+
+    assert dialog.result_settings.watch_library_folders is False
+
+
 def test_settings_dialog_rejects_new_missing_library_path(app, monkeypatch):
     dialog = SettingsDialog(Settings(library_paths=[]), None)
     monkeypatch.setattr(settings_dialog_module, "QMessageBox", _RejectMissingPathPrompt)

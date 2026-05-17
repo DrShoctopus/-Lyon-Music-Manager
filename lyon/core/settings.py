@@ -76,6 +76,19 @@ def _nonnegative_int(value: object, default: int = 0) -> int:
     return max(0, number)
 
 
+def _bool_value(value: object, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    text = str(value).strip().casefold()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
 def normalize_library_paths(paths: object) -> list[str]:
     """Return non-empty library paths without exact duplicates, preserving order."""
     if not isinstance(paths, list | tuple):
@@ -111,6 +124,7 @@ class Settings:
     ctdb_verify_rips: bool = True
     last_volume: int = 80
     library_paths: list[str] = field(default_factory=list)
+    watch_library_folders: bool = True
     equalizer_enabled: bool = False
     equalizer_preamp: int = DEFAULT_EQ_PREAMP_DB
     equalizer_bands: list[int] = field(default_factory=flat_equalizer_bands)
@@ -142,6 +156,7 @@ class Settings:
         if self.yt_video_format not in _YT_VIDEO_FORMATS:
             self.yt_video_format = "mp4"
         self.library_paths = normalize_library_paths(self.library_paths)
+        self.watch_library_folders = _bool_value(self.watch_library_folders, True)
         self.equalizer_preamp = clamp_preamp(self.equalizer_preamp)
         self.equalizer_bands = normalize_equalizer_bands(self.equalizer_bands)
         custom_curves = self.equalizer_custom_curves if isinstance(self.equalizer_custom_curves, dict) else {}

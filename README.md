@@ -50,7 +50,8 @@ assets.
 - Browse by genre, artist, album, track, playlists, and virtual collections.
 - Search across title, artist, album artist, album, and display fallbacks.
 - List, simple, and grid-oriented library views.
-- Add folders, rescan saved roots, remove missing files, and drag/drop media.
+- Add folders, watch saved roots for changes, incrementally rescan, remove
+  missing files, and drag/drop media.
 - Manual and smart playlists, playlist export to M3U, and queue-to-playlist save.
 - Track ratings, liked tracks, play count, recently played, most played, and top
   rated views.
@@ -148,6 +149,7 @@ Pinned packages currently include:
 - `python-vlc` for audio/video playback and audible equalizer support.
 - `discid` on Windows for MusicBrainz disc IDs.
 - `yt-dlp` for YouTube search and downloads.
+- `watchdog` for recursive library-folder monitoring.
 
 ### Native Runtime Files
 

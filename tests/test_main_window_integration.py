@@ -156,6 +156,47 @@ def test_status_bar_carries_scan_progress_widgets(main_window):
     assert main_window._scan_status_label.parent() is sb
 
 
+def test_watcher_events_are_filtered_to_current_library_roots(main_window, tmp_path):
+    from lyon.core.library_watcher import WatchBatch
+
+    inside = tmp_path / "Music" / "song.flac"
+    outside = tmp_path / "Outside" / "song.flac"
+    moved_inside = tmp_path / "Music" / "moved.flac"
+    inside.parent.mkdir(parents=True)
+    outside.parent.mkdir(parents=True)
+    main_window.settings.library_paths = [str(tmp_path / "Music")]
+
+    batch = WatchBatch(
+        changed_paths={str(inside), str(outside)},
+        deleted_paths={str(outside)},
+        moved_paths={
+            str(inside): str(moved_inside),
+            str(outside): str(tmp_path / "Music" / "imported.flac"),
+        },
+        scan_roots={str(tmp_path / "Music"), str(tmp_path / "Outside")},
+        moved_folders={
+            str(tmp_path / "Music" / "Old"): str(tmp_path / "Music" / "New"),
+            str(tmp_path / "Outside" / "Old"): str(tmp_path / "Music" / "Imported"),
+        },
+    )
+
+    filtered = main_window._filter_watch_batch_to_current_roots(batch)
+
+    assert filtered.changed_paths == {
+        str(inside),
+        str(tmp_path / "Music" / "imported.flac"),
+    }
+    assert filtered.deleted_paths == set()
+    assert filtered.moved_paths == {str(inside): str(moved_inside)}
+    assert filtered.scan_roots == {
+        str(tmp_path / "Music"),
+        str(tmp_path / "Music" / "Imported"),
+    }
+    assert filtered.moved_folders == {
+        str(tmp_path / "Music" / "Old"): str(tmp_path / "Music" / "New")
+    }
+
+
 def test_main_window_stays_usable_when_playback_backend_is_unavailable(qapp, monkeypatch, tmp_path):
     from lyon.core import player as player_mod
     from lyon.core.library import Library
