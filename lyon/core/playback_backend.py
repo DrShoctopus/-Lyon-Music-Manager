@@ -33,6 +33,14 @@ def _prepend_path(path: Path) -> None:
         os.environ["PATH"] = path_text + (os.pathsep + current if current else "")
 
 
+def _decode_vlc_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
+
+
 def _configure_vlc_runtime_path() -> None:
     """Expose a bundled VLC runtime to python-vlc when one is present.
 
@@ -327,30 +335,52 @@ class VlcPlaybackBackend(PlaybackBackend):
 
     def list_audio_outputs(self) -> list[tuple[str, str]]:
         result: list[tuple[str, str]] = [("", "Default")]
+        head: Any = None
         try:
-            out = self._instance.audio_output_list_get()
+            head = self._instance.audio_output_list_get()
+            out = head
             while out:
-                name = str(getattr(out, "name", "") or "")
-                desc = str(getattr(out, "description", "") or name)
+                item = getattr(out, "contents", out)
+                name = _decode_vlc_text(getattr(item, "name", None))
+                desc = _decode_vlc_text(getattr(item, "description", None)) or name
                 if name:
                     result.append((name, desc))
-                out = getattr(out, "next", None)
+                out = getattr(item, "next", None)
         except Exception as exc:
             LOG.debug("Could not list audio outputs: %s", exc)
+        finally:
+            if head:
+                release = getattr(self._vlc, "libvlc_audio_output_list_release", None)
+                if callable(release):
+                    try:
+                        release(head)
+                    except Exception as exc:
+                        LOG.debug("Could not release audio output list: %s", exc)
         return result
 
     def list_audio_devices(self, audio_output: str = "") -> list[tuple[str, str]]:
         result: list[tuple[str, str]] = [("", "Default")]
+        head: Any = None
         try:
-            dev = self._instance.audio_output_device_list_get(audio_output)
+            head = self._instance.audio_output_device_list_get(audio_output)
+            dev = head
             while dev:
-                device_id = str(getattr(dev, "device", "") or "")
-                desc = str(getattr(dev, "description", "") or device_id)
+                item = getattr(dev, "contents", dev)
+                device_id = _decode_vlc_text(getattr(item, "device", None))
+                desc = _decode_vlc_text(getattr(item, "description", None)) or device_id
                 if device_id:
                     result.append((device_id, desc))
-                dev = getattr(dev, "next", None)
+                dev = getattr(item, "next", None)
         except Exception as exc:
             LOG.debug("Could not list audio devices for %r: %s", audio_output, exc)
+        finally:
+            if head:
+                release = getattr(self._vlc, "libvlc_audio_output_device_list_release", None)
+                if callable(release):
+                    try:
+                        release(head)
+                    except Exception as exc:
+                        LOG.debug("Could not release audio device list: %s", exc)
         return result
 
     def set_audio_device(self, audio_output: str, device_id: str) -> None:

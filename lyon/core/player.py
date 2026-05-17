@@ -274,15 +274,21 @@ class Player(QObject):
         """Apply audio output module and device. Takes effect on next play()."""
         self._audio_output = audio_output
         self._audio_device = device_id
-        self._backend.set_audio_device(audio_output, device_id)
+        self._set_backend_audio_device(self._backend, audio_output, device_id)
         if self._fade_out_backend is not None:
-            self._fade_out_backend.set_audio_device(audio_output, device_id)
+            self._set_backend_audio_device(self._fade_out_backend, audio_output, device_id)
 
     def list_audio_outputs(self) -> list[tuple[str, str]]:
-        return self._backend.list_audio_outputs()
+        lister = getattr(self._backend, "list_audio_outputs", None)
+        if callable(lister):
+            return lister()
+        return []
 
     def list_audio_devices(self, audio_output: str = "") -> list[tuple[str, str]]:
-        return self._backend.list_audio_devices(audio_output)
+        lister = getattr(self._backend, "list_audio_devices", None)
+        if callable(lister):
+            return lister(audio_output)
+        return []
 
     def set_muted(self, muted: bool) -> None:
         self._backend.set_muted(muted)
@@ -339,6 +345,16 @@ class Player(QObject):
         cleanup = getattr(backend, "cleanup", None)
         if callable(cleanup):
             cleanup()
+
+    @staticmethod
+    def _set_backend_audio_device(
+        backend: PlaybackBackend,
+        audio_output: str,
+        device_id: str,
+    ) -> None:
+        setter = getattr(backend, "set_audio_device", None)
+        if callable(setter):
+            setter(audio_output, device_id)
 
     def _dispose_transient_backend(self, backend: PlaybackBackend) -> None:
         self._cleanup_backend(backend)
@@ -452,7 +468,7 @@ class Player(QObject):
             self._cleanup_backend(next_backend)
             return False
         if self._audio_output or self._audio_device:
-            next_backend.set_audio_device(self._audio_output, self._audio_device)
+            self._set_backend_audio_device(next_backend, self._audio_output, self._audio_device)
 
         previous_backend = self._backend
         muted = previous_backend.is_muted()

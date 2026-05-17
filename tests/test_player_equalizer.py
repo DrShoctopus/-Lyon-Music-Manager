@@ -248,6 +248,16 @@ def test_player_volume_clamps_invalid_values_before_backend_call():
     assert backend.volume() == 80
 
 
+def test_audio_device_methods_tolerate_minimal_backend():
+    backend = FakeBackend()
+    player = Player(backend=backend)
+
+    player.set_audio_device("wasapi", "device-id")
+
+    assert player.list_audio_outputs() == []
+    assert player.list_audio_devices("wasapi") == []
+
+
 def test_crossfade_starts_next_backend_before_stopping_current():
     backends: list[FakeBackend] = []
 

@@ -172,3 +172,130 @@ def test_vlc_backend_uses_location_media_and_options(qapp):
         assert vlc.player.media.options == [":cdda-track=2"]
     finally:
         backend.cleanup()
+
+
+def test_vlc_backend_lists_audio_outputs_from_pointer_list(qapp):
+    class Player:
+        def stop(self): pass
+        def release(self): pass
+
+    class Pointer:
+        def __init__(self, contents):
+            self.contents = contents
+
+        def __bool__(self):
+            return True
+
+    class Output:
+        def __init__(self, name, description, next_node=None):
+            self.name = name
+            self.description = description
+            self.next = next_node
+
+    class Vlc:
+        class State:
+            Ended = object()
+            Playing = object()
+            Paused = object()
+            Stopped = object()
+            Error = object()
+
+        def __init__(self):
+            self.player = Player()
+            self.released = None
+            self.head = Pointer(Output(
+                b"wasapi",
+                b"Windows Audio",
+                Pointer(Output(b"directsound", None)),
+            ))
+
+        def Instance(self):
+            return self
+
+        def media_player_new(self):
+            return self.player
+
+        def audio_output_list_get(self):
+            return self.head
+
+        def libvlc_audio_output_list_release(self, head):
+            self.released = head
+
+        def release(self): pass
+
+    vlc = Vlc()
+    backend = VlcPlaybackBackend(vlc)
+    try:
+        assert backend.list_audio_outputs() == [
+            ("", "Default"),
+            ("wasapi", "Windows Audio"),
+            ("directsound", "directsound"),
+        ]
+        assert vlc.released is vlc.head
+    finally:
+        backend.cleanup()
+
+
+def test_vlc_backend_lists_audio_devices_from_pointer_list(qapp):
+    class Player:
+        def stop(self): pass
+        def release(self): pass
+
+    class Pointer:
+        def __init__(self, contents):
+            self.contents = contents
+
+        def __bool__(self):
+            return True
+
+    class Device:
+        def __init__(self, device, description, next_node=None):
+            self.device = device
+            self.description = description
+            self.next = next_node
+
+    class Vlc:
+        class State:
+            Ended = object()
+            Playing = object()
+            Paused = object()
+            Stopped = object()
+            Error = object()
+
+        def __init__(self):
+            self.player = Player()
+            self.requested_output = None
+            self.released = None
+            self.head = Pointer(Device(
+                b"speaker-id",
+                b"Speakers",
+                Pointer(Device("hdmi-id", "")),
+            ))
+
+        def Instance(self):
+            return self
+
+        def media_player_new(self):
+            return self.player
+
+        def audio_output_device_list_get(self, audio_output):
+            self.requested_output = audio_output
+            return self.head
+
+        def libvlc_audio_output_device_list_release(self, head):
+            self.released = head
+
+        def release(self): pass
+
+    vlc = Vlc()
+    backend = VlcPlaybackBackend(vlc)
+    try:
+        assert backend.list_audio_devices("wasapi") == [
+            ("", "Default"),
+            ("speaker-id", "Speakers"),
+            ("hdmi-id", "hdmi-id"),
+        ]
+        assert vlc.requested_output == "wasapi"
+        assert vlc.released is vlc.head
+    finally:
+        backend.cleanup()
