@@ -217,9 +217,10 @@ class Library:
         meta = _read_tags(path)
         if meta is None:
             if media_type == "video":
+                folder_name = Path(path).parent.name or "Videos"
                 meta = {
                     "title": Path(path).stem,
-                    "artist": "", "album_artist": "", "album": "",
+                    "artist": folder_name, "album_artist": folder_name, "album": folder_name,
                     "track_no": 0, "disc_no": 1, "year": 0, "genre": "",
                     "duration": 0.0, "bitrate": 0, "samplerate": 0,
                 }
