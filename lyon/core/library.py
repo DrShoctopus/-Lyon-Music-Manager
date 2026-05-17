@@ -8,7 +8,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable, Iterator
+from typing import Callable, Iterable, Iterator, Literal
 
 from mutagen import File as MutagenFile
 
@@ -88,7 +88,6 @@ _MIGRATIONS: list[tuple[int, str]] = [
     (6, "ALTER TABLE tracks ADD COLUMN file_mtime_ns INTEGER NOT NULL DEFAULT 0"),
     (6, "ALTER TABLE tracks ADD COLUMN last_scanned_at REAL"),
     (6, "ALTER TABLE tracks ADD COLUMN scan_error TEXT"),
-    (6, "CREATE INDEX IF NOT EXISTS idx_tracks_file_state ON tracks(file_mtime_ns, file_size)"),
 ]
 
 _PAGE_SIZE = 500  # rows per page in streaming queries
@@ -146,7 +145,7 @@ class Playlist:
 class IndexResult:
     """Outcome of indexing one filesystem path."""
 
-    status: str
+    status: Literal["added", "updated", "unchanged", "removed", "failed", "skipped"]
     path: str
     error: str = ""
 
@@ -372,8 +371,8 @@ class Library:
                 None,
             )
             if row is None:
-                self.conn.execute(
-                    """INSERT INTO tracks
+                cur = self.conn.execute(
+                    """INSERT OR IGNORE INTO tracks
                        (title, artist, album_artist, album, track_no, disc_no,
                         year, genre, duration, bitrate, samplerate, artwork_path,
                         media_type, disc_id, file_size, file_mtime_ns,
@@ -381,7 +380,9 @@ class Library:
                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (*values, path),
                 )
-                return IndexResult("added", path)
+                if cur.rowcount > 0:
+                    return IndexResult("added", path)
+                # Concurrent insert from another thread; fall through to UPDATE.
 
             self.conn.execute(
                 """UPDATE tracks

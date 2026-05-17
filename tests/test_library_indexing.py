@@ -291,8 +291,6 @@ def test_watchdog_handler_emits_folder_refresh_for_artwork_sidecars(qapp):
         def __init__(self, src_path: str):
             self.src_path = src_path
 
-    handler = watcher._observer  # sanity: no observer needed for handler wiring
-    del handler
     from lyon.core.library_watcher import _WatchdogHandler
 
     _WatchdogHandler(watcher).on_modified(Event("/music/Album/cover.jpg"))

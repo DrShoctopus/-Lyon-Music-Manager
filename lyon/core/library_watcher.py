@@ -13,7 +13,7 @@ from .library import Library, ScanSummary, SUPPORTED_EXTS
 try:  # pragma: no cover - dependency availability is environment-specific
     from watchdog.events import FileSystemEvent, FileSystemEventHandler
     from watchdog.observers import Observer
-except Exception:  # pragma: no cover - exercised by availability checks
+except ImportError:  # pragma: no cover - exercised by availability checks
     FileSystemEvent = object  # type: ignore[assignment]
     FileSystemEventHandler = object  # type: ignore[assignment]
     Observer = None  # type: ignore[assignment]
@@ -310,7 +310,7 @@ def _is_artwork_sidecar(path: str) -> bool:
     p = Path(path)
     if p.suffix.lower() not in _ARTWORK_SUFFIXES:
         return False
-    return p.name.lower() in _ARTWORK_FILENAMES or bool(p.stem)
+    return p.name.lower() in _ARTWORK_FILENAMES
 
 
 def _stat_signature(path: str) -> tuple[int, int] | None:
