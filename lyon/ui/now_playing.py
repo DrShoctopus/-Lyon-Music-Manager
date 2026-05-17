@@ -115,6 +115,7 @@ class _LyricsPanel(QWidget):
     def set_lyrics(self, synced: list[tuple[int, str]], plain: str | None = None) -> None:
         """Set synced [(ms, line)] or fall back to plain text."""
         for lbl in self._labels:
+            self._vl.removeWidget(lbl)
             lbl.deleteLater()
         self._labels.clear()
         self._current_line = -1
@@ -385,6 +386,8 @@ class NowPlayingView(QWidget):
         player.queue_changed.connect(self._refresh_queue)
         player.position_changed.connect(self._on_position)
         self._refresh_queue()
+        # Sync immediately if a track is already playing when this view is created.
+        self._on_track(player.current())
 
     # ---- Cinematic background ------------------------------------------
 
