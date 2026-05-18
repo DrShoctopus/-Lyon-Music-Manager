@@ -60,6 +60,17 @@ _COL_FORMAT = 6
 _COL_GROUPING = 7
 _NUM_COLS = 8
 
+_TRACK_COLUMN_DEFAULT_WIDTHS = {
+    _COL_NUM: 46,
+    _COL_TITLE: 340,
+    _COL_ARTIST: 210,
+    _COL_ALBUM: 220,
+    _COL_TIME: 72,
+    _COL_RATING: 90,
+    _COL_FORMAT: 78,
+    _COL_GROUPING: 150,
+}
+
 # Format badge colors (file extension → background hex)
 _FORMAT_COLORS: dict[str, str] = {
     "FLAC": "#2e7d32", "ALAC": "#2e7d32",
@@ -358,21 +369,11 @@ class LibraryView(QWidget):
 
         header = self.tracks.horizontalHeader()
         header.setStretchLastSection(False)
-        header.setSectionResizeMode(_COL_NUM,    QHeaderView.Fixed)
-        header.setSectionResizeMode(_COL_TITLE,  QHeaderView.Stretch)
-        header.setSectionResizeMode(_COL_ARTIST, QHeaderView.Interactive)
-        header.setSectionResizeMode(_COL_ALBUM,  QHeaderView.Interactive)
-        header.setSectionResizeMode(_COL_TIME,   QHeaderView.Fixed)
-        header.setSectionResizeMode(_COL_RATING, QHeaderView.Fixed)
-        header.setSectionResizeMode(_COL_FORMAT, QHeaderView.Fixed)
-        header.setSectionResizeMode(_COL_GROUPING, QHeaderView.Interactive)
-        self.tracks.setColumnWidth(_COL_NUM,    50)
-        self.tracks.setColumnWidth(_COL_ARTIST, 180)
-        self.tracks.setColumnWidth(_COL_ALBUM,  200)
-        self.tracks.setColumnWidth(_COL_TIME,   70)
-        self.tracks.setColumnWidth(_COL_RATING, 90)
-        self.tracks.setColumnWidth(_COL_FORMAT, 62)
-        self.tracks.setColumnWidth(_COL_GROUPING, 140)
+        header.setMinimumSectionSize(38)
+        for col in range(_NUM_COLS):
+            header.setSectionResizeMode(col, QHeaderView.Interactive)
+        for col, width in _TRACK_COLUMN_DEFAULT_WIDTHS.items():
+            self.tracks.setColumnWidth(col, width)
         header.setContextMenuPolicy(Qt.CustomContextMenu)
         header.customContextMenuRequested.connect(self._show_header_context_menu)
         self.tracks.setDragEnabled(True)

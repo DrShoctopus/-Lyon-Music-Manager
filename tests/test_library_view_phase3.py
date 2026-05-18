@@ -11,7 +11,13 @@ QtWidgets = pytest.importorskip("PySide6.QtWidgets", exc_type=ImportError)
 
 from lyon.core.library import Track
 from lyon.ui import library_view as library_view_module
-from lyon.ui.library_view import LibraryView, _ALL_ALBUMS_KEY, _PLAYING_GLYPH
+from lyon.ui.library_view import (
+    LibraryView,
+    _ALL_ALBUMS_KEY,
+    _COL_TITLE,
+    _NUM_COLS,
+    _PLAYING_GLYPH,
+)
 
 
 def _track(id_: int, title: str, artist: str, album: str,
@@ -116,6 +122,14 @@ def test_tracks_table_is_sortable_by_title(view):
     assert view.tracks_model.item(0, 1).text() == "Aardvark"
     view.tracks.sortByColumn(1, QtCore.Qt.DescendingOrder)
     assert view.tracks_model.item(0, 1).text() == "Zebra"
+
+
+def test_track_columns_are_resizable_and_title_gets_priority_width(view):
+    header = view.tracks.horizontalHeader()
+
+    for col in range(_NUM_COLS):
+        assert header.sectionResizeMode(col) == QtWidgets.QHeaderView.Interactive
+    assert view.tracks.columnWidth(_COL_TITLE) >= 300
 
 
 def test_tracks_sort_by_time_is_numeric(view):
