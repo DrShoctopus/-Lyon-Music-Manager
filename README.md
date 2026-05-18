@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/brand/lyon-readme-banner.svg" alt="Sea Lyon Media Manager" width="100%">
+  <img src="docs/brand/lyon-splash.png" alt="Sea Lyon Media Manager" width="100%">
 </p>
 
 # Sea Lyon Media Manager
