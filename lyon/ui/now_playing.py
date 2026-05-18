@@ -810,7 +810,9 @@ class TransportBar(QWidget):
 
         center = QVBoxLayout()
         center.setContentsMargins(0, 0, 0, 0)
-        center.setSpacing(6)
+        # The primary play button is intentionally oversized; keep it visually
+        # separate from the seek/time row below.
+        center.setSpacing(14)
         center.addLayout(controls)
         center.addLayout(seek_row)
 

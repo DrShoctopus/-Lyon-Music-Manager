@@ -151,6 +151,17 @@ def test_transport_bar_constructs_and_reacts_to_player(player):
     assert bar.vol_btn._glyph_name() == "volume-muted"
 
 
+def test_transport_bar_keeps_play_button_clear_of_seek_row(app, player):
+    bar = TransportBar(player)
+    bar.resize(bar.sizeHint())
+    bar.show()
+    app.processEvents()
+
+    gap = bar.elapsed_lbl.geometry().top() - bar.play_btn.geometry().bottom()
+
+    assert gap >= 12
+
+
 def test_transport_bar_repeat_button_syncs_with_player(player):
     bar = TransportBar(player)
     bar.repeat_btn._on_clicked()  # button: off → all, also drives player.cycle_repeat
