@@ -1,6 +1,7 @@
 """Library browser: artists -> albums -> tracks, plus search."""
 from __future__ import annotations
 
+from collections import OrderedDict
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QModelIndex, QObject, QRect, QRunnable, QSize, Qt, QThreadPool, QTimer, QUrl, Signal
@@ -309,7 +310,7 @@ class LibraryView(QWidget):
         self._show_videos: bool = False
         self._active_playlist_id: int | None = None
         # Album art grid async loading
-        self._art_cache: dict[str, QPixmap] = {}
+        self._art_cache: OrderedDict[str, QPixmap] = OrderedDict()
         self._grid_gen: int = 0
         self._grid_art_map: dict[str, list[QStandardItem]] = {}
         self._art_signals = _ArtSignals(self)
@@ -895,6 +896,7 @@ class LibraryView(QWidget):
             if not art:
                 continue
             if art in self._art_cache:
+                self._art_cache.move_to_end(art)
                 it.setIcon(QIcon(self._art_cache[art]))
             else:
                 first = art not in self._grid_art_map
@@ -912,8 +914,7 @@ class LibraryView(QWidget):
                 pm = None
         if pm is not None:
             if len(self._art_cache) >= _ART_CACHE_MAX:
-                first_key = next(iter(self._art_cache))
-                del self._art_cache[first_key]
+                self._art_cache.popitem(last=False)
             self._art_cache[art_path] = pm
         icon = QIcon(pm) if pm else QIcon()
         for item in self._grid_art_map.get(art_path, []):

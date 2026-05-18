@@ -4,7 +4,9 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QRunnable, QThreadPool, QTimer
+from typing import TYPE_CHECKING
+
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFileDialog,
     QFormLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QMessageBox,
@@ -15,6 +17,9 @@ from .. import __app_name__, __version__
 from ..core.settings import Settings, normalize_library_paths
 from .about import COPYRIGHT_NOTICE, THIRD_PARTY_NOTICE
 from .branding import app_icon
+
+if TYPE_CHECKING:
+    from ..core.scrobbler import ScrobblerService
 
 # (display label, settings key) pairs — order matches the combo box
 _RIP_FORMATS = [
@@ -40,6 +45,7 @@ class SettingsDialog(QDialog):
         *,
         audio_outputs: list[tuple[str, str]] | None = None,
         audio_devices_map: dict[str, list[tuple[str, str]]] | None = None,
+        scrobbler: "ScrobblerService | None" = None,
     ):
         super().__init__(parent)
         self.setWindowTitle("Settings")
@@ -51,8 +57,8 @@ class SettingsDialog(QDialog):
         self._audio_outputs: list[tuple[str, str]] = audio_outputs or [("", "Default")]
         self._audio_devices_map: dict[str, list[tuple[str, str]]] = audio_devices_map or {}
 
+        self._scrobbler = scrobbler
         self._lastfm_poll_timer: QTimer | None = None
-        self._lastfm_auth_token: str = ""
 
         tabs = QTabWidget()
         tabs.addTab(self._build_library_tab(settings), "Library")
@@ -374,7 +380,7 @@ class SettingsDialog(QDialog):
         return w
 
     def _build_scrobbling_tab(self, settings: Settings) -> QWidget:
-        from ..core.scrobbler import lastfm_api_key
+        from ..core.scrobbler import lastfm_api_configured
         w = QWidget()
         layout = QVBoxLayout(w)
         layout.setContentsMargins(12, 12, 12, 12)
@@ -390,10 +396,7 @@ class SettingsDialog(QDialog):
         layout.addWidget(self.lastfm_enabled)
 
         lfm_status_row = QHBoxLayout()
-        self._lastfm_status_label = QLabel(
-            f"Connected as {settings.lastfm_session_key[:6]}…"
-            if settings.lastfm_session_key else "Not connected"
-        )
+        self._lastfm_status_label = QLabel(self._lastfm_status_text(settings))
         lfm_status_row.addWidget(self._lastfm_status_label)
         lfm_status_row.addStretch(1)
         self._lastfm_connect_btn = QPushButton("Connect Last.fm…")
@@ -405,15 +408,25 @@ class SettingsDialog(QDialog):
         lfm_status_row.addWidget(self._lastfm_disconnect_btn)
         layout.addLayout(lfm_status_row)
 
-        if not lastfm_api_key():
+        if self._scrobbler is None:
+            self._lastfm_connect_btn.setEnabled(False)
+            warn = QLabel("Last.fm sign-in is unavailable: no scrobbler service is attached.")
+            warn.setObjectName("warningLabel")
+            warn.setWordWrap(True)
+            layout.addWidget(warn)
+        elif not lastfm_api_configured():
             lfm_warn = QLabel(
-                "Last.fm API key not configured — scrobbling is disabled until a developer sets "
-                "_LASTFM_API_KEY in lyon/core/scrobbler.py."
+                "Last.fm API key/secret not configured — scrobbling is disabled until a developer "
+                "sets _LASTFM_API_KEY and _LASTFM_API_SECRET in lyon/core/scrobbler.py."
             )
             lfm_warn.setObjectName("warningLabel")
             lfm_warn.setWordWrap(True)
             layout.addWidget(lfm_warn)
             self._lastfm_connect_btn.setEnabled(False)
+        else:
+            self._scrobbler.lastfm_token_ready.connect(self._on_lastfm_token_ready)
+            self._scrobbler.lastfm_auth_complete.connect(self._on_lastfm_auth_complete)
+            self._scrobbler.lastfm_auth_failed.connect(self._on_lastfm_auth_failed)
 
         layout.addSpacing(8)
 
@@ -440,109 +453,57 @@ class SettingsDialog(QDialog):
         layout.addStretch(1)
         return w
 
-    def _connect_lastfm(self) -> None:
-        from ..core.scrobbler import _LASTFM_API_KEY, _LASTFM_API_SECRET, _lastfm_post, lastfm_auth_url
-        if not _LASTFM_API_KEY:
-            QMessageBox.warning(self, "Last.fm", "API key not configured.")
-            return
+    @staticmethod
+    def _lastfm_status_text(settings: Settings) -> str:
+        if not settings.lastfm_session_key:
+            return "Not connected"
+        if settings.lastfm_username:
+            return f"Connected as {settings.lastfm_username}"
+        return "Connected"
 
+    def _connect_lastfm(self) -> None:
+        if self._scrobbler is None:
+            QMessageBox.warning(self, "Last.fm", "Scrobbler service is unavailable.")
+            return
         self._lastfm_connect_btn.setEnabled(False)
         self._lastfm_status_label.setText("Getting token…")
+        self._scrobbler.start_lastfm_auth()
 
-        class _TokenTask(QRunnable):
-            def __init__(self, callback):
-                super().__init__()
-                self.setAutoDelete(True)
-                self._cb = callback
-            def run(self):
-                result = _lastfm_post({"method": "auth.getToken", "api_key": _LASTFM_API_KEY})
-                self._cb(result)
+    def _on_lastfm_token_ready(self, token: str) -> None:
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+        from ..core.scrobbler import lastfm_auth_url
+        QDesktopServices.openUrl(QUrl(lastfm_auth_url(token)))
+        self._lastfm_status_label.setText("Waiting for browser authorisation…")
+        if self._lastfm_poll_timer is None:
+            self._lastfm_poll_timer = QTimer(self)
+            self._lastfm_poll_timer.setInterval(5000)
+            assert self._scrobbler is not None
+            self._lastfm_poll_timer.timeout.connect(self._scrobbler.poll_lastfm_session)
+        self._lastfm_poll_timer.start()
 
-        def on_token(result: dict) -> None:
-            if "error" in result:
-                self._lastfm_status_label.setText("Failed to get token.")
-                self._lastfm_connect_btn.setEnabled(True)
-                return
-            token = result.get("token", "")
-            if not token:
-                self._lastfm_status_label.setText("No token received.")
-                self._lastfm_connect_btn.setEnabled(True)
-                return
-            self._lastfm_auth_token = token
-            from PySide6.QtCore import QUrl
-            from PySide6.QtGui import QDesktopServices
-            QDesktopServices.openUrl(QUrl(lastfm_auth_url(token)))
-            self._lastfm_status_label.setText("Waiting for browser authorisation…")
-            if self._lastfm_poll_timer is None:
-                self._lastfm_poll_timer = QTimer(self)
-                self._lastfm_poll_timer.setInterval(5000)
-                self._lastfm_poll_timer.timeout.connect(self._poll_lastfm_session)
-            self._lastfm_poll_timer.start()
-
-        # on_token is called from a worker thread — Qt signals ensure main-thread delivery
-        # isn't guaranteed here, so we use a private signal helper instead.
-        class _TokenHelper(QRunnable):
-            def __init__(inner_self, dlg, lastfm_post_fn, api_key):
-                super().__init__()
-                inner_self.setAutoDelete(True)
-                inner_self._dlg = dlg
-                inner_self._post = lastfm_post_fn
-                inner_self._key = api_key
-            def run(inner_self):
-                result = inner_self._post({"method": "auth.getToken", "api_key": inner_self._key})
-                QTimer.singleShot(0, lambda r=result: on_token(r))
-
-        QThreadPool.globalInstance().start(_TokenHelper(self, _lastfm_post, _LASTFM_API_KEY))
-
-    def _poll_lastfm_session(self) -> None:
-        from ..core.scrobbler import _LASTFM_API_KEY, _lastfm_post
-        token = self._lastfm_auth_token
-
-        class _PollTask(QRunnable):
-            def __init__(inner_self, post_fn, api_key, tok, on_ok, on_err):
-                super().__init__()
-                inner_self.setAutoDelete(True)
-                inner_self._post = post_fn
-                inner_self._key = api_key
-                inner_self._tok = tok
-                inner_self._on_ok = on_ok
-                inner_self._on_err = on_err
-            def run(inner_self):
-                result = inner_self._post({
-                    "method": "auth.getSession",
-                    "api_key": inner_self._key,
-                    "token": inner_self._tok,
-                })
-                if "session" in result:
-                    sk = result["session"].get("key", "")
-                    name = result["session"].get("name", "")
-                    QTimer.singleShot(0, lambda s=sk, n=name: inner_self._on_ok(s, n))
-                elif result.get("error") not in (4, 14):
-                    msg = result.get("message", "Auth failed.")
-                    QTimer.singleShot(0, lambda m=msg: inner_self._on_err(m))
-
-        def on_ok(sk: str, name: str) -> None:
-            if self._lastfm_poll_timer:
-                self._lastfm_poll_timer.stop()
-            self.result_settings.lastfm_session_key = sk
-            self._lastfm_status_label.setText(f"Connected as {name}")
-            self._lastfm_disconnect_btn.setEnabled(True)
-            self._lastfm_connect_btn.setEnabled(True)
-
-        def on_err(msg: str) -> None:
-            if self._lastfm_poll_timer:
-                self._lastfm_poll_timer.stop()
-            self._lastfm_status_label.setText(f"Auth failed: {msg}")
-            self._lastfm_connect_btn.setEnabled(True)
-
-        QThreadPool.globalInstance().start(
-            _PollTask(_lastfm_post, _LASTFM_API_KEY, token, on_ok, on_err)
+    def _on_lastfm_auth_complete(self, sk: str, name: str) -> None:
+        if self._lastfm_poll_timer:
+            self._lastfm_poll_timer.stop()
+        self.result_settings.lastfm_session_key = sk
+        self.result_settings.lastfm_username = name
+        self._lastfm_status_label.setText(
+            f"Connected as {name}" if name else "Connected"
         )
+        self._lastfm_disconnect_btn.setEnabled(True)
+        self._lastfm_connect_btn.setEnabled(True)
+
+    def _on_lastfm_auth_failed(self, msg: str) -> None:
+        if self._lastfm_poll_timer:
+            self._lastfm_poll_timer.stop()
+        self._lastfm_status_label.setText(f"Auth failed: {msg}")
+        self._lastfm_connect_btn.setEnabled(True)
 
     def _disconnect_lastfm(self) -> None:
         if self._lastfm_poll_timer:
             self._lastfm_poll_timer.stop()
         self.result_settings.lastfm_session_key = ""
+        self.result_settings.lastfm_username = ""
         self._lastfm_status_label.setText("Not connected")
         self._lastfm_disconnect_btn.setEnabled(False)
         self._lastfm_connect_btn.setEnabled(True)
@@ -719,5 +680,6 @@ class SettingsDialog(QDialog):
         self.result_settings.lastfm_scrobbling_enabled = self.lastfm_enabled.isChecked()
         self.result_settings.listenbrainz_scrobbling_enabled = self.lbz_enabled.isChecked()
         self.result_settings.listenbrainz_token = self.lbz_token.text().strip()
-        # lastfm_session_key is updated live by the auth flow; preserve whatever's there.
+        # lastfm_session_key and lastfm_username are updated live by the auth flow;
+        # preserve whatever's there.
         self.accept()

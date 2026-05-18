@@ -65,6 +65,14 @@ def lastfm_api_key() -> str:
     return _LASTFM_API_KEY
 
 
+def lastfm_api_secret() -> str:
+    return _LASTFM_API_SECRET
+
+
+def lastfm_api_configured() -> bool:
+    return bool(_LASTFM_API_KEY and _LASTFM_API_SECRET)
+
+
 def lastfm_auth_url(token: str) -> str:
     return f"{_LASTFM_AUTH_URL}?api_key={_LASTFM_API_KEY}&token={token}"
 
@@ -85,12 +93,18 @@ class _HttpTask(QRunnable):
 class ScrobblerService(QObject):
     """Listens to Player signals and dispatches NowPlaying/Scrobble submissions."""
 
-    lastfm_auth_complete = Signal(str, str)   # (session_key, username)
+    # Public signals for the auth flow. Receivers should be QObjects so Qt
+    # auto-disconnects when the receiver is destroyed (e.g. the settings dialog
+    # closes before a request returns).
+    lastfm_token_ready = Signal(str)           # token — caller opens browser, starts polling
+    lastfm_auth_complete = Signal(str, str)    # (session_key, username)
     lastfm_auth_failed = Signal(str)           # error message
 
-    # Private signals used to deliver background-thread results to the main thread.
-    _session_ready = Signal(str, str)
-    _session_error = Signal(str)
+    # Private signals marshal worker-thread results onto the main thread.
+    _token_received = Signal(str)
+    _token_failed = Signal(str)
+    _session_received = Signal(str, str)
+    _session_failed = Signal(str)
 
     def __init__(self, player: object, settings: "Settings", parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -100,8 +114,10 @@ class ScrobblerService(QObject):
         self._scrobbled = False
         self._auth_token: str = ""
 
-        self._session_ready.connect(self._on_session_received)
-        self._session_error.connect(self._on_auth_error)
+        self._token_received.connect(self._on_token_received)
+        self._token_failed.connect(self._on_auth_error)
+        self._session_received.connect(self._on_session_received)
+        self._session_failed.connect(self._on_auth_error)
 
         player.track_changed.connect(self._on_track_changed)
         player.position_changed.connect(self._on_position_changed)
@@ -185,27 +201,26 @@ class ScrobblerService(QObject):
     # ------------------------------------------------------------------ Last.fm auth flow
 
     def start_lastfm_auth(self) -> None:
-        """Get a request token, open the auth URL in the browser, then start polling."""
-        if not _LASTFM_API_KEY:
-            self.lastfm_auth_failed.emit("Last.fm API key not configured.")
+        """Request a Last.fm token. Emits lastfm_token_ready on success."""
+        if not lastfm_api_configured():
+            self.lastfm_auth_failed.emit("Last.fm API key/secret not configured.")
             return
 
         def get_token() -> None:
             result = _lastfm_post({"method": "auth.getToken", "api_key": _LASTFM_API_KEY})
             if "error" in result:
-                self._session_error.emit(result.get("message", "Could not get token."))
+                self._token_failed.emit(result.get("message", "Could not get token."))
                 return
             token = result.get("token", "")
             if not token:
-                self._session_error.emit("Empty token received from Last.fm.")
+                self._token_failed.emit("Empty token received from Last.fm.")
                 return
-            self._auth_token = token
-            self._session_ready.emit("__open_browser__", token)
+            self._token_received.emit(token)
 
         QThreadPool.globalInstance().start(_HttpTask(get_token))
 
     def poll_lastfm_session(self) -> None:
-        """Poll auth.getSession once; call from a QTimer in the settings dialog."""
+        """Poll auth.getSession once; call from a QTimer after lastfm_token_ready."""
         token = self._auth_token
         if not token:
             return
@@ -220,21 +235,20 @@ class ScrobblerService(QObject):
                 sk = result["session"].get("key", "")
                 name = result["session"].get("name", "")
                 if sk:
-                    self._session_ready.emit(sk, name)
+                    self._session_received.emit(sk, name)
             elif result.get("error") not in (4, 14):
                 # Errors 4 and 14 = token not yet authorised — keep polling.
-                self._session_error.emit(result.get("message", "Auth failed."))
+                self._session_failed.emit(result.get("message", "Auth failed."))
 
         QThreadPool.globalInstance().start(_HttpTask(do_poll))
 
+    def _on_token_received(self, token: str) -> None:
+        self._auth_token = token
+        self.lastfm_token_ready.emit(token)
+
     def _on_session_received(self, sk: str, name: str) -> None:
-        if sk == "__open_browser__":
-            # The get_token step completed; open the browser auth URL.
-            from PySide6.QtCore import QUrl
-            from PySide6.QtGui import QDesktopServices
-            QDesktopServices.openUrl(QUrl(lastfm_auth_url(name)))  # name holds the token here
-        else:
-            self.lastfm_auth_complete.emit(sk, name)
+        self._auth_token = ""
+        self.lastfm_auth_complete.emit(sk, name)
 
     def _on_auth_error(self, message: str) -> None:
         self.lastfm_auth_failed.emit(message)

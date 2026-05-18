@@ -14,6 +14,9 @@ from lyon.core.scrobbler import (
 )
 from lyon.core.settings import Settings
 
+# ScrobblerService is a QObject — every test in this module needs a QApplication.
+pytestmark = pytest.mark.usefixtures("qapp")
+
 
 def _make_track(
     title="Song",

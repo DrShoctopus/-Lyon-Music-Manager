@@ -848,6 +848,7 @@ class MainWindow(QMainWindow):
             self.settings, self,
             audio_outputs=audio_outputs,
             audio_devices_map=audio_devices_map,
+            scrobbler=self.scrobbler,
         )
         try:
             accepted = dlg.exec()

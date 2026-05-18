@@ -146,6 +146,7 @@ class Settings:
     audio_output_device: str = ""       # VLC device ID string; "" = VLC default
     gapless_playback: bool = False      # pre-buffer next track to minimize inter-track gap; no-op when crossfade > 0
     lastfm_session_key: str = ""        # per-user session key obtained via auth.getSession
+    lastfm_username: str = ""           # display name for the connected Last.fm account
     lastfm_scrobbling_enabled: bool = False
     listenbrainz_token: str = ""        # per-user token from listenbrainz.org/profile/
     listenbrainz_scrobbling_enabled: bool = False
@@ -172,6 +173,9 @@ class Settings:
         self.gapless_playback = _bool_value(self.gapless_playback, False)
         self.lastfm_scrobbling_enabled = _bool_value(self.lastfm_scrobbling_enabled, False)
         self.listenbrainz_scrobbling_enabled = _bool_value(self.listenbrainz_scrobbling_enabled, False)
+        self.lastfm_session_key = str(self.lastfm_session_key or "").strip()
+        self.lastfm_username = str(self.lastfm_username or "").strip()
+        self.listenbrainz_token = str(self.listenbrainz_token or "").strip()
         self.yt_audio_format = str(self.yt_audio_format or "flac").lower()
         if self.yt_audio_format not in _YT_AUDIO_FORMATS:
             self.yt_audio_format = "flac"
