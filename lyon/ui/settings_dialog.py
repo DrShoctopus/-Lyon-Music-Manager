@@ -178,6 +178,23 @@ class SettingsDialog(QDialog):
         self.rg_prevent_clipping.setChecked(settings.replaygain_prevent_clipping)
         form.addRow("", self.rg_prevent_clipping)
 
+        # ---- Crossfade section
+        cf_label = QLabel("Crossfade")
+        cf_label.setObjectName("sectionHeader")
+        form.addRow(cf_label)
+
+        self.crossfade_seconds = QSpinBox()
+        self.crossfade_seconds.setRange(0, 60)
+        self.crossfade_seconds.setSingleStep(1)
+        self.crossfade_seconds.setSpecialValueText("Off")
+        self.crossfade_seconds.setSuffix(" seconds")
+        self.crossfade_seconds.setValue(settings.crossfade_seconds)
+        self.crossfade_seconds.setToolTip(
+            "Overlap the end of the current track with the start of the next track. "
+            "Set to 0 to disable crossfade."
+        )
+        form.addRow("Duration:", self.crossfade_seconds)
+
         # ---- Gapless section
         gl_label = QLabel("Gapless Playback")
         gl_label.setObjectName("sectionHeader")
@@ -475,6 +492,7 @@ class SettingsDialog(QDialog):
         self.result_settings.replaygain_mode = self.rg_mode.currentData() or "off"
         self.result_settings.replaygain_preamp_db = self.rg_preamp.value()
         self.result_settings.replaygain_prevent_clipping = self.rg_prevent_clipping.isChecked()
+        self.result_settings.crossfade_seconds = self.crossfade_seconds.value()
         self.result_settings.gapless_playback = self.gapless_playback.isChecked()
         self.result_settings.music_root = self.root_edit.text().strip() or self.result_settings.music_root
         self.result_settings.rip_format = self.rip_fmt.currentData() or "flac"

@@ -81,6 +81,17 @@ def test_settings_dialog_persists_watched_folder_toggle(app, monkeypatch):
     assert dialog.result_settings.watch_library_folders is False
 
 
+def test_settings_dialog_persists_crossfade_seconds(app):
+    dialog = SettingsDialog(Settings(crossfade_seconds=3), None)
+
+    assert dialog.crossfade_seconds.value() == 3
+
+    dialog.crossfade_seconds.setValue(7)
+    dialog._accept()
+
+    assert dialog.result_settings.crossfade_seconds == 7
+
+
 def test_settings_dialog_rejects_new_missing_library_path(app, monkeypatch):
     dialog = SettingsDialog(Settings(library_paths=[]), None)
     monkeypatch.setattr(settings_dialog_module, "QMessageBox", _RejectMissingPathPrompt)
