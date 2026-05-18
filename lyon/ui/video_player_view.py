@@ -58,7 +58,7 @@ _DEFAULT_RATE_INDEX = 3  # 1×
 _SIDEBAR_WIDTH = 234
 _CATALOG_BATCH_SIZE = 40
 _THUMB_CACHE_MAX = 512
-_THUMB_CACHE: dict[tuple[str | None, str, int, int], QPixmap] = {}
+_THUMB_CACHE: dict[tuple[Any, ...], QPixmap] = {}
 
 
 def _track_id_and_name(desc: Any) -> tuple[int, str]:
@@ -85,11 +85,6 @@ def _scale_to_fill(pm: QPixmap, w: int, h: int) -> QPixmap:
 def _thumb_pixmap(artwork_path: str | None, file_path: str = "",
                   w: int = 96, h: int = 54) -> QPixmap:
     """Return a w×h thumbnail, also checking for yt-dlp side-car images."""
-    cache_key = (artwork_path, file_path, w, h)
-    cached = _THUMB_CACHE.get(cache_key)
-    if cached is not None:
-        return QPixmap(cached)
-
     sources: list[str] = []
     if artwork_path:
         sources.append(artwork_path)
@@ -102,6 +97,17 @@ def _thumb_pixmap(artwork_path: str | None, file_path: str = "",
             if p.exists():
                 sources.append(str(p))
                 break
+    cache_key = (
+        artwork_path,
+        file_path,
+        w,
+        h,
+        tuple(_thumb_source_state(s) for s in sources),
+    )
+    cached = _THUMB_CACHE.get(cache_key)
+    if cached is not None:
+        return QPixmap(cached)
+
     for src in sources:
         pm = QPixmap(src)
         if not pm.isNull():
@@ -114,7 +120,15 @@ def _thumb_pixmap(artwork_path: str | None, file_path: str = "",
     return QPixmap(out)
 
 
-def _cache_thumb(key: tuple[str | None, str, int, int], pixmap: QPixmap) -> None:
+def _thumb_source_state(src: str) -> tuple[str, int, int]:
+    try:
+        stat = Path(src).stat()
+    except OSError:
+        return (src, -1, -1)
+    return (src, int(stat.st_mtime_ns), int(stat.st_size))
+
+
+def _cache_thumb(key: tuple[Any, ...], pixmap: QPixmap) -> None:
     if len(_THUMB_CACHE) >= _THUMB_CACHE_MAX:
         _THUMB_CACHE.pop(next(iter(_THUMB_CACHE)))
     _THUMB_CACHE[key] = QPixmap(pixmap)

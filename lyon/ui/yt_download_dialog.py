@@ -214,7 +214,8 @@ class YtDownloadDialog(QDialog):
     def _on_track_ready(self, path: str) -> None:
         self._log(f"✓  {path}")
         if self.settings.yt_auto_add:
-            if self.library.add_file(path):
+            result = self.library.index_file(path, force=True)
+            if result.status in {"added", "updated", "unchanged"}:
                 self.library.commit()
                 self.library_updated.emit()
 

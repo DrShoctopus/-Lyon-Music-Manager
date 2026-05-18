@@ -8,6 +8,7 @@ import types
 import pytest
 
 QtCore = pytest.importorskip("PySide6.QtCore", exc_type=ImportError)
+QtGui = pytest.importorskip("PySide6.QtGui", exc_type=ImportError)
 QtWidgets = pytest.importorskip("PySide6.QtWidgets", exc_type=ImportError)
 
 
@@ -168,6 +169,27 @@ def _first_output_attach_index(operations: list[object]) -> int:
         for i, op in enumerate(operations)
         if isinstance(op, tuple) and op[0] in output_methods
     )
+
+
+def test_thumbnail_cache_not_stale_when_sidecar_appears(qapp, tmp_path):
+    from lyon.ui import video_player_view as video_mod
+
+    video_mod._THUMB_CACHE.clear()
+    video = tmp_path / "Clip.mp4"
+    video.write_bytes(b"video")
+
+    video_mod._thumb_pixmap(None, str(video), 16, 16)
+
+    thumb = QtGui.QImage(4, 4, QtGui.QImage.Format_RGB32)
+    thumb.fill(QtGui.QColor("red"))
+    assert thumb.save(str(tmp_path / "Clip.png"))
+
+    pixmap = video_mod._thumb_pixmap(None, str(video), 16, 16)
+    color = pixmap.toImage().pixelColor(8, 8)
+
+    assert color.red() > 200
+    assert color.green() < 60
+    assert color.blue() < 60
 
 
 def test_fullscreen_handoff_rebuilds_vlc_output_before_resuming(qapp, monkeypatch):
