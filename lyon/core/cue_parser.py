@@ -1,9 +1,12 @@
 """CUE sheet parser for single-image + CUE rips."""
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+
+LOG = logging.getLogger(__name__)
 
 
 @dataclass
@@ -86,6 +89,11 @@ def parse_cue(cue_path: Path) -> CueSheet | None:
             file_count += 1
             if file_count > 1:
                 # Multi-file CUE: stop after the first FILE block.
+                LOG.info(
+                    "CUE %s references multiple FILE entries; only the first "
+                    "is indexed (tracks under later FILE entries are skipped).",
+                    cue_path,
+                )
                 break
             m = re.match(r'FILE\s+"(.+?)"\s+\S+', line, re.IGNORECASE)
             if m:

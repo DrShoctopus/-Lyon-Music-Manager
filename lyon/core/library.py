@@ -572,32 +572,49 @@ class Library:
         return summary
 
     def remove_stale_cue_tracks(self) -> int:
-        """Remove CUE virtual tracks whose parent .cue file no longer exists on disk."""
+        """Remove CUE virtual tracks whose .cue file OR audio image is gone.
+
+        ``remove_missing`` skips ``cue_track`` rows (their paths are synthetic
+        ``foo.cue::N`` strings that never exist on disk), so this method is the
+        only path that cleans up CUE rows when either side of the pair vanishes.
+        """
         with self._lock:
             rows = self.conn.execute(
-                "SELECT DISTINCT path FROM tracks WHERE media_type = 'cue_track'"
+                "SELECT id, path, cue_image_path FROM tracks "
+                "WHERE media_type = 'cue_track'"
             ).fetchall()
 
-        cue_file_paths: set[str] = set()
+        # Cache existence checks per source file to avoid stat()ing the same
+        # .cue or image once per virtual track.
+        existence: dict[str, bool] = {}
+
+        def _missing(p: str | None) -> bool:
+            if not p:
+                return False
+            cached = existence.get(p)
+            if cached is None:
+                cached = not Path(p).exists()
+                existence[p] = cached
+            return cached
+
+        stale_ids: list[int] = []
         for row in rows:
+            cue_path = None
             sep = row["path"].rfind("::")
             if sep > 0:
-                cue_file_paths.add(row["path"][:sep])
+                cue_path = row["path"][:sep]
+            if _missing(cue_path) or _missing(row["cue_image_path"]):
+                stale_ids.append(row["id"])
 
-        missing = [p for p in cue_file_paths if not Path(p).exists()]
-        if not missing:
+        if not stale_ids:
             return 0
 
-        removed = 0
         with self._lock:
-            for cue_path in missing:
-                cur = self.conn.execute(
-                    "DELETE FROM tracks WHERE path LIKE ? AND media_type = 'cue_track'",
-                    (f"{cue_path}::%",),
-                )
-                removed += cur.rowcount
+            self.conn.executemany(
+                "DELETE FROM tracks WHERE id = ?", [(i,) for i in stale_ids]
+            )
             self.conn.commit()
-        return removed
+        return len(stale_ids)
 
     def remove_path(self, path: str | os.PathLike, *, commit: bool = True) -> int:
         """Remove a library record for *path* without touching the filesystem."""
@@ -1241,9 +1258,11 @@ def _row_to_track(r: sqlite3.Row) -> Track:
         start_s = (r["cue_offset_sectors"] or 0) / 75.0
         dur = r["duration"] or 0.0
         playback_uri = r["cue_image_path"]
-        playback_options = (f"--start-time={start_s:.3f}",)
+        # libVLC media options use the ":opt=value" form (the "--opt=value" form
+        # is for vlc.Instance() flags and is silently ignored by media.add_option).
+        playback_options = (f":start-time={start_s:.3f}",)
         if dur > 0:
-            playback_options = (*playback_options, f"--stop-time={start_s + dur:.3f}")
+            playback_options = (*playback_options, f":stop-time={start_s + dur:.3f}")
 
     return Track(
         id=r["id"],
@@ -1277,15 +1296,28 @@ def _row_to_track(r: sqlite3.Row) -> Track:
 
 
 def _compute_file_hash(path: str) -> str | None:
-    """Return the MD5 hex digest of the first 64 KB of *path*, or None on error.
+    """Return an MD5 hex digest of a small sample of *path*, or None on error.
 
-    Reading only the header keeps hashing cheap for large files while still
-    distinguishing distinct audio content reliably enough for duplicate detection.
+    Samples three 64 KB regions — start, middle, and end — plus the total file
+    size.  Hashing only the header is fragile for formats whose first bytes are
+    near-identical between distinct files (e.g. two FLAC re-encodes share the
+    same STREAMINFO layout); sampling the body and tail makes false positives
+    far less likely while keeping the hash cheap for large files.
     """
+    chunk = 65536
     try:
+        size = os.path.getsize(path)
+        h = hashlib.md5()
+        h.update(size.to_bytes(8, "little"))
         with open(path, "rb") as fh:
-            data = fh.read(65536)
-        return hashlib.md5(data).hexdigest()
+            h.update(fh.read(chunk))
+            if size > chunk * 2:
+                fh.seek(max(chunk, size // 2 - chunk // 2))
+                h.update(fh.read(chunk))
+            if size > chunk:
+                fh.seek(max(0, size - chunk))
+                h.update(fh.read(chunk))
+        return h.hexdigest()
     except OSError:
         return None
 

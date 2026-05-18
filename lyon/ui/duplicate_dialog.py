@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QDesktopServices, QStandardItem
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView, QComboBox, QDialog, QDialogButtonBox, QHBoxLayout,
     QHeaderView, QLabel, QMessageBox, QPushButton, QTreeWidget,
@@ -38,14 +38,15 @@ class DuplicateDialog(QDialog):
         mode_row.addWidget(QLabel("Find duplicates:"))
         self._mode_combo = QComboBox()
         self._mode_combo.addItem("By Title + Artist", self._MODE_TITLE)
-        self._mode_combo.addItem("By File Hash (exact copies)", self._MODE_HASH)
+        self._mode_combo.addItem("By File Hash (content sample)", self._MODE_HASH)
         fp_idx = self._mode_combo.count()
         self._mode_combo.addItem("By Fingerprint (coming in v0.8)", "fingerprint")
         fp_item = self._mode_combo.model().item(fp_idx)
         fp_item.setEnabled(False)
         self._mode_combo.setToolTip(
             "Title+Artist: matches tracks with identical tags\n"
-            "File Hash: matches byte-identical files regardless of tags"
+            "File Hash: matches files with identical header/middle/tail samples\n"
+            "  (catches re-encodes and renamed copies; not a full byte compare)"
         )
         self._mode_combo.currentIndexChanged.connect(self._refresh_groups)
         mode_row.addWidget(self._mode_combo)

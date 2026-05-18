@@ -1955,7 +1955,16 @@ class LibraryView(QWidget):
                 self.playlists_view.setCurrentIndex(self.playlists_model.index(row, 0))
                 break
         msg = f"Imported {result.matched} track{'s' if result.matched != 1 else ''} from {Path(path).name}"
-        if result.unmatched:
+        if result.matched == 0 and result.unmatched:
+            QMessageBox.warning(
+                self,
+                "Empty Playlist Imported",
+                f"None of the {len(result.unmatched)} path"
+                f"{'s' if len(result.unmatched) != 1 else ''} in this playlist were "
+                "found in the library. The playlist was created but is empty — "
+                "add the referenced files to your library and try again, or delete it.",
+            )
+        elif result.unmatched:
             n = len(result.unmatched)
             detail = "\n".join(result.unmatched[:10])
             if n > 10:

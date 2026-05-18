@@ -1,7 +1,6 @@
 """Tests for CUE sheet indexing (2.4) and file-hash duplicate detection (2.6)."""
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
 
 import pytest
@@ -48,19 +47,33 @@ def _write_image(tmp_path: Path, name: str = "album.flac") -> Path:
 # 2.6 — file_hash helpers
 # ===========================================================================
 
-def test_compute_file_hash_returns_md5_hex(tmp_path):
+def test_compute_file_hash_returns_hex_digest(tmp_path):
     f = tmp_path / "a.flac"
     f.write_bytes(b"hello world")
     result = _compute_file_hash(str(f))
-    assert result == hashlib.md5(b"hello world").hexdigest()
+    assert result is not None
+    assert len(result) == 32
+    int(result, 16)  # raises if not hex
 
 
-def test_compute_file_hash_reads_at_most_64k(tmp_path):
-    data = b"x" * 131072  # 128 KB
-    f = tmp_path / "big.flac"
-    f.write_bytes(data)
-    result = _compute_file_hash(str(f))
-    assert result == hashlib.md5(data[:65536]).hexdigest()
+def test_compute_file_hash_distinguishes_files_that_differ_only_in_middle(tmp_path):
+    # 1 MB files identical in the first and last 64 KB but differing in the
+    # middle — header-only hashing would collide.
+    head = b"H" * 65536
+    tail = b"T" * 65536
+    body_a = b"A" * (1024 * 1024 - 2 * 65536)
+    body_b = b"B" * (1024 * 1024 - 2 * 65536)
+    a = tmp_path / "a.flac"
+    b = tmp_path / "b.flac"
+    a.write_bytes(head + body_a + tail)
+    b.write_bytes(head + body_b + tail)
+    assert _compute_file_hash(str(a)) != _compute_file_hash(str(b))
+
+
+def test_compute_file_hash_stable_across_calls(tmp_path):
+    f = tmp_path / "x.flac"
+    f.write_bytes(b"\xab" * 200_000)
+    assert _compute_file_hash(str(f)) == _compute_file_hash(str(f))
 
 
 def test_compute_file_hash_missing_file_returns_none(tmp_path):
@@ -325,8 +338,8 @@ def test_row_to_track_sets_playback_uri_for_cue(tmp_path):
     from lyon.core.library import _row_to_track
     t1 = _row_to_track(tracks[0])
     assert t1.playback_uri == str(img.resolve())
-    assert "--start-time=0.000" in t1.playback_options
-    assert any("--stop-time=" in o for o in t1.playback_options)
+    assert ":start-time=0.000" in t1.playback_options
+    assert any(o.startswith(":stop-time=") for o in t1.playback_options)
 
 
 def test_row_to_track_last_cue_track_has_no_stop_time(tmp_path):
@@ -340,8 +353,8 @@ def test_row_to_track_last_cue_track_has_no_stop_time(tmp_path):
     ).fetchall()
     from lyon.core.library import _row_to_track
     t = _row_to_track(tracks[0])
-    # duration is 0 for last track → no --stop-time
-    assert not any("--stop-time=" in o for o in t.playback_options)
+    # duration is 0 for last track → no :stop-time
+    assert not any(o.startswith(":stop-time=") for o in t.playback_options)
 
 
 # ===========================================================================
@@ -379,6 +392,22 @@ def test_remove_stale_cue_tracks_cleans_deleted_cue(tmp_path):
     library._index_cue_file(str(cue))
 
     cue.unlink()
+    removed = library.remove_stale_cue_tracks()
+    assert removed == 2
+
+    count = library.conn.execute(
+        "SELECT COUNT(*) FROM tracks WHERE media_type='cue_track'"
+    ).fetchone()[0]
+    assert count == 0
+
+
+def test_remove_stale_cue_tracks_cleans_missing_image(tmp_path):
+    img = _write_image(tmp_path)
+    cue = _write_cue(tmp_path, ["T1", "T2"])
+    library = Library(tmp_path / "lib.db")
+    library._index_cue_file(str(cue))
+
+    img.unlink()
     removed = library.remove_stale_cue_tracks()
     assert removed == 2
 

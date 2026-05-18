@@ -15,6 +15,22 @@ class ImportResult:
     unmatched: list[str] = field(default_factory=list)
 
 
+def _normalize(entry: str, base: Path) -> str:
+    """Make *entry* absolute relative to *base*, normalizing without requiring existence.
+
+    Path.resolve() can raise OSError on Windows reserved names (CON, NUL, …)
+    or unreadable parents; os.path.abspath/normpath always succeed and produce
+    a string that's good enough for exact + case-insensitive matching.
+    """
+    p = Path(entry)
+    if not p.is_absolute():
+        p = base / p
+    try:
+        return str(p.resolve())
+    except OSError:
+        return os.path.normpath(os.path.abspath(str(p)))
+
+
 def parse_m3u(path: Path) -> list[str]:
     """Parse an M3U or M3U8 file; return resolved absolute file paths in order."""
     try:
@@ -27,10 +43,7 @@ def parse_m3u(path: Path) -> list[str]:
         line = line.strip()
         if not line or line.startswith("#"):
             continue
-        p = Path(line)
-        if not p.is_absolute():
-            p = path.parent / p
-        results.append(str(p.resolve()))
+        results.append(_normalize(line, path.parent))
     return results
 
 
@@ -52,10 +65,7 @@ def parse_pls(path: Path) -> list[str]:
         value = value.strip()
         if not value:
             continue
-        p = Path(value)
-        if not p.is_absolute():
-            p = path.parent / p
-        results.append(str(p.resolve()))
+        results.append(_normalize(value, path.parent))
     return results
 
 
