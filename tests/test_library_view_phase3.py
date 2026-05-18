@@ -186,3 +186,31 @@ def test_single_metadata_edit_reports_file_tag_write_failure(app, monkeypatch, t
 
     assert library.updated_tracks
     assert "file tags could not be written to disk" in messages[-1]
+
+
+def test_fetch_album_metadata_reports_track_lookup_failure(view):
+    messages: list[str] = []
+    view.status_message.connect(messages.append)
+
+    def fail_tracks_for_album(*_args):
+        raise RuntimeError("database unavailable")
+
+    view.library.tracks_for_album = fail_tracks_for_album
+
+    view._fetch_album_metadata("Alpha Band", "First Album")
+
+    assert messages[-1] == "Could not load tracks for metadata fetch."
+
+
+def test_fetch_album_metadata_reports_dialog_start_failure(view, monkeypatch):
+    messages: list[str] = []
+    view.status_message.connect(messages.append)
+
+    def fail_dialog(*_args, **_kwargs):
+        raise RuntimeError("dialog failed")
+
+    monkeypatch.setattr(library_view_module, "MetadataFetchDialog", fail_dialog)
+
+    view._fetch_album_metadata("Alpha Band", "First Album")
+
+    assert messages[-1] == "Metadata fetch could not be started."

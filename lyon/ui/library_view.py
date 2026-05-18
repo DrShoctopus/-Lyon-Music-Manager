@@ -1205,8 +1205,10 @@ class LibraryView(QWidget):
         ai = self.artists.currentIndex()
         if not ai.isValid():
             return
-        artist = ai.data(Qt.DisplayRole)
-        album = idx.data(Qt.DisplayRole)
+        artist = str(ai.data(Qt.DisplayRole) or "").strip()
+        album = str(idx.data(Qt.DisplayRole) or "").strip()
+        if not artist or not album:
+            return
 
         menu = QMenu(self)
         fetch_act = menu.addAction("Fetch Metadata…")
@@ -1216,12 +1218,21 @@ class LibraryView(QWidget):
             self._fetch_album_metadata(artist, album)
 
     def _fetch_album_metadata(self, artist: str, album: str) -> None:
-        tracks = self.library.tracks_for_album(artist, album, "audio")
+        try:
+            tracks = self.library.tracks_for_album(artist, album, "audio")
+        except Exception:
+            self.status_message.emit("Could not load tracks for metadata fetch.")
+            return
         if not tracks:
             self.status_message.emit("No audio tracks found for this album.")
             return
-        dlg = MetadataFetchDialog(tracks, artist, album, self.library, self)
-        if _exec_dialog(dlg) == QDialog.Accepted:
+        try:
+            dlg = MetadataFetchDialog(tracks, artist, album, self.library, self)
+            result = _exec_dialog(dlg)
+        except Exception:
+            self.status_message.emit("Metadata fetch could not be started.")
+            return
+        if result == QDialog.Accepted:
             self.status_message.emit(f"Metadata updated for \"{album}\".")
             self.refresh()
 
