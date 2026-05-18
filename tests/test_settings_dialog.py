@@ -10,6 +10,7 @@ if not hasattr(QtWidgets, "QCheckBox"):
     pytest.skip("PySide6 QtWidgets is incomplete in this environment", allow_module_level=True)
 
 from lyon.core.settings import Settings
+from lyon.ui.about import COPYRIGHT_NOTICE
 from lyon.ui import settings_dialog as settings_dialog_module
 from lyon.ui.settings_dialog import SettingsDialog
 
@@ -90,6 +91,17 @@ def test_settings_dialog_persists_crossfade_seconds(app):
     dialog._accept()
 
     assert dialog.result_settings.crossfade_seconds == 7
+
+
+def test_settings_dialog_about_tab_mentions_copyright_and_third_parties(app):
+    dialog = SettingsDialog(Settings(), None)
+    about_text = "\n".join(label.text() for label in dialog.findChildren(QtWidgets.QLabel))
+
+    assert COPYRIGHT_NOTICE in about_text
+    assert "Qt/PySide6" in about_text
+    assert "libVLC/python-vlc" in about_text
+    assert "MusicBrainz" in about_text
+    assert "LRCLIB" in about_text
 
 
 def test_settings_dialog_rejects_new_missing_library_path(app, monkeypatch):

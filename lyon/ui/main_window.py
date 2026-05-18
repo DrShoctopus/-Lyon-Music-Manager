@@ -28,6 +28,7 @@ from ..core.player import Player
 from ..core.replaygain import ReplayGainScanner
 from ..core.ripper import find_ffmpeg
 from ..core.settings import Settings
+from .about import COPYRIGHT_NOTICE, THIRD_PARTY_NOTICE
 from .branding import app_icon
 from .diagnostics_dialog import DiagnosticsDialog
 from .disc_view import DiscView
@@ -1023,7 +1024,9 @@ class MainWindow(QMainWindow):
         dlg.setInformativeText(
             "Sea Lyon is a music library manager, CD ripper, and player\n"
             "for Windows, macOS, and Linux.\n\n"
-            "Released under the MIT License."
+            f"{COPYRIGHT_NOTICE}\n\n"
+            "Released under the MIT License.\n\n"
+            f"{THIRD_PARTY_NOTICE}"
         )
         try:
             dlg.exec()

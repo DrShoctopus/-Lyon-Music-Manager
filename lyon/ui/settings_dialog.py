@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 
 from .. import __app_name__, __version__
 from ..core.settings import Settings, normalize_library_paths
+from .about import COPYRIGHT_NOTICE, THIRD_PARTY_NOTICE
 from .branding import app_icon
 
 # (display label, settings key) pairs — order matches the combo box
@@ -406,9 +407,24 @@ class SettingsDialog(QDialog):
 
         layout.addSpacing(12)
 
+        copyright_label = QLabel(COPYRIGHT_NOTICE)
+        copyright_label.setObjectName("mutedText")
+        layout.addWidget(copyright_label)
+
         license_label = QLabel("Released under the MIT License.")
         license_label.setObjectName("mutedText")
         layout.addWidget(license_label)
+
+        layout.addSpacing(12)
+
+        credits_label = QLabel("Third-Party Acknowledgements")
+        credits_label.setObjectName("sectionHeader")
+        layout.addWidget(credits_label)
+
+        third_party = QLabel(THIRD_PARTY_NOTICE)
+        third_party.setObjectName("mutedText")
+        third_party.setWordWrap(True)
+        layout.addWidget(third_party)
 
         layout.addStretch(1)
         return w
