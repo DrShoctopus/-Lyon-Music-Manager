@@ -25,6 +25,9 @@ from .transport import (
 )
 from .widgets import ElidedLabel, StarRatingWidget, cover_pixmap, format_duration, format_ms
 
+_PAGE_MARGIN = 8
+_TRANSPORT_THUMB_SIZE = 60
+
 # ---- LRC parsing -------------------------------------------------------
 
 _LRC_RE = re.compile(r"\[(\d+):(\d+(?:\.\d+)?)\](.*)")
@@ -439,6 +442,7 @@ class NowPlayingView(QWidget):
         info_btn.toggled.connect(_make_tab_switch(info_btn, queue_btn, lyrics_btn, 2))
 
         right_vl = QVBoxLayout()
+        right_vl.setContentsMargins(0, 0, 0, 0)
         right_vl.setSpacing(4)
         right_vl.addLayout(tab_row)
         right_vl.addWidget(self._panel_stack, 1)
@@ -458,7 +462,7 @@ class NowPlayingView(QWidget):
         row.addWidget(right_w, 1)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(28, 28, 28, 28)
+        layout.setContentsMargins(_PAGE_MARGIN, _PAGE_MARGIN, _PAGE_MARGIN, _PAGE_MARGIN)
         layout.addLayout(row, 1)
 
         # ---- Signals
@@ -728,8 +732,8 @@ class TransportBar(QWidget):
 
         self.thumb = _ClickableLabel()
         self.thumb.setObjectName("transportThumb")
-        self.thumb.setFixedSize(68, 68)
-        self.thumb.setPixmap(cover_pixmap(None, 68, "♪"))
+        self.thumb.setFixedSize(_TRANSPORT_THUMB_SIZE, _TRANSPORT_THUMB_SIZE)
+        self.thumb.setPixmap(cover_pixmap(None, _TRANSPORT_THUMB_SIZE, "♪"))
         self.thumb.setCursor(Qt.PointingHandCursor)
         self.thumb.setAccessibleName("Open Now Playing")
         self.thumb.clicked.connect(self.open_now_playing.emit)
@@ -810,8 +814,6 @@ class TransportBar(QWidget):
 
         center = QVBoxLayout()
         center.setContentsMargins(0, 0, 0, 0)
-        # The primary play button is intentionally oversized; keep it visually
-        # separate from the seek/time row below.
         center.setSpacing(14)
         center.addLayout(controls)
         center.addLayout(seek_row)
@@ -837,7 +839,7 @@ class TransportBar(QWidget):
         vol_row.addWidget(self.vol)
 
         bar_layout = QHBoxLayout(self.bar)
-        bar_layout.setContentsMargins(18, 8, 18, 8)
+        bar_layout.setContentsMargins(14, 6, 14, 6)
         bar_layout.setSpacing(12)
         bar_layout.addWidget(self.thumb)
         bar_layout.addWidget(meta_w)
@@ -872,7 +874,7 @@ class TransportBar(QWidget):
         if track is None:
             self.title_lbl.setText("Nothing playing")
             self.artist_lbl.setText("")
-            self.thumb.setPixmap(cover_pixmap(None, 68, "♪"))
+            self.thumb.setPixmap(cover_pixmap(None, _TRANSPORT_THUMB_SIZE, "♪"))
             self.heart_btn.blockSignals(True)
             self.heart_btn.setChecked(False)
             self.heart_btn.blockSignals(False)
@@ -880,7 +882,7 @@ class TransportBar(QWidget):
         else:
             self.title_lbl.setText(track.title)
             self.artist_lbl.setText(f"{track.display_artist} - {track.album}")
-            self.thumb.setPixmap(cover_pixmap(track.artwork_path, 68, "♪"))
+            self.thumb.setPixmap(cover_pixmap(track.artwork_path, _TRANSPORT_THUMB_SIZE, "♪"))
             self.heart_btn.blockSignals(True)
             self.heart_btn.setChecked(track.liked)
             self.heart_btn.blockSignals(False)

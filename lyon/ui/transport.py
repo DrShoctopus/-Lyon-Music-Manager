@@ -13,8 +13,8 @@ from PySide6.QtWidgets import QToolButton
 from .theme import ACCENT_CYAN, TEXT_PRIMARY
 
 
-SIDE_BTN_SIZE = (42, 40)
-PRIMARY_BTN_SIZE = 62
+SIDE_BTN_SIZE = (40, 38)
+PRIMARY_BTN_SIZE = 54
 
 _GLYPH_COLOR     = QColor(TEXT_PRIMARY)
 _GLYPH_DISABLED  = QColor("#65707c")
@@ -137,7 +137,7 @@ def _draw_glyph(painter: QPainter, name: str, rect, color: QColor) -> None:
         path = QPainterPath()
         # Classic icon heart: rounded shoulders, a visible top cleft, and a
         # single lower tip. Keep it inside the side button so the outline is
-        # readable at 42x40 transport size.
+        # readable at transport size.
         path.moveTo(cx, cy + size * 0.36)
         path.cubicTo(cx - size * 0.38, cy + size * 0.12,
                      cx - size * 0.50, cy - size * 0.12,
