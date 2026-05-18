@@ -16,7 +16,7 @@ YouTube downloading, and UI work can still be developed on macOS or Linux when t
 
 Python packages and native runtimes are available.
 
-Current application version: `0.5.0` in `lyon/__init__.py`.
+Current application version: `0.6.0` in `lyon/__init__.py`.
 
 ## Status
 
