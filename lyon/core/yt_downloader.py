@@ -96,7 +96,6 @@ class YtDownloadWorker(QThread):
         self._succeeded = 0
         self._failed = 0
         self._emitted_paths: set[str] = set()
-        self._uses_postprocessors = False
 
     def cancel(self) -> None:
         self._cancelled = True
@@ -150,15 +149,13 @@ class YtDownloadWorker(QThread):
                 fmt_selector = f"best[ext={self.fmt}]/best[ext=mp4]/best"
                 merge_fmt = None
 
-        self._uses_postprocessors = bool(postprocessors)
-
         ydl_opts: dict = {
             "format": fmt_selector,
             "outtmpl": out_template,
             "postprocessors": postprocessors,
             "logger": _YtLogger(self),
             "progress_hooks": [self._on_progress],
-            "postprocessor_hooks": [self._on_postprocessor],
+            "post_hooks": [self._on_post_hook],
             "noplaylist": not self.playlist,
             "writethumbnail": True,
             # Video downloads need a persistent, Qt-friendly sidecar thumbnail
@@ -196,29 +193,11 @@ class YtDownloadWorker(QThread):
             eta = d.get("_eta_str", "").strip()
             filename = Path(d.get("filename", "")).name
             self.progress.emit(f"  {filename}  {pct}  {speed}  ETA {eta}")
-        elif status == "finished" and not self._uses_postprocessors:
-            # When ffmpeg is unavailable for video downloads we intentionally
-            # run with no postprocessors, so _on_postprocessor() will never be
-            # called.  Emit the completed, pre-merged file from the progress
-            # hook so auto-add still works in that fallback path.
-            path = d.get("filename", "")
-            if path and Path(path).exists():
-                self._emit_track_ready(path)
         elif status == "error":
             self._failed += 1
 
-    def _on_postprocessor(self, d: dict) -> None:
-        if d.get("status") != "finished":
-            return
-        info = d.get("info_dict", {})
-        # After all postprocessors the final path lives in requested_downloads.
-        for dl in info.get("requested_downloads", []):
-            path = dl.get("filepath", "")
-            if path and Path(path).exists():
-                self._emit_track_ready(path)
-                return
-        # Fallback: use filepath directly on the info_dict
-        path = info.get("filepath", "")
+    def _on_post_hook(self, path: str) -> None:
+        """Emit the final downloaded file path after yt-dlp has moved it."""
         if path and Path(path).exists():
             self._emit_track_ready(path)
 
