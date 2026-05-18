@@ -1,0 +1,199 @@
+"""Tests for ScrobblerService and related helpers."""
+from __future__ import annotations
+
+import time
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from lyon.core.scrobbler import (
+    ScrobblerService,
+    _lastfm_sign,
+    _MIN_TRACK_DURATION_S,
+    _SCROBBLE_CAP_S,
+)
+from lyon.core.settings import Settings
+
+
+def _make_track(
+    title="Song",
+    artist="Artist",
+    album="Album",
+    duration=240.0,
+    track_id=1,
+):
+    from dataclasses import replace
+    from lyon.core.library import Track
+
+    return Track(
+        id=track_id,
+        path=f"/music/{title}.flac",
+        title=title,
+        artist=artist,
+        album_artist="",
+        album=album,
+        track_no=1,
+        disc_no=1,
+        year=2024,
+        genre="",
+        duration=duration,
+    )
+
+
+def _make_player():
+    """Minimal Player stand-in with signals as MagicMocks."""
+    player = MagicMock()
+    player.track_changed = MagicMock()
+    player.track_changed.connect = MagicMock()
+    player.position_changed = MagicMock()
+    player.position_changed.connect = MagicMock()
+    return player
+
+
+def _make_settings(**kwargs):
+    return Settings(**kwargs)
+
+
+# ------------------------------------------------------------------ unit tests
+
+class TestLastFmSign:
+    def test_known_signature(self):
+        # If API secret is "", md5("api_keyKEYmethodauth.getTokensecret".encode()) would work,
+        # but since _LASTFM_API_SECRET is "", we just check the function returns a hex string.
+        params = {"method": "auth.getToken", "api_key": "KEY", "format": "json"}
+        sig = _lastfm_sign(params)
+        assert len(sig) == 32
+        assert all(c in "0123456789abcdef" for c in sig)
+
+    def test_format_excluded_from_signature(self):
+        params_with = {"method": "m", "api_key": "k", "format": "json"}
+        params_without = {"method": "m", "api_key": "k"}
+        assert _lastfm_sign(params_with) == _lastfm_sign(params_without)
+
+    def test_api_sig_excluded_from_signature(self):
+        params = {"method": "m", "api_key": "k", "api_sig": "old"}
+        sig = _lastfm_sign(params)
+        assert len(sig) == 32
+
+
+class TestScrobblerServiceInit:
+    def test_connects_to_player(self):
+        player = _make_player()
+        svc = ScrobblerService(player, Settings())
+        player.track_changed.connect.assert_called_once()
+        player.position_changed.connect.assert_called_once()
+        svc.deleteLater()
+
+
+class TestTrackChanged:
+    def setup_method(self):
+        self.player = _make_player()
+        self.svc = ScrobblerService(self.player, Settings())
+
+    def teardown_method(self):
+        self.svc.deleteLater()
+
+    def test_sets_current_track(self):
+        track = _make_track()
+        self.svc._on_track_changed(track)
+        assert self.svc._current_track is track
+
+    def test_resets_scrobbled_flag(self):
+        self.svc._scrobbled = True
+        self.svc._on_track_changed(_make_track())
+        assert not self.svc._scrobbled
+
+    def test_none_clears_track(self):
+        self.svc._on_track_changed(_make_track())
+        self.svc._on_track_changed(None)
+        assert self.svc._current_track is None
+
+    def test_now_playing_submitted_when_enabled(self):
+        settings = _make_settings(
+            lastfm_scrobbling_enabled=True,
+            lastfm_session_key="sk123",
+        )
+        self.svc.update_settings(settings)
+        with patch("lyon.core.scrobbler._LASTFM_API_KEY", "testkey"), \
+             patch("lyon.core.scrobbler.QThreadPool") as mock_pool:
+            mock_pool.globalInstance.return_value = MagicMock()
+            self.svc._on_track_changed(_make_track())
+            mock_pool.globalInstance.return_value.start.assert_called_once()
+
+    def test_no_submission_when_disabled(self):
+        settings = _make_settings(lastfm_scrobbling_enabled=False)
+        self.svc.update_settings(settings)
+        with patch("lyon.core.scrobbler.QThreadPool") as mock_pool:
+            mock_pool.globalInstance.return_value = MagicMock()
+            self.svc._on_track_changed(_make_track())
+            mock_pool.globalInstance.return_value.start.assert_not_called()
+
+
+class TestPositionChanged:
+    def setup_method(self):
+        self.player = _make_player()
+        self.svc = ScrobblerService(self.player, Settings())
+        self.svc._current_track = _make_track(duration=240.0)
+        self.svc._track_start_time = time.time() - 10
+
+    def teardown_method(self):
+        self.svc.deleteLater()
+
+    def test_no_scrobble_before_threshold(self):
+        with patch.object(self.svc, "_submit_scrobble") as mock:
+            self.svc._on_position_changed(10_000, 240_000)
+            mock.assert_not_called()
+
+    def test_scrobble_at_50_percent(self):
+        with patch.object(self.svc, "_submit_scrobble") as mock:
+            self.svc._on_position_changed(120_000, 240_000)  # exactly 50%
+            mock.assert_called_once()
+
+    def test_scrobble_capped_at_240s(self):
+        # 10-minute track: 50% is 300s which exceeds 240s cap.
+        self.svc._current_track = _make_track(duration=600.0)
+        with patch.object(self.svc, "_submit_scrobble") as mock:
+            self.svc._on_position_changed(240_000, 600_000)
+            mock.assert_called_once()
+
+    def test_no_scrobble_before_cap_on_long_track(self):
+        self.svc._current_track = _make_track(duration=600.0)
+        with patch.object(self.svc, "_submit_scrobble") as mock:
+            self.svc._on_position_changed(200_000, 600_000)
+            mock.assert_not_called()
+
+    def test_no_duplicate_scrobble(self):
+        with patch.object(self.svc, "_submit_scrobble") as mock:
+            self.svc._on_position_changed(120_000, 240_000)
+            self.svc._on_position_changed(180_000, 240_000)
+            assert mock.call_count == 1
+
+    def test_short_track_not_scrobbled(self):
+        self.svc._current_track = _make_track(duration=20.0)
+        with patch.object(self.svc, "_submit_scrobble") as mock:
+            self.svc._on_position_changed(10_000, 20_000)
+            mock.assert_not_called()
+
+    def test_no_track_no_scrobble(self):
+        self.svc._current_track = None
+        with patch.object(self.svc, "_submit_scrobble") as mock:
+            self.svc._on_position_changed(120_000, 240_000)
+            mock.assert_not_called()
+
+    def test_zero_duration_ignored(self):
+        with patch.object(self.svc, "_submit_scrobble") as mock:
+            self.svc._on_position_changed(0, 0)
+            mock.assert_not_called()
+
+
+class TestScrobblerUpdateSettings:
+    def test_update_settings_replaces_reference(self):
+        player = _make_player()
+        svc = ScrobblerService(player, Settings())
+        new_settings = _make_settings(
+            lastfm_scrobbling_enabled=True,
+            lastfm_session_key="newkey",
+        )
+        svc.update_settings(new_settings)
+        assert svc._settings is new_settings
+        svc.deleteLater()

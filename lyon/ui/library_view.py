@@ -3,9 +3,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QModelIndex, QRect, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QEvent, QModelIndex, QObject, QRect, QRunnable, QSize, Qt, QThreadPool, QTimer, QUrl, Signal
 from PySide6.QtGui import (
-    QColor, QDesktopServices, QIcon, QKeySequence, QPainter, QPixmap, QShortcut,
+    QColor, QDesktopServices, QIcon, QImage, QKeySequence, QPainter, QPixmap, QShortcut,
     QStandardItem, QStandardItemModel,
 )
 from PySide6.QtWidgets import (
@@ -257,6 +257,40 @@ class _FormatDelegate(QStyledItemDelegate):
         return QSize(60, option.rect.height())
 
 
+_GRID_ICON_SIZE = 180
+_ART_CACHE_MAX = 200
+
+
+class _ArtSignals(QObject):
+    """Carries the result of a background artwork load back to the main thread."""
+    loaded = Signal(int, str, object)   # (generation, art_path, QImage | None)
+
+
+class _ArtLoader(QRunnable):
+    """Loads and scales an artwork image on a worker thread."""
+
+    def __init__(self, gen: int, art_path: str, signals: _ArtSignals) -> None:
+        super().__init__()
+        self.setAutoDelete(True)
+        self._gen = gen
+        self._art_path = art_path
+        self._signals = signals
+
+    def run(self) -> None:
+        try:
+            img = QImage(self._art_path)
+            if img.isNull():
+                self._signals.loaded.emit(self._gen, self._art_path, None)
+            else:
+                scaled = img.scaled(
+                    _GRID_ICON_SIZE, _GRID_ICON_SIZE,
+                    Qt.KeepAspectRatio, Qt.SmoothTransformation,
+                )
+                self._signals.loaded.emit(self._gen, self._art_path, scaled)
+        except Exception:
+            self._signals.loaded.emit(self._gen, self._art_path, None)
+
+
 class LibraryView(QWidget):
     play_tracks = Signal(list, int)        # (tracks, start_index)
     enqueue_tracks = Signal(list)
@@ -274,6 +308,12 @@ class LibraryView(QWidget):
         self._currently_playing: Track | None = None
         self._show_videos: bool = False
         self._active_playlist_id: int | None = None
+        # Album art grid async loading
+        self._art_cache: dict[str, QPixmap] = {}
+        self._grid_gen: int = 0
+        self._grid_art_map: dict[str, list[QStandardItem]] = {}
+        self._art_signals = _ArtSignals(self)
+        self._art_signals.loaded.connect(self._on_artwork_loaded)
 
         # ---- Top toolbar
         top = QHBoxLayout()
@@ -441,8 +481,8 @@ class LibraryView(QWidget):
         self._grid_albums_view.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self._grid_albums_view.setModel(self._grid_albums_model)
         self._grid_albums_view.setViewMode(QListView.IconMode)
-        self._grid_albums_view.setIconSize(QSize(160, 160))
-        self._grid_albums_view.setGridSize(QSize(190, 215))
+        self._grid_albums_view.setIconSize(QSize(_GRID_ICON_SIZE, _GRID_ICON_SIZE))
+        self._grid_albums_view.setGridSize(QSize(210, 240))
         self._grid_albums_view.setResizeMode(QListView.Adjust)
         self._grid_albums_view.setUniformItemSizes(True)
         self._grid_albums_view.setWordWrap(True)
@@ -824,8 +864,12 @@ class LibraryView(QWidget):
         self._sv_refresh_artists()
 
     def _refresh_grid_albums(self) -> None:
-        """Populate the album art grid for the selected genre."""
+        """Populate the album art grid for the selected genre (artwork loads asynchronously)."""
+        self._grid_gen += 1
+        gen = self._grid_gen
+        self._grid_art_map = {}
         self._grid_albums_model.clear()
+
         genre_idx = self._grid_genres.currentIndex()
         genre_key = genre_idx.data(Qt.UserRole) if genre_idx.isValid() else _ALL_GENRES_KEY
         genre = None if genre_key == _ALL_GENRES_KEY else genre_key
@@ -842,18 +886,38 @@ class LibraryView(QWidget):
                     seen.add(key_t)
                     albums.append((t.display_artist, t.album or "Unknown Album", t.artwork_path))
 
+        pool = QThreadPool.globalInstance()
         for artist, album, art in albums:
-            pm = QPixmap(art) if art else None
-            if pm and pm.isNull():
-                pm = None
-            icon = (
-                QIcon(pm.scaled(160, 160, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-                if pm else QIcon()
-            )
-            it = QStandardItem(icon, f"{album}\n{artist}")
+            it = QStandardItem(QIcon(), f"{album}\n{artist}")
             it.setData((artist, album), Qt.UserRole)
             it.setTextAlignment(Qt.AlignHCenter | Qt.AlignTop)
             self._grid_albums_model.appendRow(it)
+            if not art:
+                continue
+            if art in self._art_cache:
+                it.setIcon(QIcon(self._art_cache[art]))
+            else:
+                first = art not in self._grid_art_map
+                self._grid_art_map.setdefault(art, []).append(it)
+                if first:
+                    pool.start(_ArtLoader(gen, art, self._art_signals))
+
+    def _on_artwork_loaded(self, gen: int, art_path: str, img: object) -> None:
+        if gen != self._grid_gen:
+            return
+        pm: QPixmap | None = None
+        if img is not None:
+            pm = QPixmap.fromImage(img)
+            if pm.isNull():
+                pm = None
+        if pm is not None:
+            if len(self._art_cache) >= _ART_CACHE_MAX:
+                first_key = next(iter(self._art_cache))
+                del self._art_cache[first_key]
+            self._art_cache[art_path] = pm
+        icon = QIcon(pm) if pm else QIcon()
+        for item in self._grid_art_map.get(art_path, []):
+            item.setIcon(icon)
 
     def _on_grid_album_activated(self, index: QModelIndex) -> None:
         data = index.data(Qt.UserRole)

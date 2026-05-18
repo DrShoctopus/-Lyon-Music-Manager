@@ -26,6 +26,7 @@ from ..core.library_watcher import (
 from ..core.playback_backend import close_dll_handles
 from ..core.player import Player
 from ..core.replaygain import ReplayGainScanner
+from ..core.scrobbler import ScrobblerService
 from ..core.ripper import find_ffmpeg
 from ..core.settings import Settings
 from .about import COPYRIGHT_NOTICE, THIRD_PARTY_NOTICE
@@ -105,6 +106,7 @@ class MainWindow(QMainWindow):
             self.settings.audio_output_device,
         )
         self.player.set_gapless(self.settings.gapless_playback)
+        self.scrobbler = ScrobblerService(self.player, self.settings, self)
         self._scan_thread: _LibraryScanThread | None = None
         self._rg_scanner: ReplayGainScanner | None = None
         self._watch_index_thread: LibraryIndexThread | None = None
@@ -874,6 +876,7 @@ class MainWindow(QMainWindow):
                 self.settings.audio_output_device,
             )
             self.player.set_gapless(self.settings.gapless_playback)
+            self.scrobbler.update_settings(self.settings)
             self.video_player_view.apply_equalizer(
                 self.settings.equalizer_enabled,
                 self.settings.equalizer_bands,

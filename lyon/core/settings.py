@@ -145,6 +145,10 @@ class Settings:
     audio_output: str = ""              # VLC audio output module ID (e.g. "wasapi", "directsound")
     audio_output_device: str = ""       # VLC device ID string; "" = VLC default
     gapless_playback: bool = False      # pre-buffer next track to minimize inter-track gap; no-op when crossfade > 0
+    lastfm_session_key: str = ""        # per-user session key obtained via auth.getSession
+    lastfm_scrobbling_enabled: bool = False
+    listenbrainz_token: str = ""        # per-user token from listenbrainz.org/profile/
+    listenbrainz_scrobbling_enabled: bool = False
 
     def __post_init__(self) -> None:
         self.rip_format = str(self.rip_format or "flac").lower()
@@ -166,6 +170,8 @@ class Settings:
         self.audio_output = str(self.audio_output or "").strip()
         self.audio_output_device = str(self.audio_output_device or "").strip()
         self.gapless_playback = _bool_value(self.gapless_playback, False)
+        self.lastfm_scrobbling_enabled = _bool_value(self.lastfm_scrobbling_enabled, False)
+        self.listenbrainz_scrobbling_enabled = _bool_value(self.listenbrainz_scrobbling_enabled, False)
         self.yt_audio_format = str(self.yt_audio_format or "flac").lower()
         if self.yt_audio_format not in _YT_AUDIO_FORMATS:
             self.yt_audio_format = "flac"
