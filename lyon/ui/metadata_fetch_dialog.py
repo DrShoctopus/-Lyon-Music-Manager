@@ -25,6 +25,37 @@ _PAGE_LOADING = 0
 _PAGE_NOT_FOUND = 1
 _PAGE_DIFF = 2
 
+_DETACHED_WORKERS: dict[int, QThread] = {}
+
+
+def _keep_worker_until_finished(worker: QThread) -> None:
+    """Keep a canceled worker alive after its dialog closes."""
+    key = id(worker)
+    _DETACHED_WORKERS[key] = worker
+    try:
+        worker.setParent(None)
+    except (AttributeError, RuntimeError):
+        _DETACHED_WORKERS.pop(key, None)
+        return
+
+    def cleanup() -> None:
+        _DETACHED_WORKERS.pop(key, None)
+        try:
+            worker.deleteLater()
+        except RuntimeError:
+            pass
+
+    try:
+        worker.finished.connect(cleanup)
+    except (AttributeError, RuntimeError):
+        cleanup()
+
+
+def _clean_text(value: object) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
 
 class _SearchWorker(QThread):
     disc_found = Signal(object)   # AlbumInfo — exact disc-ID match (has full track list)
@@ -35,25 +66,35 @@ class _SearchWorker(QThread):
     def __init__(self, disc_id: Optional[str], artist: str, album: str, parent=None) -> None:
         super().__init__(parent)
         self._disc_id = disc_id
-        self._artist = artist
-        self._album = album
+        self._artist = _clean_text(artist)
+        self._album = _clean_text(album)
 
     def run(self) -> None:
+        if self.isInterruptionRequested():
+            return
         if self._disc_id:
             try:
                 info = lookup_musicbrainz_disc(self._disc_id)
+                if self.isInterruptionRequested():
+                    return
                 if info:
                     self.disc_found.emit(info)
                     return
             except Exception:
                 pass
 
+        if self.isInterruptionRequested():
+            return
         try:
             results = search_musicbrainz_releases(self._artist, self._album, limit=5)
         except Exception as exc:
+            if self.isInterruptionRequested():
+                return
             self.error.emit(str(exc))
             return
 
+        if self.isInterruptionRequested():
+            return
         if results:
             self.candidates.emit(results)
         else:
@@ -75,7 +116,7 @@ class _DetailWorker(QThread):
         parent=None,
     ) -> None:
         super().__init__(parent)
-        self._mbid = mbid
+        self._mbid = _clean_text(mbid)
         self._fallback = fallback
         self._fetch_details = fetch_details
 
@@ -84,16 +125,25 @@ class _DetailWorker(QThread):
             try:
                 info = fetch_musicbrainz_release(self._mbid)
             except Exception as exc:
+                if self.isInterruptionRequested():
+                    return
                 self.error.emit(str(exc))
                 info = None
+            if self.isInterruptionRequested():
+                return
             self.detail_ready.emit(info if info else self._fallback)
-        elif not self._fetch_details:
+        else:
             # Disc path — emit fallback immediately so diff can show right away
+            # Text-search candidates without an MBID also fall back here.
+            if self.isInterruptionRequested():
+                return
             self.detail_ready.emit(self._fallback)
 
         if self._mbid:
             try:
                 art = download_cover_art(self._mbid)
+                if self.isInterruptionRequested():
+                    return
                 if art:
                     self.artwork_ready.emit(art)
             except Exception:
@@ -114,8 +164,12 @@ class _PickerDialog(QDialog):
 
         self._list = QListWidget()
         for info in candidates:
-            year = f" ({info.date[:4]})" if info.date and len(info.date) >= 4 else ""
-            item = QListWidgetItem(f"{info.artist} — {info.album}{year}")
+            date = _clean_text(info.date)
+            year = f" ({date[:4]})" if len(date) >= 4 else ""
+            item = QListWidgetItem(
+                f"{_clean_text(info.artist) or 'Unknown Artist'} — "
+                f"{_clean_text(info.album) or 'Unknown Album'}{year}"
+            )
             item.setData(Qt.UserRole, info)
             self._list.addItem(item)
         if self._list.count():
@@ -151,7 +205,9 @@ class MetadataFetchDialog(QDialog):
         parent=None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle(f"Fetch Metadata — {album}")
+        album = _clean_text(album)
+        artist = _clean_text(artist)
+        self.setWindowTitle(f"Fetch Metadata — {album or 'Unknown Album'}")
         self.setMinimumWidth(660)
         self.setMinimumHeight(500)
 
@@ -160,10 +216,13 @@ class MetadataFetchDialog(QDialog):
         self._proposed: AlbumInfo | None = None
         self._artwork_bytes: bytes | None = None
         self._is_disc_path = False
+        self._shutting_down = False
+        self._diff_ready = False
         self._field_rows: list[tuple[str, str, str, QCheckBox]] = []
         self._track_rows: list[tuple[Track, str, QCheckBox]] = []
         self._artwork_cb: QCheckBox | None = None
         self._artwork_row_w: QWidget | None = None
+        self._search_worker: _SearchWorker | None = None
         self._detail_worker: _DetailWorker | None = None
 
         outer = QVBoxLayout(self)
@@ -243,11 +302,15 @@ class MetadataFetchDialog(QDialog):
         self._search_worker.candidates.connect(self._on_candidates)
         self._search_worker.not_found.connect(self._on_not_found)
         self._search_worker.error.connect(self._on_search_error)
+        self._search_worker.finished.connect(self._on_search_worker_finished)
+        self._search_worker.finished.connect(self._search_worker.deleteLater)
         self._search_worker.start()
 
     # ------------------------------------------------------------------ search slots
 
     def _on_disc_found(self, info: AlbumInfo) -> None:
+        if self._ignore_worker_signal("_search_worker"):
+            return
         self._is_disc_path = True
         self._banner.setText(
             "Matched by Disc ID (exact match). "
@@ -259,15 +322,21 @@ class MetadataFetchDialog(QDialog):
         self._start_detail_worker(info, fetch_details=False)
 
     def _on_candidates(self, candidates: list[AlbumInfo]) -> None:
+        if self._ignore_worker_signal("_search_worker"):
+            return
         self._is_disc_path = False
         if len(candidates) == 1:
             selected = candidates[0]
         else:
             picker = _PickerDialog(candidates, self)
-            if picker.exec() != QDialog.Accepted or picker.selected is None:
+            try:
+                accepted = picker.exec()
+                selected = picker.selected
+            finally:
+                picker.deleteLater()
+            if accepted != QDialog.Accepted or selected is None:
                 self.reject()
                 return
-            selected = picker.selected
 
         self._banner.setText(
             "Matched by text search — please review all fields carefully before applying."
@@ -278,35 +347,61 @@ class MetadataFetchDialog(QDialog):
         self._start_detail_worker(selected, fetch_details=True)
 
     def _on_not_found(self) -> None:
+        if self._ignore_worker_signal("_search_worker"):
+            return
         self._not_found_label.setText("No matching releases found on MusicBrainz.")
         self._stack.setCurrentIndex(_PAGE_NOT_FOUND)
 
     def _on_search_error(self, msg: str) -> None:
+        if self._ignore_worker_signal("_search_worker"):
+            return
         self._not_found_label.setText(f"Search failed: {msg}")
         self._stack.setCurrentIndex(_PAGE_NOT_FOUND)
 
     def _start_detail_worker(self, info: AlbumInfo, fetch_details: bool) -> None:
+        self._stop_worker("_detail_worker")
         self._detail_worker = _DetailWorker(
-            info.musicbrainz_albumid, info,
+            _clean_text(info.musicbrainz_albumid), info,
             fetch_details=fetch_details, parent=self,
         )
         self._detail_worker.detail_ready.connect(self._show_diff)
         self._detail_worker.artwork_ready.connect(self._on_artwork_ready)
         self._detail_worker.error.connect(self._on_detail_error)
+        self._detail_worker.finished.connect(self._on_detail_worker_finished)
+        self._detail_worker.finished.connect(self._detail_worker.deleteLater)
         self._detail_worker.start()
+
+    def _on_search_worker_finished(self) -> None:
+        if self.sender() is self._search_worker:
+            self._search_worker = None
+
+    def _on_detail_worker_finished(self) -> None:
+        if self.sender() is self._detail_worker:
+            self._detail_worker = None
 
     def _on_detail_error(self, msg: str) -> None:
         # Don't block the user; if detail fails we already emitted fallback in _DetailWorker
         pass
 
+    def _ignore_worker_signal(self, attr: str) -> bool:
+        if self._shutting_down:
+            return True
+        sender = self.sender()
+        return sender is not None and sender is not getattr(self, attr, None)
+
     # ------------------------------------------------------------------ diff display
 
     def _show_diff(self, info: AlbumInfo) -> None:
+        if self._ignore_worker_signal("_detail_worker"):
+            return
         self._proposed = info
         self._build_diff_table(info)
+        self._diff_ready = True
         self._stack.setCurrentIndex(_PAGE_DIFF)
         self._apply_btn.setVisible(True)
         self._apply_only_empty(self._only_empty_cb.isChecked())
+        if self._artwork_bytes:
+            self._show_artwork_row()
 
     def _build_diff_table(self, info: AlbumInfo) -> None:
         while self._diff_vl.count():
@@ -318,20 +413,21 @@ class MetadataFetchDialog(QDialog):
         self._track_rows.clear()
         self._artwork_cb = None
         self._artwork_row_w = None
+        self._diff_ready = False
 
         t0 = self._tracks[0] if self._tracks else None
-        current_album = t0.album if t0 else ""
+        current_album = _clean_text(t0.album) if t0 else ""
         current_artist = t0.display_artist if t0 else ""
         current_year = str(t0.year) if t0 and t0.year else ""
-        current_genre = t0.genre if t0 else ""
+        current_genre = _clean_text(t0.genre) if t0 else ""
 
         proposed_year = str(info.year) if info.year else ""
 
         album_fields = [
-            ("album",  "Album",  current_album,  info.album),
-            ("artist", "Artist", current_artist, info.artist),
+            ("album",  "Album",  current_album,  _clean_text(info.album)),
+            ("artist", "Artist", current_artist, _clean_text(info.artist)),
             ("year",   "Year",   current_year,   proposed_year),
-            ("genre",  "Genre",  current_genre,  info.genre),
+            ("genre",  "Genre",  current_genre,  _clean_text(info.genre)),
         ]
 
         # Column header row
@@ -375,8 +471,9 @@ class MetadataFetchDialog(QDialog):
                 if pti is None:
                     continue
                 cb = QCheckBox()
-                self._add_diff_row(f"#{tr.track_no}", tr.title, pti.title, cb)
-                self._track_rows.append((tr, pti.title, cb))
+                proposed_title = _clean_text(pti.title)
+                self._add_diff_row(f"#{tr.track_no}", _clean_text(tr.title), proposed_title, cb)
+                self._track_rows.append((tr, proposed_title, cb))
 
         self._diff_vl.addStretch(1)
 
@@ -410,12 +507,21 @@ class MetadataFetchDialog(QDialog):
         self._diff_vl.addWidget(row_w)
 
     def _on_artwork_ready(self, art: bytes) -> None:
-        if self._artwork_row_w is not None:
+        if self._ignore_worker_signal("_detail_worker"):
             return
         self._artwork_bytes = art
+        if not self._diff_ready:
+            return
+        self._show_artwork_row()
+
+    def _show_artwork_row(self) -> None:
+        if self._artwork_row_w is not None:
+            return
+        if not self._artwork_bytes:
+            return
 
         pix = QPixmap()
-        pix.loadFromData(art)
+        pix.loadFromData(self._artwork_bytes)
         if pix.isNull():
             return
         thumb = pix.scaled(80, 80, Qt.KeepAspectRatio, Qt.SmoothTransformation)
@@ -455,8 +561,8 @@ class MetadataFetchDialog(QDialog):
         row_w.setLayout(row)
         self._artwork_row_w = row_w
 
-        # Insert before the trailing stretch
-        stretch_idx = self._diff_vl.count() - 1
+        # Insert before the trailing stretch.
+        stretch_idx = max(0, self._diff_vl.count() - 1)
         self._diff_vl.insertWidget(stretch_idx, row_w)
 
         # Apply current "only empty" setting
@@ -494,6 +600,8 @@ class MetadataFetchDialog(QDialog):
         if self._proposed is None:
             self.accept()
             return
+        self._apply_btn.setEnabled(False)
+        self._btns.setEnabled(False)
 
         # Merge album-level values
         merged: dict[str, str] = {}
@@ -547,6 +655,7 @@ class MetadataFetchDialog(QDialog):
 
         # Apply to each track
         failed_tags: list[str] = []
+        failed_db_updates: list[str] = []
         for tr in self._tracks:
             db_fields = dict(db_base)
             if tr.id in title_overrides:
@@ -561,30 +670,88 @@ class MetadataFetchDialog(QDialog):
                 artist=album_info.artist or tr.artist,
                 disc_number=tr.disc_no or 1,
             )
-            if not write_tags(Path(tr.path), album_info, tr_info, artwork_bytes):
+            try:
+                tags_written = write_tags(Path(tr.path), album_info, tr_info, artwork_bytes)
+            except Exception:
+                tags_written = False
+            if not tags_written:
                 failed_tags.append(tr.title or Path(tr.path).name)
                 continue
             if db_fields:
-                self._library.update_track(tr.id, db_fields)
+                try:
+                    self._library.update_track(tr.id, db_fields)
+                except Exception:
+                    failed_db_updates.append(tr.title or Path(tr.path).name)
 
-        if failed_tags:
-            shown = "\n".join(failed_tags[:6])
-            if len(failed_tags) > 6:
-                shown += f"\n...and {len(failed_tags) - 6} more"
+        if failed_tags or failed_db_updates:
+            parts: list[str] = []
+            if failed_tags:
+                shown = "\n".join(failed_tags[:6])
+                if len(failed_tags) > 6:
+                    shown += f"\n...and {len(failed_tags) - 6} more"
+                parts.append(
+                    "The library database was left unchanged for tracks whose audio tags "
+                    f"could not be written:\n\n{shown}"
+                )
+            if failed_db_updates:
+                shown = "\n".join(failed_db_updates[:6])
+                if len(failed_db_updates) > 6:
+                    shown += f"\n...and {len(failed_db_updates) - 6} more"
+                parts.append(
+                    "The audio tags were written, but the library database could not be "
+                    f"updated for:\n\n{shown}"
+                )
             QMessageBox.warning(
                 self,
-                "Some Tags Were Not Updated",
-                "The library database was left unchanged for tracks whose audio tags "
-                f"could not be written:\n\n{shown}",
+                "Some Metadata Was Not Updated",
+                "\n\n".join(parts),
             )
         self.accept()
 
+    def done(self, result: int) -> None:
+        self._shutting_down = True
+        self._stop_workers()
+        super().done(result)
+
     def closeEvent(self, event) -> None:
-        for worker in (
-            getattr(self, "_search_worker", None),
-            getattr(self, "_detail_worker", None),
-        ):
-            if worker is not None and worker.isRunning():
-                worker.quit()
-                worker.wait(2000)
+        self._shutting_down = True
+        self._stop_workers()
         super().closeEvent(event)
+
+    def _stop_workers(self) -> None:
+        self._stop_worker("_search_worker")
+        self._stop_worker("_detail_worker")
+
+    def _stop_worker(self, attr: str) -> None:
+        worker = getattr(self, attr, None)
+        if worker is None:
+            return
+        for signal_name in (
+            "disc_found",
+            "candidates",
+            "not_found",
+            "detail_ready",
+            "artwork_ready",
+            "error",
+            "finished",
+        ):
+            signal = getattr(worker, signal_name, None)
+            if signal is None:
+                continue
+            try:
+                signal.disconnect()
+            except (TypeError, RuntimeError):
+                pass
+        try:
+            worker.requestInterruption()
+            worker.quit()
+            if worker.isRunning():
+                if worker.wait(100):
+                    worker.deleteLater()
+                else:
+                    _keep_worker_until_finished(worker)
+            else:
+                worker.deleteLater()
+        except RuntimeError:
+            pass
+        setattr(self, attr, None)

@@ -1,6 +1,7 @@
 from pathlib import Path
 
-from lyon.core.library import Library
+from lyon.core import library as library_module
+from lyon.core.library import Library, SUPPORTED_AUDIO_EXTS
 
 
 def add_track(
@@ -174,3 +175,36 @@ def test_video_file_uses_folder_art_when_no_same_stem_thumbnail(tmp_path):
 
     track = next(library.all_tracks(media_type="video"))
     assert track.artwork_path == str(folder_cover)
+
+
+def test_aiff_rip_outputs_are_scannable_audio_files(tmp_path, monkeypatch):
+    class FakeInfo:
+        length = 42.0
+        bitrate = 1411000
+        sample_rate = 44100
+
+    class FakeAudio(dict):
+        info = FakeInfo()
+
+        def get(self, key):
+            return {
+                "title": ["AIFF Track"],
+                "artist": ["Artist"],
+                "album": ["Album"],
+                "tracknumber": ["1"],
+            }.get(key)
+
+    monkeypatch.setattr(library_module, "MutagenFile", lambda *_args, **_kwargs: FakeAudio())
+
+    library = Library(tmp_path / "library.db")
+    path = tmp_path / "Artist" / "Album" / "01 - AIFF Track.aiff"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"fake aiff")
+
+    assert ".aiff" in SUPPORTED_AUDIO_EXTS
+    assert ".aif" in SUPPORTED_AUDIO_EXTS
+    assert library.scan_paths([tmp_path]) == 1
+
+    track = next(library.all_tracks())
+    assert track.path == str(path)
+    assert track.media_type == "audio"

@@ -150,6 +150,20 @@ QPushButton#accent:hover {
         stop:0 #ffffff, stop:0.43 #8df5ff, stop:0.44 #2b8fff, stop:1 #1853a2);
 }
 
+/* View-mode toggle buttons (Library: List / Grid / Simple) */
+QPushButton#viewModeBtn:checked {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #2b8fff, stop:0.5 #1364c4, stop:1 #07306b);
+    color: #ffffff;
+    border: 1px solid #79fbff;
+    font-weight: 600;
+}
+QPushButton#viewModeBtn:checked:hover {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #3ba1ff, stop:0.5 #1f78d8, stop:1 #0a3f8a);
+    border: 1px solid #aafcff;
+}
+
 /* Inputs */
 QLineEdit, QComboBox, QSpinBox {
     background: #070a0f;
@@ -226,7 +240,7 @@ QFrame#transport {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
         stop:0 #1a2030, stop:1 #07090c);
     border-top: 1px solid #050607;
-    min-height: 88px;
+    min-height: 94px;
 }
 QLabel#transportThumb {
     background: #07090c;
@@ -245,8 +259,8 @@ QToolButton#transportBtn {
     background: #1b222a;
     border: 1px solid #050607;
     border-radius: 6px;
-    min-width: 42px;
-    min-height: 40px;
+    min-width: 40px;
+    min-height: 38px;
     color: #f8fdff;
 }
 QToolButton#transportBtn:hover {
@@ -268,9 +282,9 @@ QToolButton#transportBtn:disabled {
 
 /* Primary play/pause — cyan accent disc */
 QToolButton#transportPlay {
-    min-width: 62px;
-    min-height: 62px;
-    border-radius: 31px;
+    min-width: 54px;
+    min-height: 54px;
+    border-radius: 27px;
     background: qradialgradient(cx:0.4, cy:0.3, radius:0.85,
         stop:0 #8df7ff, stop:0.55 #2080e0, stop:1 #0a1a3a);
     color: #ffffff;

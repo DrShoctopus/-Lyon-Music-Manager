@@ -8,7 +8,7 @@ import threading
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QEasingCurve, QPropertyAnimation, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QFrame, QHBoxLayout, QLabel, QListWidget,
@@ -24,6 +24,9 @@ from .transport import (
     ShuffleButton, StopButton, VolumeButton,
 )
 from .widgets import ElidedLabel, StarRatingWidget, cover_pixmap, format_duration, format_ms
+
+_PAGE_MARGIN = 8
+_TRANSPORT_THUMB_SIZE = 60
 
 # ---- LRC parsing -------------------------------------------------------
 
@@ -125,12 +128,18 @@ class _LyricsPanel(QWidget):
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QFrame.NoFrame)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._scroll_animation = QPropertyAnimation(
+            self._scroll.verticalScrollBar(), b"value", self
+        )
+        self._scroll_animation.setDuration(240)
+        self._scroll_animation.setEasingCurve(QEasingCurve.OutCubic)
 
         self._container = QWidget()
         self._container.setObjectName("lyricsContainer")
         self._vl = QVBoxLayout(self._container)
         self._vl.setAlignment(Qt.AlignTop)
         self._vl.setSpacing(6)
+        self._update_center_padding()
         self._scroll.setWidget(self._container)
 
         layout = QVBoxLayout(self)
@@ -146,6 +155,7 @@ class _LyricsPanel(QWidget):
         self._current_line = -1
         self._synced = synced
         self._timestamps = [ms for ms, _ in synced]
+        self._scroll_animation.stop()
 
         if synced:
             lines_text = [t for _, t in synced]
@@ -160,6 +170,7 @@ class _LyricsPanel(QWidget):
             placeholder.setAlignment(Qt.AlignCenter)
             self._vl.addWidget(placeholder)
             self._labels.append(placeholder)
+            self._scroll.verticalScrollBar().setValue(0)
             return
 
         for text in lines_text:
@@ -169,6 +180,7 @@ class _LyricsPanel(QWidget):
             lbl.setObjectName("lyricsLine")
             self._vl.addWidget(lbl)
             self._labels.append(lbl)
+        self._scroll.verticalScrollBar().setValue(0)
 
     def clear(self) -> None:
         self.set_lyrics([], None)
@@ -186,7 +198,37 @@ class _LyricsPanel(QWidget):
         self._current_line = idx
         self._labels[idx].setObjectName("lyricsLineCurrent")
         self._repolish_label(self._labels[idx])
-        self._scroll.ensureWidgetVisible(self._labels[idx])
+        self._center_current_line(self._labels[idx])
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._update_center_padding()
+        if 0 <= self._current_line < len(self._labels):
+            QTimer.singleShot(0, self._recenter_current_line)
+
+    def _update_center_padding(self) -> None:
+        viewport_height = self._scroll.viewport().height()
+        padding = max(0, viewport_height // 2 - 24)
+        self._vl.setContentsMargins(0, padding, 0, padding)
+
+    def _center_current_line(self, label: QLabel, *, animate: bool = True) -> None:
+        self._vl.activate()
+        self._container.adjustSize()
+        viewport_height = self._scroll.viewport().height()
+        target = label.geometry().center().y() - (viewport_height // 2)
+        bar = self._scroll.verticalScrollBar()
+        target = max(bar.minimum(), min(target, bar.maximum()))
+        self._scroll_animation.stop()
+        if animate:
+            self._scroll_animation.setStartValue(bar.value())
+            self._scroll_animation.setEndValue(target)
+            self._scroll_animation.start()
+        else:
+            bar.setValue(target)
+
+    def _recenter_current_line(self) -> None:
+        if 0 <= self._current_line < len(self._labels):
+            self._center_current_line(self._labels[self._current_line], animate=False)
 
     @staticmethod
     def _repolish_label(label: QLabel) -> None:
@@ -233,7 +275,7 @@ class _InfoPanel(QWidget):
             lines.append(f"Year: {track.year}")
         if track.genre:
             lines.append(f"Genre: {track.genre}")
-        if library is not None:
+        if library is not None and track.is_library_item:
             try:
                 album_tracks = library.tracks_for_album(
                     track.display_artist, track.album or "", track.media_type
@@ -267,6 +309,7 @@ class NowPlayingView(QWidget):
 
     # Emitted from the lyrics-fetch worker thread; always delivered on the main thread.
     _lyrics_ready = Signal(int, str, str)   # task_id, synced_lrc, plain_text
+    request_edit_metadata = Signal(object)  # Track
 
     # In-memory lyrics cache cap; oldest entries evicted FIFO when exceeded.
     _LYRICS_CACHE_MAX = 256
@@ -343,19 +386,21 @@ class NowPlayingView(QWidget):
         queue_btn.setCheckable(True)
         queue_btn.setChecked(True)
         queue_btn.setObjectName("panelTab")
+        queue_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         lyrics_btn = QPushButton("Lyrics")
         lyrics_btn.setCheckable(True)
         lyrics_btn.setObjectName("panelTab")
+        lyrics_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         info_btn = QPushButton("Info")
         info_btn.setCheckable(True)
         info_btn.setObjectName("panelTab")
+        info_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         tab_row = QHBoxLayout()
         tab_row.setSpacing(4)
-        tab_row.addWidget(queue_btn)
-        tab_row.addWidget(lyrics_btn)
-        tab_row.addWidget(info_btn)
-        tab_row.addStretch(1)
+        tab_row.addWidget(queue_btn, 1)
+        tab_row.addWidget(lyrics_btn, 1)
+        tab_row.addWidget(info_btn, 1)
 
         # Queue panel
         self._queue_list = QListWidget()
@@ -397,24 +442,27 @@ class NowPlayingView(QWidget):
         info_btn.toggled.connect(_make_tab_switch(info_btn, queue_btn, lyrics_btn, 2))
 
         right_vl = QVBoxLayout()
+        right_vl.setContentsMargins(0, 0, 0, 0)
         right_vl.setSpacing(4)
         right_vl.addLayout(tab_row)
         right_vl.addWidget(self._panel_stack, 1)
 
         right_w = QWidget()
+        right_w.setObjectName("nowPlayingSidePanel")
         right_w.setLayout(right_vl)
-        right_w.setMinimumWidth(220)
-        right_w.setMaximumWidth(360)
+        right_w.setMinimumWidth(440)
+        right_w.setMaximumWidth(720)
+        right_w.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         # ---- Top-level layout
         row = QHBoxLayout()
         row.setSpacing(24)
         row.addWidget(self.cover, 0, Qt.AlignTop)
         row.addWidget(info_w, 1)
-        row.addWidget(right_w, 0)
+        row.addWidget(right_w, 1)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(28, 28, 28, 28)
+        layout.setContentsMargins(_PAGE_MARGIN, _PAGE_MARGIN, _PAGE_MARGIN, _PAGE_MARGIN)
         layout.addLayout(row, 1)
 
         # ---- Signals
@@ -478,7 +526,10 @@ class NowPlayingView(QWidget):
             self.cover.setPixmap(cover_pixmap(track.artwork_path, 280, "♪"))
             self._rating_widget.set_rating(track.rating)
             self._update_background(track.artwork_path)
-            self._load_lyrics(track)
+            if track.is_library_item:
+                self._load_lyrics(track)
+            else:
+                self._lyrics_panel.clear()
             self._info_panel.set_track(track, self._library)
         self._refresh_queue()
 
@@ -565,7 +616,11 @@ class NowPlayingView(QWidget):
     # ---- Rating --------------------------------------------------------
 
     def _on_rating_changed(self, rating: int) -> None:
-        if self._current_track is not None and self._library is not None:
+        if (
+            self._current_track is not None
+            and self._current_track.is_library_item
+            and self._library is not None
+        ):
             self._library.update_rating(self._current_track.id, rating)
             self._current_track.rating = rating
 
@@ -602,15 +657,26 @@ class NowPlayingView(QWidget):
         idx = item.data(Qt.UserRole)
         if not isinstance(idx, int):
             return
+        queue = self.player.queue()
+        track = queue[idx] if 0 <= idx < len(queue) else None
         from PySide6.QtWidgets import QMenu
         menu = QMenu(self)
         play_act = menu.addAction("Play Now")
         remove_act = menu.addAction("Remove from Queue")
-        action = menu.exec(self._queue_list.mapToGlobal(pos))
+        edit_act = None
+        if track is not None and getattr(track, "is_library_item", False):
+            menu.addSeparator()
+            edit_act = menu.addAction("Edit Metadata…")
+        try:
+            action = menu.exec(self._queue_list.mapToGlobal(pos))
+        finally:
+            menu.deleteLater()
         if action == play_act:
             self.player.play_index(idx)
         elif action == remove_act:
             self.player.remove_queue_index(idx)
+        elif edit_act is not None and action == edit_act:
+            self.request_edit_metadata.emit(track)
 
     def _on_queue_rows_moved(
         self, _parent, src_first: int, src_last: int, _dest, dest_row: int
@@ -630,6 +696,8 @@ class NowPlayingView(QWidget):
         ext = Path(track.path).suffix.lstrip(".").upper()
         if ext:
             bits.append(ext)
+        elif not track.is_library_item and track.playback_is_location:
+            bits.append("Audio CD")
         if getattr(track, "bitrate", 0):
             kbps = round(track.bitrate / 1000)
             if kbps > 0:
@@ -664,8 +732,8 @@ class TransportBar(QWidget):
 
         self.thumb = _ClickableLabel()
         self.thumb.setObjectName("transportThumb")
-        self.thumb.setFixedSize(68, 68)
-        self.thumb.setPixmap(cover_pixmap(None, 68, "♪"))
+        self.thumb.setFixedSize(_TRANSPORT_THUMB_SIZE, _TRANSPORT_THUMB_SIZE)
+        self.thumb.setPixmap(cover_pixmap(None, _TRANSPORT_THUMB_SIZE, "♪"))
         self.thumb.setCursor(Qt.PointingHandCursor)
         self.thumb.setAccessibleName("Open Now Playing")
         self.thumb.clicked.connect(self.open_now_playing.emit)
@@ -746,7 +814,7 @@ class TransportBar(QWidget):
 
         center = QVBoxLayout()
         center.setContentsMargins(0, 0, 0, 0)
-        center.setSpacing(6)
+        center.setSpacing(14)
         center.addLayout(controls)
         center.addLayout(seek_row)
 
@@ -771,7 +839,7 @@ class TransportBar(QWidget):
         vol_row.addWidget(self.vol)
 
         bar_layout = QHBoxLayout(self.bar)
-        bar_layout.setContentsMargins(18, 8, 18, 8)
+        bar_layout.setContentsMargins(14, 6, 14, 6)
         bar_layout.setSpacing(12)
         bar_layout.addWidget(self.thumb)
         bar_layout.addWidget(meta_w)
@@ -806,7 +874,7 @@ class TransportBar(QWidget):
         if track is None:
             self.title_lbl.setText("Nothing playing")
             self.artist_lbl.setText("")
-            self.thumb.setPixmap(cover_pixmap(None, 68, "♪"))
+            self.thumb.setPixmap(cover_pixmap(None, _TRANSPORT_THUMB_SIZE, "♪"))
             self.heart_btn.blockSignals(True)
             self.heart_btn.setChecked(False)
             self.heart_btn.blockSignals(False)
@@ -814,11 +882,11 @@ class TransportBar(QWidget):
         else:
             self.title_lbl.setText(track.title)
             self.artist_lbl.setText(f"{track.display_artist} - {track.album}")
-            self.thumb.setPixmap(cover_pixmap(track.artwork_path, 68, "♪"))
+            self.thumb.setPixmap(cover_pixmap(track.artwork_path, _TRANSPORT_THUMB_SIZE, "♪"))
             self.heart_btn.blockSignals(True)
             self.heart_btn.setChecked(track.liked)
             self.heart_btn.blockSignals(False)
-            self.heart_btn.setEnabled(self._library is not None)
+            self.heart_btn.setEnabled(self._library is not None and track.is_library_item)
 
     def _on_position(self, pos_ms: int, dur_ms: int) -> None:
         if not self._user_dragging:
@@ -835,7 +903,7 @@ class TransportBar(QWidget):
 
     def _on_heart_toggled(self, liked: bool) -> None:
         track = self.player.current()
-        if track is not None and self._library is not None:
+        if track is not None and track.is_library_item and self._library is not None:
             track.liked = liked
             self._library.update_liked(track.id, liked)
 

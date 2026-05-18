@@ -8,10 +8,17 @@ import types
 import pytest
 
 QtCore = pytest.importorskip("PySide6.QtCore", exc_type=ImportError)
+QtGui = pytest.importorskip("PySide6.QtGui", exc_type=ImportError)
 QtWidgets = pytest.importorskip("PySide6.QtWidgets", exc_type=ImportError)
 
 
 class _FakeMedia:
+    def __init__(self) -> None:
+        self.options: list[str] = []
+
+    def add_option(self, option: str) -> None:
+        self.options.append(option)
+
     def release(self) -> None:
         pass
 
@@ -122,11 +129,16 @@ class _FakeVlcPlayer:
 class _FakeVlcInstance:
     def __init__(self, player: _FakeVlcPlayer) -> None:
         self._player = player
+        self.location_calls: list[str] = []
 
     def media_player_new(self):
         return self._player
 
     def media_new_path(self, _path: str):
+        return _FakeMedia()
+
+    def media_new_location(self, _uri: str):
+        self.location_calls.append(_uri)
         return _FakeMedia()
 
     def release(self) -> None:
@@ -135,7 +147,8 @@ class _FakeVlcInstance:
 
 def _install_fake_vlc(monkeypatch, player: _FakeVlcPlayer) -> None:
     fake_vlc = types.ModuleType("vlc")
-    fake_vlc.Instance = lambda: _FakeVlcInstance(player)
+    fake_vlc._instance = _FakeVlcInstance(player)
+    fake_vlc.Instance = lambda: fake_vlc._instance
     fake_vlc.State = types.SimpleNamespace(Ended="Ended")
     fake_vlc.AudioEqualizer = lambda: None
     fake_vlc.MediaSlaveType = types.SimpleNamespace(Subtitle=0)
@@ -156,6 +169,27 @@ def _first_output_attach_index(operations: list[object]) -> int:
         for i, op in enumerate(operations)
         if isinstance(op, tuple) and op[0] in output_methods
     )
+
+
+def test_thumbnail_cache_not_stale_when_sidecar_appears(qapp, tmp_path):
+    from lyon.ui import video_player_view as video_mod
+
+    video_mod._THUMB_CACHE.clear()
+    video = tmp_path / "Clip.mp4"
+    video.write_bytes(b"video")
+
+    video_mod._thumb_pixmap(None, str(video), 16, 16)
+
+    thumb = QtGui.QImage(4, 4, QtGui.QImage.Format_RGB32)
+    thumb.fill(QtGui.QColor("red"))
+    assert thumb.save(str(tmp_path / "Clip.png"))
+
+    pixmap = video_mod._thumb_pixmap(None, str(video), 16, 16)
+    color = pixmap.toImage().pixelColor(8, 8)
+
+    assert color.red() > 200
+    assert color.green() < 60
+    assert color.blue() < 60
 
 
 def test_fullscreen_handoff_rebuilds_vlc_output_before_resuming(qapp, monkeypatch):
@@ -182,6 +216,27 @@ def test_fullscreen_handoff_rebuilds_vlc_output_before_resuming(qapp, monkeypatc
         assert ("audio_set_track", 2) in player.operations
         assert ("video_set_spu", 5) in player.operations
         assert player._playing is True
+    finally:
+        view.cleanup()
+        view.deleteLater()
+
+
+def test_video_view_can_load_disc_location(qapp, monkeypatch):
+    from lyon.ui import video_player_view as video_mod
+
+    player = _FakeVlcPlayer()
+    _install_fake_vlc(monkeypatch, player)
+    monkeypatch.setattr(video_mod, "_configure_vlc_runtime_path", lambda: None)
+
+    view = video_mod.VideoPlayerView()
+    try:
+        view.load_location("dvd:///D:/", label="DVD")
+
+        import sys as _sys
+        fake_vlc = _sys.modules["vlc"]
+        assert fake_vlc._instance.location_calls == ["dvd:///D:/"]
+        assert "set_media" in player.operations
+        assert "play" in player.operations
     finally:
         view.cleanup()
         view.deleteLater()

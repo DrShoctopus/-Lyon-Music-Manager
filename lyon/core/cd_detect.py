@@ -218,12 +218,6 @@ def _load_discid():
         return None
 
 
-def _read_windows_ctdb_toc(drive: str) -> str:
-    """Read the Windows LBA TOC and return a CUETools/CTDB layout string."""
-    entries = _read_windows_ctdb_entries(drive)
-    return _ctdb_toc_from_track_data(entries)
-
-
 def _read_windows_ctdb_entries(drive: str) -> list[_CtdbTocEntry]:
     if sys.platform != "win32":
         return []

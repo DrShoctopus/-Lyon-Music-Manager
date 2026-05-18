@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 
 from ..core.library import Library, Track
 from ..core.smart_playlist import spec_to_json
+from ..core.tagger import write_partial_tags
 from .metadata_fetch_dialog import MetadataFetchDialog
 from .smart_playlist_dialog import SmartPlaylistDialog
 from .widgets import StarRatingWidget, format_duration
@@ -56,7 +57,19 @@ _COL_ALBUM = 3
 _COL_TIME = 4
 _COL_RATING = 5
 _COL_FORMAT = 6
-_NUM_COLS = 7
+_COL_GROUPING = 7
+_NUM_COLS = 8
+
+_TRACK_COLUMN_DEFAULT_WIDTHS = {
+    _COL_NUM: 46,
+    _COL_TITLE: 340,
+    _COL_ARTIST: 210,
+    _COL_ALBUM: 220,
+    _COL_TIME: 72,
+    _COL_RATING: 90,
+    _COL_FORMAT: 78,
+    _COL_GROUPING: 150,
+}
 
 # Format badge colors (file extension → background hex)
 _FORMAT_COLORS: dict[str, str] = {
@@ -70,6 +83,20 @@ _FORMAT_COLORS: dict[str, str] = {
 
 
 _TRACK_MIME_TYPE = "application/x-lyon-track-ids"
+
+
+def _exec_menu(menu: QMenu, global_pos):
+    try:
+        return menu.exec(global_pos)
+    finally:
+        menu.deleteLater()
+
+
+def _exec_dialog(dialog: QDialog) -> int:
+    try:
+        return dialog.exec()
+    finally:
+        dialog.deleteLater()
 
 
 class _TrackListModel(QStandardItemModel):
@@ -234,11 +261,11 @@ class LibraryView(QWidget):
     play_tracks = Signal(list, int)        # (tracks, start_index)
     enqueue_tracks = Signal(list)
     status_message = Signal(str)
-    request_rescan = Signal()
     request_add_folder = Signal()
     request_youtube_search = Signal(str)
     request_open_settings = Signal()
     request_diagnostics = Signal()
+    request_scan_replaygain = Signal(list)  # list[Track]
 
     def __init__(self, library: Library, parent: QWidget | None = None):
         super().__init__(parent)
@@ -260,28 +287,31 @@ class LibraryView(QWidget):
         self._search_timer.timeout.connect(self._do_search)
         self.search.textChanged.connect(self._on_search)
 
-        self.play_btn = QPushButton("Play")
-        self.play_btn.clicked.connect(self._play_selected)
         self.enqueue_btn = QPushButton("Enqueue")
         self.enqueue_btn.clicked.connect(self._enqueue_selected)
-        rescan_btn = QPushButton("Rescan")
-        rescan_btn.clicked.connect(self.request_rescan.emit)
         self._show_videos_cb = QCheckBox("Show Videos")
         self._show_videos_cb.setChecked(False)
         self._show_videos_cb.toggled.connect(self._on_show_videos_toggled)
+        self._list_mode_btn = QPushButton("▤ List")
+        self._list_mode_btn.setObjectName("viewModeBtn")
+        self._list_mode_btn.setCheckable(True)
+        self._list_mode_btn.setChecked(True)
+        self._list_mode_btn.setToolTip("Default 4-column library view")
+        self._list_mode_btn.toggled.connect(self._on_list_mode_toggled)
         self._grid_mode_btn = QPushButton("⊞ Grid")
+        self._grid_mode_btn.setObjectName("viewModeBtn")
         self._grid_mode_btn.setCheckable(True)
         self._grid_mode_btn.setToolTip("Album grid view")
         self._grid_mode_btn.toggled.connect(self._on_view_mode_toggled)
         self._simple_mode_btn = QPushButton("≡ Simple")
+        self._simple_mode_btn.setObjectName("viewModeBtn")
         self._simple_mode_btn.setCheckable(True)
         self._simple_mode_btn.setToolTip("Simplified 3-column view")
         self._simple_mode_btn.toggled.connect(self._on_simple_mode_toggled)
         top.addWidget(self.search, 1)
         top.addWidget(self._show_videos_cb)
-        top.addWidget(self.play_btn)
         top.addWidget(self.enqueue_btn)
-        top.addWidget(rescan_btn)
+        top.addWidget(self._list_mode_btn)
         top.addWidget(self._grid_mode_btn)
         top.addWidget(self._simple_mode_btn)
 
@@ -323,7 +353,7 @@ class LibraryView(QWidget):
 
         self.tracks_model = _TrackListModel(0, _NUM_COLS)
         self.tracks_model.setHorizontalHeaderLabels(
-            ["#", "Title", "Artist", "Album", "Time", "Rating", "Format"]
+            ["#", "Title", "Artist", "Album", "Time", "Rating", "Format", "Group"]
         )
         # Sort using a dedicated UserRole key so # / Time / Rating sort numerically and
         # text columns collate case-insensitively.
@@ -339,19 +369,11 @@ class LibraryView(QWidget):
 
         header = self.tracks.horizontalHeader()
         header.setStretchLastSection(False)
-        header.setSectionResizeMode(_COL_NUM,    QHeaderView.Fixed)
-        header.setSectionResizeMode(_COL_TITLE,  QHeaderView.Stretch)
-        header.setSectionResizeMode(_COL_ARTIST, QHeaderView.Interactive)
-        header.setSectionResizeMode(_COL_ALBUM,  QHeaderView.Interactive)
-        header.setSectionResizeMode(_COL_TIME,   QHeaderView.Fixed)
-        header.setSectionResizeMode(_COL_RATING, QHeaderView.Fixed)
-        header.setSectionResizeMode(_COL_FORMAT, QHeaderView.Fixed)
-        self.tracks.setColumnWidth(_COL_NUM,    50)
-        self.tracks.setColumnWidth(_COL_ARTIST, 180)
-        self.tracks.setColumnWidth(_COL_ALBUM,  200)
-        self.tracks.setColumnWidth(_COL_TIME,   70)
-        self.tracks.setColumnWidth(_COL_RATING, 90)
-        self.tracks.setColumnWidth(_COL_FORMAT, 62)
+        header.setMinimumSectionSize(38)
+        for col in range(_NUM_COLS):
+            header.setSectionResizeMode(col, QHeaderView.Interactive)
+        for col, width in _TRACK_COLUMN_DEFAULT_WIDTHS.items():
+            self.tracks.setColumnWidth(col, width)
         header.setContextMenuPolicy(Qt.CustomContextMenu)
         header.customContextMenuRequested.connect(self._show_header_context_menu)
         self.tracks.setDragEnabled(True)
@@ -745,42 +767,61 @@ class LibraryView(QWidget):
         self._current_tracks = tracks
         self._populate_tracks(tracks)
 
-    # ------------------------------------------------------------------ grid view
+    # ------------------------------------------------------------------ view modes
+    def _set_view_mode_checked(self, active: QPushButton) -> None:
+        """Make the three view-mode buttons act like a radio group."""
+        for btn in (self._list_mode_btn, self._grid_mode_btn, self._simple_mode_btn):
+            if btn is active:
+                continue
+            btn.blockSignals(True)
+            btn.setChecked(False)
+            btn.blockSignals(False)
+        if not active.isChecked():
+            active.blockSignals(True)
+            active.setChecked(True)
+            active.blockSignals(False)
+
+    def _on_list_mode_toggled(self, checked: bool) -> None:
+        if not checked:
+            # Don't allow toggling off via re-click — only switching to another view does that.
+            if not (self._grid_mode_btn.isChecked() or self._simple_mode_btn.isChecked()):
+                self._list_mode_btn.blockSignals(True)
+                self._list_mode_btn.setChecked(True)
+                self._list_mode_btn.blockSignals(False)
+            return
+        self._set_view_mode_checked(self._list_mode_btn)
+        has_tracks = bool(self._library_all_artists(self._media_type_filter))
+        self._browser_stack.setCurrentIndex(1 if has_tracks else 0)
+
     def _on_view_mode_toggled(self, checked: bool) -> None:
-        if checked:
-            if self._browser_stack.currentIndex() == 0:
-                # Empty library — revert toggle
+        if not checked:
+            if not (self._list_mode_btn.isChecked() or self._simple_mode_btn.isChecked()):
                 self._grid_mode_btn.blockSignals(True)
-                self._grid_mode_btn.setChecked(False)
+                self._grid_mode_btn.setChecked(True)
                 self._grid_mode_btn.blockSignals(False)
-                return
-            self._simple_mode_btn.blockSignals(True)
-            self._simple_mode_btn.setChecked(False)
-            self._simple_mode_btn.blockSignals(False)
-            self._browser_stack.setCurrentIndex(2)
-            self._refresh_grid_albums()
-        else:
-            if not self._simple_mode_btn.isChecked():
-                has_tracks = bool(self._library_all_artists(self._media_type_filter))
-                self._browser_stack.setCurrentIndex(1 if has_tracks else 0)
+            return
+        if self._browser_stack.currentIndex() == 0:
+            # Empty library — revert toggle back to list
+            self._set_view_mode_checked(self._list_mode_btn)
+            return
+        self._set_view_mode_checked(self._grid_mode_btn)
+        self._browser_stack.setCurrentIndex(2)
+        self._refresh_grid_albums()
 
     def _on_simple_mode_toggled(self, checked: bool) -> None:
-        if checked:
-            if self._browser_stack.currentIndex() == 0:
-                # Empty library — revert toggle
+        if not checked:
+            if not (self._list_mode_btn.isChecked() or self._grid_mode_btn.isChecked()):
                 self._simple_mode_btn.blockSignals(True)
-                self._simple_mode_btn.setChecked(False)
+                self._simple_mode_btn.setChecked(True)
                 self._simple_mode_btn.blockSignals(False)
-                return
-            self._grid_mode_btn.blockSignals(True)
-            self._grid_mode_btn.setChecked(False)
-            self._grid_mode_btn.blockSignals(False)
-            self._browser_stack.setCurrentIndex(3)
-            self._sv_refresh_artists()
-        else:
-            if not self._grid_mode_btn.isChecked():
-                has_tracks = bool(self._library_all_artists(self._media_type_filter))
-                self._browser_stack.setCurrentIndex(1 if has_tracks else 0)
+            return
+        if self._browser_stack.currentIndex() == 0:
+            # Empty library — revert toggle back to list
+            self._set_view_mode_checked(self._list_mode_btn)
+            return
+        self._set_view_mode_checked(self._simple_mode_btn)
+        self._browser_stack.setCurrentIndex(3)
+        self._sv_refresh_artists()
 
     def _refresh_grid_albums(self) -> None:
         """Populate the album art grid for the selected genre."""
@@ -820,9 +861,7 @@ class LibraryView(QWidget):
             return
         artist, album = data
         # Switch back to list mode and navigate to the album
-        self._grid_mode_btn.blockSignals(True)
-        self._grid_mode_btn.setChecked(False)
-        self._grid_mode_btn.blockSignals(False)
+        self._set_view_mode_checked(self._list_mode_btn)
         self._browser_stack.setCurrentIndex(1)
         self._navigate_to_album(artist, album)
 
@@ -887,6 +926,7 @@ class LibraryView(QWidget):
             it = QStandardItem(f"{num_prefix}{tr.title}  [{duration}]")
             it.setData(tr, _TRACK_REF_ROLE)
             it.setEditable(False)
+            it.setToolTip(self._track_tooltip(tr, duration))
             self._sv_tracks_model.appendRow(it)
 
     def _sv_on_track_double(self, index: QModelIndex) -> None:
@@ -982,17 +1022,36 @@ class LibraryView(QWidget):
 
     def _show_header_context_menu(self, pos) -> None:
         menu = QMenu(self)
-        rating_act = menu.addAction("Rating")
-        rating_act.setCheckable(True)
-        rating_act.setChecked(not self.tracks.isColumnHidden(_COL_RATING))
-        format_act = menu.addAction("Format")
-        format_act.setCheckable(True)
-        format_act.setChecked(not self.tracks.isColumnHidden(_COL_FORMAT))
-        action = menu.exec(self.tracks.horizontalHeader().mapToGlobal(pos))
-        if action == rating_act:
-            self.tracks.setColumnHidden(_COL_RATING, not rating_act.isChecked())
-        elif action == format_act:
-            self.tracks.setColumnHidden(_COL_FORMAT, not format_act.isChecked())
+        # All toggleable columns (Title is always visible — it's the row identifier).
+        toggleable = [
+            (_COL_NUM,      "#"),
+            (_COL_ARTIST,   "Artist"),
+            (_COL_ALBUM,    "Album"),
+            (_COL_TIME,     "Time"),
+            (_COL_RATING,   "Rating"),
+            (_COL_FORMAT,   "Format"),
+            (_COL_GROUPING, "Group"),
+        ]
+        col_actions: list[tuple[int, "QAction"]] = []
+        for col, label in toggleable:
+            act = menu.addAction(label)
+            act.setCheckable(True)
+            act.setChecked(not self.tracks.isColumnHidden(col))
+            col_actions.append((col, act))
+        menu.addSeparator()
+        show_all_act = menu.addAction("Show All Columns")
+        action = _exec_menu(menu, self.tracks.horizontalHeader().mapToGlobal(pos))
+        if action is None:
+            return
+        if action is show_all_act:
+            for col, _ in toggleable:
+                self.tracks.setColumnHidden(col, False)
+            self.tracks.setColumnHidden(_COL_TITLE, False)
+            return
+        for col, act in col_actions:
+            if action is act:
+                self.tracks.setColumnHidden(col, not act.isChecked())
+                return
 
     def _refresh_tracks(self) -> None:
         ai = self.artists.currentIndex()
@@ -1047,11 +1106,14 @@ class LibraryView(QWidget):
             format_item = QStandardItem(fmt)
             format_item.setData(fmt.lower(), Qt.UserRole)
 
-            for it in (n_item, title_item, artist_item, album_item, time_item, rating_item, format_item):
+            grouping_item = QStandardItem(tr.grouping or "")
+            grouping_item.setData((tr.grouping or "").lower(), Qt.UserRole)
+
+            for it in (n_item, title_item, artist_item, album_item, time_item, rating_item, format_item, grouping_item):
                 it.setEditable(False)
                 it.setToolTip(tooltip)
             self.tracks_model.appendRow(
-                [n_item, title_item, artist_item, album_item, time_item, rating_item, format_item]
+                [n_item, title_item, artist_item, album_item, time_item, rating_item, format_item, grouping_item]
             )
         self.tracks.setSortingEnabled(True)
         self._refresh_playing_indicator()
@@ -1144,23 +1206,34 @@ class LibraryView(QWidget):
         ai = self.artists.currentIndex()
         if not ai.isValid():
             return
-        artist = ai.data(Qt.DisplayRole)
-        album = idx.data(Qt.DisplayRole)
+        artist = str(ai.data(Qt.DisplayRole) or "").strip()
+        album = str(idx.data(Qt.DisplayRole) or "").strip()
+        if not artist or not album:
+            return
 
         menu = QMenu(self)
         fetch_act = menu.addAction("Fetch Metadata…")
-        action = menu.exec(self.albums.viewport().mapToGlobal(pos))
+        action = _exec_menu(menu, self.albums.viewport().mapToGlobal(pos))
 
         if action == fetch_act:
             self._fetch_album_metadata(artist, album)
 
     def _fetch_album_metadata(self, artist: str, album: str) -> None:
-        tracks = self.library.tracks_for_album(artist, album, "audio")
+        try:
+            tracks = self.library.tracks_for_album(artist, album, "audio")
+        except Exception:
+            self.status_message.emit("Could not load tracks for metadata fetch.")
+            return
         if not tracks:
             self.status_message.emit("No audio tracks found for this album.")
             return
-        dlg = MetadataFetchDialog(tracks, artist, album, self.library, self)
-        if dlg.exec() == QDialog.Accepted:
+        try:
+            dlg = MetadataFetchDialog(tracks, artist, album, self.library, self)
+            result = _exec_dialog(dlg)
+        except Exception:
+            self.status_message.emit("Metadata fetch could not be started.")
+            return
+        if result == QDialog.Accepted:
             self.status_message.emit(f"Metadata updated for \"{album}\".")
             self.refresh()
 
@@ -1223,9 +1296,10 @@ class LibraryView(QWidget):
         menu.addSeparator()
         open_folder = menu.addAction("Open Containing Folder")
         edit_metadata = menu.addAction("Edit Metadata")
+        scan_rg = menu.addAction("Scan ReplayGain…")
         youtube_search = menu.addAction("Search YouTube for Artist, Album, and Track")
         properties = menu.addAction("Properties")
-        action = menu.exec(global_pos)
+        action = _exec_menu(menu, global_pos)
 
         if action is None:
             return
@@ -1244,6 +1318,8 @@ class LibraryView(QWidget):
                 self._show_batch_metadata_dialog(selected)
             else:
                 self._show_edit_metadata_dialog(primary_track)
+        elif action == scan_rg:
+            self.request_scan_replaygain.emit(list(selected))
         elif action == properties:
             self._show_track_properties(primary_track)
         elif action == youtube_search:
@@ -1278,7 +1354,7 @@ class LibraryView(QWidget):
         layout.addLayout(form)
         layout.addWidget(buttons)
         dialog.resize(520, 260)
-        dialog.exec()
+        _exec_dialog(dialog)
 
     def _show_edit_metadata_dialog(self, track: Track) -> None:
         dialog = QDialog(self)
@@ -1292,6 +1368,7 @@ class LibraryView(QWidget):
         album_artist_edit = QLineEdit(track.album_artist)
         album_edit = QLineEdit(track.album)
         genre_edit = QLineEdit(track.genre)
+        grouping_edit = QLineEdit(getattr(track, "grouping", "") or "")
 
         track_no_spin = QSpinBox()
         track_no_spin.setRange(0, 9999)
@@ -1313,6 +1390,7 @@ class LibraryView(QWidget):
         form.addRow("Disc #:", disc_no_spin)
         form.addRow("Year:", year_spin)
         form.addRow("Genre:", genre_edit)
+        form.addRow("Grouping:", grouping_edit)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
         buttons.accepted.connect(dialog.accept)
@@ -1320,12 +1398,12 @@ class LibraryView(QWidget):
 
         layout.addLayout(form)
         layout.addWidget(buttons)
-        dialog.resize(480, 320)
+        dialog.resize(480, 340)
 
-        if dialog.exec() != QDialog.Accepted:
+        if _exec_dialog(dialog) != QDialog.Accepted:
             return
 
-        self.library.update_track(track.id, {
+        fields = {
             "title": title_edit.text().strip(),
             "artist": artist_edit.text().strip(),
             "album_artist": album_artist_edit.text().strip(),
@@ -1334,9 +1412,19 @@ class LibraryView(QWidget):
             "disc_no": disc_no_spin.value(),
             "year": year_spin.value(),
             "genre": genre_edit.text().strip(),
-        })
-        self.status_message.emit(f"Metadata saved for \"{title_edit.text().strip()}\"")
+            "grouping": grouping_edit.text().strip(),
+        }
+        self.library.update_track(track.id, fields)
+        track_path = Path(track.path)
+        write_failed = track_path.is_file() and not write_partial_tags(track_path, fields)
+        msg = f"Metadata saved for \"{fields['title']}\""
+        if write_failed:
+            msg += " (file tags could not be written to disk.)"
+        self.status_message.emit(msg)
         self.refresh()
+
+    def edit_track_metadata(self, track: Track) -> None:
+        self._show_edit_metadata_dialog(track)
 
     @staticmethod
     def _youtube_query_for_track(track: Track) -> str:
@@ -1358,10 +1446,8 @@ class LibraryView(QWidget):
             return
         self._current_tracks = self.library.search(q, self._media_type_filter)
         self._populate_tracks(self._current_tracks)
-        if self._browser_stack.currentIndex() == 3:
-            self._simple_mode_btn.blockSignals(True)
-            self._simple_mode_btn.setChecked(False)
-            self._simple_mode_btn.blockSignals(False)
+        if self._browser_stack.currentIndex() != 1:
+            self._set_view_mode_checked(self._list_mode_btn)
         self._browser_stack.setCurrentIndex(1)
 
     # ------------------------------------------------------------------ playback
@@ -1499,12 +1585,7 @@ class LibraryView(QWidget):
             self.search.blockSignals(False)
         # Ensure list mode is active
         if self._browser_stack.currentIndex() != 1:
-            self._grid_mode_btn.blockSignals(True)
-            self._grid_mode_btn.setChecked(False)
-            self._grid_mode_btn.blockSignals(False)
-            self._simple_mode_btn.blockSignals(True)
-            self._simple_mode_btn.setChecked(False)
-            self._simple_mode_btn.blockSignals(False)
+            self._set_view_mode_checked(self._list_mode_btn)
             has_tracks = bool(self._library_all_artists(self._media_type_filter))
             self._browser_stack.setCurrentIndex(1 if has_tracks else 0)
         self._navigate_to_album(track.display_artist, track.album or "Unknown Album")
@@ -1573,7 +1654,7 @@ class LibraryView(QWidget):
         layout.addWidget(buttons)
         dialog.resize(480, 300)
 
-        if dialog.exec() != QDialog.Accepted:
+        if _exec_dialog(dialog) != QDialog.Accepted:
             return
 
         fields: dict = {}
@@ -1590,10 +1671,17 @@ class LibraryView(QWidget):
 
         if not fields:
             return
+        failed = 0
         for t in tracks:
             self.library.update_track(t.id, fields)
+            if Path(t.path).is_file():
+                if not write_partial_tags(Path(t.path), fields):
+                    failed += 1
         n = len(tracks)
-        self.status_message.emit(f"Updated metadata for {n} track{'s' if n != 1 else ''}.")
+        msg = f"Updated metadata for {n} track{'s' if n != 1 else ''}."
+        if failed:
+            msg += f" ({failed} file{'s' if failed != 1 else ''} could not be written to disk.)"
+        self.status_message.emit(msg)
         self.refresh()
 
     # ------------------------------------------------------------------ playlists
@@ -1646,12 +1734,7 @@ class LibraryView(QWidget):
         self._current_tracks = tracks
         self._populate_tracks(tracks)
         if self._browser_stack.currentIndex() in (2, 3):
-            self._grid_mode_btn.blockSignals(True)
-            self._grid_mode_btn.setChecked(False)
-            self._grid_mode_btn.blockSignals(False)
-            self._simple_mode_btn.blockSignals(True)
-            self._simple_mode_btn.setChecked(False)
-            self._simple_mode_btn.blockSignals(False)
+            self._set_view_mode_checked(self._list_mode_btn)
             self._browser_stack.setCurrentIndex(1)
         return True
 
@@ -1673,12 +1756,7 @@ class LibraryView(QWidget):
         self._populate_tracks(tracks)
         # Ensure list-mode browser is showing
         if self._browser_stack.currentIndex() in (2, 3):
-            self._grid_mode_btn.blockSignals(True)
-            self._grid_mode_btn.setChecked(False)
-            self._grid_mode_btn.blockSignals(False)
-            self._simple_mode_btn.blockSignals(True)
-            self._simple_mode_btn.setChecked(False)
-            self._simple_mode_btn.blockSignals(False)
+            self._set_view_mode_checked(self._list_mode_btn)
             self._browser_stack.setCurrentIndex(1)
 
     def _on_playlist_tracks_dropped(self, playlist_id: int, track_ids: list) -> None:
@@ -1707,7 +1785,7 @@ class LibraryView(QWidget):
                 export_act = menu.addAction("Export as M3U…")
                 menu.addSeparator()
                 remove_act = menu.addAction("Delete Playlist")
-        action = menu.exec(self.playlists_view.mapToGlobal(pos))
+        action = _exec_menu(menu, self.playlists_view.mapToGlobal(pos))
         if action is None:
             return
         if action == new_act:
@@ -1751,7 +1829,7 @@ class LibraryView(QWidget):
 
     def _new_smart_playlist_dialog(self) -> None:
         dlg = SmartPlaylistDialog(parent=self)
-        if not dlg.exec() or dlg.spec is None:
+        if not _exec_dialog(dlg) or dlg.spec is None:
             return
         try:
             pl_id = self.library.create_smart_playlist(dlg.playlist_name, spec_to_json(dlg.spec))
@@ -1768,7 +1846,7 @@ class LibraryView(QWidget):
         self, playlist_id: int, pl_name: str, rules_json: str
     ) -> None:
         dlg = SmartPlaylistDialog(name=pl_name, rules_json=rules_json, parent=self)
-        if not dlg.exec() or dlg.spec is None:
+        if not _exec_dialog(dlg) or dlg.spec is None:
             return
         new_rules = spec_to_json(dlg.spec)
         try:

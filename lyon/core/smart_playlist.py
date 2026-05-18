@@ -100,6 +100,8 @@ def spec_from_json(s: str) -> SmartPlaylistSpec:
         data = json.loads(s)
     except Exception:
         return SmartPlaylistSpec()
+    if not isinstance(data, dict):
+        return SmartPlaylistSpec()
     rules = [
         Rule(
             field=str(r.get("field", "title")),
@@ -111,11 +113,11 @@ def spec_from_json(s: str) -> SmartPlaylistSpec:
         if isinstance(r, dict)
     ]
     return SmartPlaylistSpec(
-        match=str(data.get("match") or "all"),
+        match="any" if str(data.get("match") or "").casefold() == "any" else "all",
         rules=rules,
-        limit=max(0, int(data.get("limit") or 0)),
+        limit=_safe_nonnegative_int(data.get("limit"), 0),
         order_by=str(data.get("order_by") or "title"),
-        order_desc=bool(data.get("order_desc", False)),
+        order_desc=_truthy(data.get("order_desc", False)),
     )
 
 
@@ -153,14 +155,15 @@ def _rule_to_sql(
     col: str, op: str, value: str, value2: str, vtype: str
 ) -> tuple[str, list]:
     if vtype == "text":
+        escaped = _sql_like_value(value)
         if op == "contains":
-            return f"{col} LIKE ?", [f"%{value}%"]
+            return f"{col} LIKE ? ESCAPE '\\'", [f"%{escaped}%"]
         if op == "not_contains":
-            return f"{col} NOT LIKE ?", [f"%{value}%"]
+            return f"{col} NOT LIKE ? ESCAPE '\\'", [f"%{escaped}%"]
         if op == "starts_with":
-            return f"{col} LIKE ?", [f"{value}%"]
+            return f"{col} LIKE ? ESCAPE '\\'", [f"{escaped}%"]
         if op == "ends_with":
-            return f"{col} LIKE ?", [f"%{value}"]
+            return f"{col} LIKE ? ESCAPE '\\'", [f"%{escaped}"]
         if op == "is":
             return f"lower({col}) = lower(?)", [value]
         if op == "is_not":
@@ -196,3 +199,20 @@ def _rule_to_sql(
             return f"{col} = ?", [bv]
 
     return "", []
+
+
+def _safe_nonnegative_int(value: object, default: int) -> int:
+    try:
+        return max(0, int(value or default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _truthy(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().casefold() in {"1", "true", "yes", "on"}
+
+
+def _sql_like_value(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")

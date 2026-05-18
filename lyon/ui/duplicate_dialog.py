@@ -106,7 +106,10 @@ class DuplicateDialog(QDialog):
         menu = QMenu(self)
         open_act = menu.addAction("Open Containing Folder")
         remove_act = menu.addAction("Remove from Library")
-        action = menu.exec(self._tree.mapToGlobal(pos))
+        try:
+            action = menu.exec(self._tree.mapToGlobal(pos))
+        finally:
+            menu.deleteLater()
         if action == open_act:
             folder = Path(track.path).parent
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))

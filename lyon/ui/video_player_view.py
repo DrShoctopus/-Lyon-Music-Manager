@@ -58,7 +58,7 @@ _DEFAULT_RATE_INDEX = 3  # 1×
 _SIDEBAR_WIDTH = 234
 _CATALOG_BATCH_SIZE = 40
 _THUMB_CACHE_MAX = 512
-_THUMB_CACHE: dict[tuple[str | None, str, int, int], QPixmap] = {}
+_THUMB_CACHE: dict[tuple[Any, ...], QPixmap] = {}
 
 
 def _track_id_and_name(desc: Any) -> tuple[int, str]:
@@ -85,11 +85,6 @@ def _scale_to_fill(pm: QPixmap, w: int, h: int) -> QPixmap:
 def _thumb_pixmap(artwork_path: str | None, file_path: str = "",
                   w: int = 96, h: int = 54) -> QPixmap:
     """Return a w×h thumbnail, also checking for yt-dlp side-car images."""
-    cache_key = (artwork_path, file_path, w, h)
-    cached = _THUMB_CACHE.get(cache_key)
-    if cached is not None:
-        return QPixmap(cached)
-
     sources: list[str] = []
     if artwork_path:
         sources.append(artwork_path)
@@ -102,6 +97,17 @@ def _thumb_pixmap(artwork_path: str | None, file_path: str = "",
             if p.exists():
                 sources.append(str(p))
                 break
+    cache_key = (
+        artwork_path,
+        file_path,
+        w,
+        h,
+        tuple(_thumb_source_state(s) for s in sources),
+    )
+    cached = _THUMB_CACHE.get(cache_key)
+    if cached is not None:
+        return QPixmap(cached)
+
     for src in sources:
         pm = QPixmap(src)
         if not pm.isNull():
@@ -114,7 +120,15 @@ def _thumb_pixmap(artwork_path: str | None, file_path: str = "",
     return QPixmap(out)
 
 
-def _cache_thumb(key: tuple[str | None, str, int, int], pixmap: QPixmap) -> None:
+def _thumb_source_state(src: str) -> tuple[str, int, int]:
+    try:
+        stat = Path(src).stat()
+    except OSError:
+        return (src, -1, -1)
+    return (src, int(stat.st_mtime_ns), int(stat.st_size))
+
+
+def _cache_thumb(key: tuple[Any, ...], pixmap: QPixmap) -> None:
     if len(_THUMB_CACHE) >= _THUMB_CACHE_MAX:
         _THUMB_CACHE.pop(next(iter(_THUMB_CACHE)))
     _THUMB_CACHE[key] = QPixmap(pixmap)
@@ -315,6 +329,7 @@ class VideoPlayerView(QWidget):
         self._instance: Any = None
         self._player: Any = None
         self._available = False
+        self._unavailable_reason = ""
         self._user_dragging = False
         self._current_path = ""
         self._fs_window: _FullscreenWindow | None = None
@@ -348,6 +363,7 @@ class VideoPlayerView(QWidget):
             )
             self._available = True
         except Exception as exc:
+            self._unavailable_reason = str(exc)
             LOG.warning("Video player: libVLC unavailable: %s", exc)
 
         if self._available:
@@ -909,18 +925,59 @@ class VideoPlayerView(QWidget):
             self._load_path(path)
 
     def _load_path(self, path: str) -> None:
+        self._load_media_source(path, label=Path(path).name)
+
+    def load_location(
+        self,
+        uri: str,
+        *,
+        label: str | None = None,
+        options: tuple[str, ...] = (),
+    ) -> None:
+        """Play a VLC location/MRL such as dvd:///D:/ or vcd:///D:/."""
+        self._load_media_source(
+            uri,
+            is_location=True,
+            options=options,
+            label=label or uri,
+        )
+
+    def playback_available(self) -> bool:
+        """Return True when the VLC video player can accept playback sources."""
+        return bool(self._available and self._player is not None)
+
+    def unavailable_reason(self) -> str:
+        return self._unavailable_reason
+
+    def _load_media_source(
+        self,
+        source: str,
+        *,
+        is_location: bool = False,
+        options: tuple[str, ...] = (),
+        label: str | None = None,
+    ) -> None:
         self._video_stack.setCurrentIndex(1)
         if not self._surface_attached:
             self._attach_vlc_to(self._surface)
             self._surface_attached = True
-        self._current_path = path
-        media = self._instance.media_new_path(path)
+        self._current_path = source
+        media = (
+            self._instance.media_new_location(source)
+            if is_location
+            else self._instance.media_new_path(source)
+        )
+        for option in options:
+            try:
+                media.add_option(option)
+            except Exception as exc:
+                LOG.debug("Could not add VLC video media option %s: %s", option, exc)
         self._player.set_media(media)
         media.release()  # drop our reference; VLC holds its own via set_media
         self._player.audio_set_volume(self._vol_slider.value())
         if self._eq_controller is not None:
             self._eq_controller.attach_to_player()
-        self._info_lbl.setText(Path(path).name)
+        self._info_lbl.setText(label or source)
         self._set_controls_enabled(True)
         self._player.play()
         self._play_btn.set_playing(True)
@@ -945,6 +1002,8 @@ class VideoPlayerView(QWidget):
             self._play_btn.set_playing(True)
 
     def _stop(self) -> None:
+        if not self._available or self._player is None:
+            return
         self._player.stop()
         self._timer.stop()
         self._play_btn.set_playing(False)
@@ -1110,8 +1169,10 @@ class VideoPlayerView(QWidget):
         if was_playing:
             self._player.pause()
 
-        self._fs_window.close()
+        fs_window = self._fs_window
         self._fs_window = None
+        fs_window.close()
+        fs_window.deleteLater()
         self._fullscreen_btn.setText("Fullscreen")
         self._video_stack.setCurrentIndex(1)
 
@@ -1198,11 +1259,15 @@ class VideoPlayerView(QWidget):
         """Release native libVLC resources. Called from MainWindow.closeEvent."""
         if not self._available:
             return
+        self._eq_fade_timer.stop()
+        self._catalog_build_timer.stop()
         if hasattr(self, "_timer"):
             self._timer.stop()
         if self._fs_window is not None:
-            self._fs_window.close()
+            fs_window = self._fs_window
             self._fs_window = None
+            fs_window.close()
+            fs_window.deleteLater()
         if self._osd is not None:
             self._osd.hide()
             self._osd.deleteLater()
@@ -1225,6 +1290,10 @@ class VideoPlayerView(QWidget):
         if self._available and self._player and self._player.is_playing():
             self._player.pause()
             self._play_btn.set_playing(False)
+
+    def stop_playback(self) -> None:
+        """Stop video playback when another playback surface takes over."""
+        self._stop()
 
     def showEvent(self, event) -> None:
         super().showEvent(event)

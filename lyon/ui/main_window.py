@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import os
 
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QAction, QDragEnterEvent, QDropEvent
@@ -15,12 +16,22 @@ from PySide6.QtWidgets import (
 from .. import __app_name__, __version__
 from ..core import metadata
 from ..core.cd_detect import close_dll_handles as close_cd_dll_handles
-from ..core.library import Library
+from ..core.library import Library, ScanSummary
+from ..core.library_watcher import (
+    LibraryFolderWatcher,
+    LibraryIndexThread,
+    WatchBatch,
+    coalesce_batch,
+)
 from ..core.playback_backend import close_dll_handles
 from ..core.player import Player
+from ..core.replaygain import ReplayGainScanner
+from ..core.ripper import find_ffmpeg
 from ..core.settings import Settings
+from .about import COPYRIGHT_NOTICE, THIRD_PARTY_NOTICE
 from .branding import app_icon
 from .diagnostics_dialog import DiagnosticsDialog
+from .disc_view import DiscView
 from .duplicate_dialog import DuplicateDialog
 from .equalizer_dialog import EqualizerDialog
 from .first_run_dialog import FirstRunDialog
@@ -36,7 +47,7 @@ from .youtube_view import YouTubeView
 
 
 class _LibraryScanThread(QThread):
-    finished_with = Signal(int, int, str)  # (new_tracks, removed_tracks, label)
+    finished_with = Signal(int, int, int, str)  # (new_tracks, updated_tracks, removed_tracks, label)
     failed_with = Signal(str, str)         # (label, error)
 
     def __init__(self, library: Library, roots: list[str], label: str, prune: bool = False, parent=None):
@@ -55,20 +66,26 @@ class _LibraryScanThread(QThread):
     def run(self) -> None:
         try:
             should_cancel = lambda: self._cancel or self.isInterruptionRequested()
-            removed = self.library.remove_missing() if self.prune and not should_cancel() else 0
-            n = (
-                self.library.scan_paths(self.roots, should_cancel=should_cancel)
-                if not should_cancel()
+            summary = ScanSummary()
+            summary.removed = (
+                self.library.remove_missing_under_existing_roots(self.roots)
+                if self.prune and not should_cancel()
                 else 0
             )
-            self.finished_with.emit(n, removed, self.label)
+            scan_summary = (
+                self.library.scan_paths_summary(self.roots, should_cancel=should_cancel)
+                if not should_cancel()
+                else ScanSummary()
+            )
+            summary.merge(scan_summary)
+            self.finished_with.emit(summary.added, summary.updated, summary.removed, self.label)
         except Exception as exc:  # pragma: no cover - defensive worker boundary
             self.failed_with.emit(self.label, str(exc))
 
 
 class MainWindow(QMainWindow):
     # Tab display order — index matches the QStackedWidget page index.
-    _TAB_ORDER = ("Library", "Now Playing", "Video", "Rip", "YouTube")
+    _TAB_ORDER = ("Library", "Now Playing", "Video", "Disc", "Rip", "YouTube")
 
     def __init__(self):
         super().__init__()
@@ -78,7 +95,22 @@ class MainWindow(QMainWindow):
         self.player.set_volume(self.settings.last_volume)
         self.player.set_equalizer(self.settings.equalizer_enabled, self.settings.equalizer_bands, self.settings.equalizer_preamp)
         self.player.set_crossfade(self.settings.crossfade_seconds)
+        self.player.set_replaygain(
+            self.settings.replaygain_mode,
+            self.settings.replaygain_preamp_db,
+            self.settings.replaygain_prevent_clipping,
+        )
+        self.player.set_audio_device(
+            self.settings.audio_output,
+            self.settings.audio_output_device,
+        )
+        self.player.set_gapless(self.settings.gapless_playback)
         self._scan_thread: _LibraryScanThread | None = None
+        self._rg_scanner: ReplayGainScanner | None = None
+        self._watch_index_thread: LibraryIndexThread | None = None
+        self._library_watcher = LibraryFolderWatcher(self)
+        self._watch_pending = WatchBatch()
+        self._watcher_unavailable_notified = False
         self._equalizer_dialog: EqualizerDialog | None = None
         self._queue_dialog: QueueDialog | None = None
         self._current_toast: Toast | None = None
@@ -86,6 +118,10 @@ class MainWindow(QMainWindow):
         self._library_refresh_timer = QTimer(self)
         self._library_refresh_timer.setSingleShot(True)
         self._library_refresh_timer.setInterval(300)
+        self._watch_debounce_timer = QTimer(self)
+        self._watch_debounce_timer.setSingleShot(True)
+        self._watch_debounce_timer.setInterval(750)
+        self._watch_debounce_timer.timeout.connect(self._flush_library_watch_events)
         # Sleep timer
         self._sleep_remaining_s = 0
         self._sleep_timer = QTimer(self)
@@ -162,6 +198,7 @@ class MainWindow(QMainWindow):
         )
         self.video_player_view.apply_equalizer(self.settings.equalizer_enabled, self.settings.equalizer_bands, self.settings.equalizer_preamp)
         self._library_refresh_timer.timeout.connect(self.video_player_view.refresh_catalog)
+        self.disc_view = DiscView(self.settings)
         self.ripper_view = RipperView(self.settings, self.library)
         self.youtube_view = YouTubeView()
 
@@ -170,6 +207,7 @@ class MainWindow(QMainWindow):
             self.library_view,
             self.now_playing,
             self.video_player_view,
+            self.disc_view,
             self.ripper_view,
             self.youtube_view,
         )
@@ -216,23 +254,37 @@ class MainWindow(QMainWindow):
         self.player.track_changed.connect(self.library_view.highlight_track)
         self.player.playback_unavailable.connect(self._on_playback_unavailable)
         self.library_view.request_add_folder.connect(self.add_folder)
-        self.library_view.request_rescan.connect(self.rescan)
         self.library_view.request_youtube_search.connect(self._search_youtube_for_track)
         self.library_view.request_open_settings.connect(self.open_settings)
         self.library_view.request_diagnostics.connect(self.show_diagnostics)
+        self.library_view.request_scan_replaygain.connect(self._on_scan_replaygain)
+        self.now_playing.request_edit_metadata.connect(self.library_view.edit_track_metadata)
         self.video_player_view.request_diagnostics.connect(self.show_diagnostics)
+        self.disc_view.play_audio_tracks.connect(self._play_disc_audio_tracks)
+        self.disc_view.enqueue_audio_tracks.connect(self._enqueue_disc_audio_tracks)
+        self.disc_view.play_video_disc.connect(self._play_video_disc)
+        self.disc_view.stop_video_disc.connect(self.video_player_view.stop_playback)
+        self.disc_view.rip_drive_requested.connect(self._rip_disc_drive)
+        self.disc_view.status_message.connect(lambda m: self.show_toast(m, level="info"))
         self.ripper_view.rip_completed.connect(self.library_view.refresh)
         self.ripper_view.log.connect(lambda m: sb.showMessage(m, 4000))
         self.youtube_view.download_requested.connect(self._on_yt_download)
+        self._library_watcher.paths_changed.connect(self._on_watched_paths_changed)
+        self._library_watcher.paths_deleted.connect(self._on_watched_paths_deleted)
+        self._library_watcher.paths_moved.connect(self._on_watched_paths_moved)
+        self._library_watcher.folders_moved.connect(self._on_watched_folders_moved)
+        self._library_watcher.folders_changed.connect(self._on_watched_folders_changed)
+        self._library_watcher.watch_error.connect(self._on_library_watch_error)
 
         self.setAcceptDrops(True)
 
         # Initial scan of saved roots.
         if self.settings.library_paths and self.settings.first_run_completed:
-            self._start_scan(self.settings.library_paths, "Scanned")
+            self._start_scan(self.settings.library_paths, "Scanned", prune=True)
 
         # Menu + keyboard shortcuts
         self._build_menu()
+        self._restart_library_watcher()
 
         # Ensure transport visibility matches initial tab (Library, index 0).
         self._on_view_changed(0)
@@ -419,6 +471,8 @@ class MainWindow(QMainWindow):
             self.library_view.refresh_playlists()
         if is_rip:
             self.player.stop()
+        if is_video and self.player.is_playing():
+            self.player.pause()
         if not is_video:
             self.video_player_view.pause_playback()
 
@@ -430,15 +484,57 @@ class MainWindow(QMainWindow):
         if folder not in self.settings.library_paths:
             self.settings.library_paths.append(folder)
             self.settings.save()
+            self._restart_library_watcher()
         self._start_scan([folder], f"Added tracks from {folder}")
 
     def rescan(self) -> None:
         self._start_scan(self.settings.library_paths or [self.settings.music_root], "Rescanned", prune=True)
 
+    def _on_scan_replaygain(self, tracks: list) -> None:
+        if self._rg_scanner is not None and self._rg_scanner.isRunning():
+            self.show_toast("ReplayGain scan already in progress.", level="warning")
+            return
+        ffmpeg = find_ffmpeg()
+        if not ffmpeg:
+            self.show_toast(
+                "ffmpeg not found — ReplayGain scan requires ffmpeg.", level="error"
+            )
+            return
+        paths = [t.path for t in tracks if getattr(t, "path", None)]
+        if not paths:
+            return
+        album_mode = self.settings.replaygain_mode == "album"
+        count = len(paths)
+        noun = "track" if count == 1 else "tracks"
+        self.show_toast(f"Scanning {count} {noun} for ReplayGain…", level="info")
+        self._rg_scanner = ReplayGainScanner(paths, ffmpeg, album_mode=album_mode, parent=self)
+        self._rg_scanner.finished_scanning.connect(self._on_rg_scan_finished)
+        self._rg_scanner.start()
+
+    def _on_rg_scan_finished(self, written: int, failed: int) -> None:
+        if failed:
+            self.show_toast(
+                f"ReplayGain scan complete: {written} tagged, {failed} failed.", level="warning"
+            )
+        else:
+            self.show_toast(f"ReplayGain scan complete: {written} tracks tagged.", level="success")
+        if self._rg_scanner is not None:
+            self._rg_scanner.deleteLater()
+            self._rg_scanner = None
+
     def _on_yt_download(self, url: str) -> None:
         dlg = YtDownloadDialog(url, self.settings, self.library, self)
         dlg.library_updated.connect(self._library_refresh_timer.start)
-        dlg.exec()
+        dlg.video_download_finished.connect(self._on_yt_video_download_finished)
+        try:
+            dlg.exec()
+        finally:
+            dlg.deleteLater()
+
+    def _on_yt_video_download_finished(self) -> None:
+        self.tab_bar.setCurrentIndex(self._tab_index["Video"])
+        self.video_player_view.refresh_catalog()
+        self._library_refresh_timer.start()
 
     def _search_youtube_for_track(self, query: str) -> None:
         if not query:
@@ -466,6 +562,9 @@ class MainWindow(QMainWindow):
         if self._scan_thread is not None and self._scan_thread.isRunning():
             self.show_toast("Library scan already running.", level="warning")
             return
+        if self._watch_index_thread is not None and self._watch_index_thread.isRunning():
+            self.show_toast("Library update already running.", level="warning")
+            return
         self._scan_status_label.setText("Scanning library…")
         self._scan_status_label.setVisible(True)
         self._scan_progress.setVisible(True)
@@ -475,15 +574,17 @@ class MainWindow(QMainWindow):
         self._scan_thread.finished.connect(self._scan_thread.deleteLater)
         self._scan_thread.start()
 
-    def _on_scan_finished(self, n: int, removed: int, label: str) -> None:
+    def _on_scan_finished(self, n: int, updated: int, removed: int, label: str) -> None:
         self._scan_status_label.setVisible(False)
         self._scan_status_label.setText("")
         self._scan_progress.setVisible(False)
         parts = [f"{label}: {n} new track{'' if n == 1 else 's'}"]
+        if updated:
+            parts.append(f"{updated} updated")
         if removed:
             parts.append(f"{removed} removed")
         message = ", ".join(parts)
-        toast_level = "success" if (n > 0 or removed > 0) else "info"
+        toast_level = "success" if (n > 0 or updated > 0 or removed > 0) else "info"
         self.show_toast(message, level=toast_level, duration_ms=4000)
         self.library_view.refresh()
         self.video_player_view.refresh_catalog()
@@ -495,6 +596,184 @@ class MainWindow(QMainWindow):
         self._scan_progress.setVisible(False)
         self.show_toast(f"{label} failed: {error}", level="error", duration_ms=6000)
         self._scan_thread = None
+
+    # ------------------------------------------------------------------ watched folders
+    def _restart_library_watcher(self) -> None:
+        self._library_watcher.stop()
+        if not self.settings.watch_library_folders or not self.settings.library_paths:
+            return
+        if not LibraryFolderWatcher.is_available():
+            if not self._watcher_unavailable_notified:
+                self.statusBar().showMessage(
+                    "Install watchdog to enable watched library folders.",
+                    6000,
+                )
+                self._watcher_unavailable_notified = True
+            return
+        self._library_watcher.start(self.settings.library_paths)
+
+    def _on_library_watch_error(self, message: str) -> None:
+        if not message:
+            return
+        self.statusBar().showMessage(message, 6000)
+
+    def _on_watched_paths_changed(self, paths: list) -> None:
+        self._queue_library_watch_batch(
+            WatchBatch(changed_paths={str(path) for path in paths})
+        )
+
+    def _on_watched_paths_deleted(self, paths: list) -> None:
+        self._queue_library_watch_batch(
+            WatchBatch(deleted_paths={str(path) for path in paths})
+        )
+
+    def _on_watched_paths_moved(self, pairs: list) -> None:
+        moved: dict[str, str] = {}
+        for pair in pairs:
+            try:
+                old_path, new_path = pair
+            except (TypeError, ValueError):
+                continue
+            moved[str(old_path)] = str(new_path)
+        self._queue_library_watch_batch(WatchBatch(moved_paths=moved))
+
+    def _on_watched_folders_changed(self, paths: list) -> None:
+        self._queue_library_watch_batch(
+            WatchBatch(scan_roots={str(path) for path in paths})
+        )
+
+    def _on_watched_folders_moved(self, pairs: list) -> None:
+        moved: dict[str, str] = {}
+        for pair in pairs:
+            try:
+                old_path, new_path = pair
+            except (TypeError, ValueError):
+                continue
+            moved[str(old_path)] = str(new_path)
+        self._queue_library_watch_batch(WatchBatch(moved_folders=moved))
+
+    def _queue_library_watch_batch(self, batch: WatchBatch) -> None:
+        batch = self._filter_watch_batch_to_current_roots(batch)
+        if batch.is_empty() or not self.settings.watch_library_folders:
+            return
+        coalesce_batch(self._watch_pending, batch)
+        self._watch_debounce_timer.start()
+
+    def _filter_watch_batch_to_current_roots(self, batch: WatchBatch) -> WatchBatch:
+        filtered = WatchBatch()
+        for path in batch.changed_paths:
+            if self._path_is_under_library_roots(path):
+                filtered.changed_paths.add(path)
+        for path in batch.deleted_paths:
+            if self._path_is_under_library_roots(path):
+                filtered.deleted_paths.add(path)
+        for path in batch.scan_roots:
+            if self._path_is_under_library_roots(path):
+                filtered.scan_roots.add(path)
+        for old_path, new_path in batch.moved_paths.items():
+            old_in = self._path_is_under_library_roots(old_path)
+            new_in = self._path_is_under_library_roots(new_path)
+            if old_in and new_in:
+                filtered.moved_paths[old_path] = new_path
+            elif old_in:
+                filtered.deleted_paths.add(old_path)
+            elif new_in:
+                filtered.changed_paths.add(new_path)
+        for old_path, new_path in batch.moved_folders.items():
+            old_in = self._path_is_under_library_roots(old_path)
+            new_in = self._path_is_under_library_roots(new_path)
+            if old_in and new_in:
+                filtered.moved_folders[old_path] = new_path
+            elif old_in:
+                filtered.deleted_paths.add(old_path)
+            elif new_in:
+                filtered.scan_roots.add(new_path)
+        return filtered
+
+    def _path_is_under_library_roots(self, path: str) -> bool:
+        if not path:
+            return False
+        try:
+            path_norm = os.path.normcase(os.path.abspath(path))
+        except OSError:
+            return False
+        for root in self.settings.library_paths:
+            if not root:
+                continue
+            try:
+                root_norm = os.path.normcase(os.path.abspath(root))
+                if os.path.commonpath([root_norm, path_norm]) == root_norm:
+                    return True
+            except (OSError, ValueError):
+                continue
+        return False
+
+    def _flush_library_watch_events(self) -> None:
+        if self._watch_pending.is_empty():
+            return
+        if self._ripper_is_running():
+            self._watch_debounce_timer.start(1500)
+            return
+        if self._scan_thread is not None and self._scan_thread.isRunning():
+            self._watch_debounce_timer.start(1000)
+            return
+        if self._watch_index_thread is not None and self._watch_index_thread.isRunning():
+            self._watch_debounce_timer.start(1000)
+            return
+
+        batch = self._watch_pending
+        self._watch_pending = WatchBatch()
+        self._scan_status_label.setText("Updating library…")
+        self._scan_status_label.setVisible(True)
+        self._scan_progress.setVisible(True)
+        self._watch_index_thread = LibraryIndexThread(
+            self.library,
+            batch,
+            settle_ms=750,
+            parent=self,
+        )
+        self._watch_index_thread.finished_with.connect(self._on_watch_index_finished)
+        self._watch_index_thread.failed_with.connect(self._on_watch_index_failed)
+        self._watch_index_thread.finished.connect(self._watch_index_thread.deleteLater)
+        self._watch_index_thread.start()
+
+    def _on_watch_index_finished(self, summary: ScanSummary) -> None:
+        self._scan_status_label.setVisible(False)
+        self._scan_status_label.setText("")
+        self._scan_progress.setVisible(False)
+        parts: list[str] = []
+        if summary.added:
+            parts.append(f"{summary.added} new")
+        if summary.updated:
+            parts.append(f"{summary.updated} updated")
+        if summary.removed:
+            parts.append(f"{summary.removed} removed")
+        if summary.failed:
+            parts.append(f"{summary.failed} failed")
+        if parts:
+            self.show_toast(
+                "Library updated: " + ", ".join(parts),
+                level="warning" if summary.failed else "success",
+                duration_ms=4000,
+            )
+            self._library_refresh_timer.start()
+        self._watch_index_thread = None
+
+    def _on_watch_index_failed(self, error: str) -> None:
+        self._scan_status_label.setVisible(False)
+        self._scan_status_label.setText("")
+        self._scan_progress.setVisible(False)
+        self.show_toast(f"Library update failed: {error}", level="error", duration_ms=6000)
+        self._watch_index_thread = None
+
+    def _ripper_is_running(self) -> bool:
+        ripper = getattr(getattr(self, "ripper_view", None), "ripper", None)
+        if ripper is None:
+            return False
+        try:
+            return bool(ripper.is_running())
+        except RuntimeError:
+            return False
 
     def remove_missing(self) -> None:
         confirm = QMessageBox.question(
@@ -517,12 +796,64 @@ class MainWindow(QMainWindow):
             self.show_toast("No missing tracks were found.", level="info")
         self.library_view.refresh()
 
+    def _play_disc_audio_tracks(self, tracks: list, start_index: int) -> None:
+        self.video_player_view.pause_playback()
+        self.player.set_queue(tracks, start_index)
+
+    def _enqueue_disc_audio_tracks(self, tracks: list) -> None:
+        self.player.enqueue(tracks)
+        self.show_toast(f"Enqueued {len(tracks)} disc track(s).", level="success")
+
+    def _play_video_disc(self, source) -> None:
+        if not self.video_player_view.playback_available():
+            reason = self.video_player_view.unavailable_reason() or "VLC video playback is unavailable."
+            self.show_toast(
+                "Video disc playback requires VLC/libVLC. Run diagnostics for setup details.",
+                level="error",
+                duration_ms=6000,
+                action=("Diagnostics", self.show_diagnostics),
+            )
+            self.statusBar().showMessage(reason, 6000)
+            return
+        self.player.stop()
+        self.tab_bar.setCurrentIndex(self._tab_index["Video"])
+        QTimer.singleShot(
+            0,
+            lambda: self.video_player_view.load_location(source.uri, label=source.label),
+        )
+        if source.fallback_uri:
+            self.show_toast(
+                "If the disc menu does not open, retry with Play Without Menus from Disc.",
+                level="info",
+                duration_ms=5000,
+            )
+
+    def _rip_disc_drive(self, drive: str) -> None:
+        if drive:
+            self.settings.cd_drive = drive
+            self.ripper_view.drive_combo.setCurrentText(drive)
+        self.tab_bar.setCurrentIndex(self._tab_index["Rip"])
+
     def open_settings(self) -> None:
         from .settings_dialog import SettingsDialog
         old_paths = list(self.settings.library_paths)
-        dlg = SettingsDialog(self.settings, self)
-        if dlg.exec():
-            self.settings = dlg.result_settings
+        old_watch = self.settings.watch_library_folders
+        audio_outputs = self.player.list_audio_outputs()
+        audio_devices_map: dict[str, list[tuple[str, str]]] = {}
+        for out_id, _desc in audio_outputs:
+            audio_devices_map[out_id] = self.player.list_audio_devices(out_id)
+        dlg = SettingsDialog(
+            self.settings, self,
+            audio_outputs=audio_outputs,
+            audio_devices_map=audio_devices_map,
+        )
+        try:
+            accepted = dlg.exec()
+            result_settings = dlg.result_settings if accepted else None
+        finally:
+            dlg.deleteLater()
+        if accepted and result_settings is not None:
+            self.settings = result_settings
             self.settings.save()
             metadata.reset_musicbrainz_useragent()
             self.ripper_view.apply_settings(self.settings)
@@ -533,12 +864,26 @@ class MainWindow(QMainWindow):
                 self.settings.equalizer_preamp,
             )
             self.player.set_crossfade(self.settings.crossfade_seconds)
+            self.player.set_replaygain(
+                self.settings.replaygain_mode,
+                self.settings.replaygain_preamp_db,
+                self.settings.replaygain_prevent_clipping,
+            )
+            self.player.set_audio_device(
+                self.settings.audio_output,
+                self.settings.audio_output_device,
+            )
+            self.player.set_gapless(self.settings.gapless_playback)
             self.video_player_view.apply_equalizer(
                 self.settings.equalizer_enabled,
                 self.settings.equalizer_bands,
                 self.settings.equalizer_preamp,
             )
-            if self.settings.library_paths != old_paths and self.settings.library_paths:
+            paths_changed = self.settings.library_paths != old_paths
+            watch_changed = self.settings.watch_library_folders != old_watch
+            if paths_changed or watch_changed:
+                self._restart_library_watcher()
+            if paths_changed and self.settings.library_paths:
                 self._start_scan(self.settings.library_paths, "Scanned")
             self.show_toast("Settings saved.", level="success")
 
@@ -546,24 +891,36 @@ class MainWindow(QMainWindow):
         if self.settings.first_run_completed:
             return
         dlg = FirstRunDialog(self.settings, self)
-        if dlg.exec():
-            self.settings = dlg.result_settings
+        try:
+            accepted = dlg.exec()
+            result_settings = dlg.result_settings if accepted else None
+        finally:
+            dlg.deleteLater()
+        if accepted and result_settings is not None:
+            self.settings = result_settings
             self.settings.save()
             metadata.reset_musicbrainz_useragent()
             self.ripper_view.apply_settings(self.settings)
             self.now_playing._settings = self.settings
             if self.settings.library_paths:
                 self._start_scan(self.settings.library_paths, "Scanned")
+            self._restart_library_watcher()
             self.show_toast("Setup saved.", level="success")
 
     def show_diagnostics(self) -> None:
-        DiagnosticsDialog(parent=self).exec()
+        dlg = DiagnosticsDialog(parent=self)
+        try:
+            dlg.exec()
+        finally:
+            dlg.deleteLater()
 
     def open_queue(self) -> None:
         if self._queue_dialog is None:
-            self._queue_dialog = QueueDialog(self.player, self.library, self)
-            self._queue_dialog.finished.connect(self._clear_queue_dialog)
-            self._queue_dialog.playlist_saved.connect(self._on_playlist_saved_from_queue)
+            dialog = QueueDialog(self.player, self.library, self)
+            dialog.finished.connect(self._clear_queue_dialog)
+            dialog.finished.connect(dialog.deleteLater)
+            dialog.playlist_saved.connect(self._on_playlist_saved_from_queue)
+            self._queue_dialog = dialog
         self._queue_dialog.show()
         self._queue_dialog.raise_()
         self._queue_dialog.activateWindow()
@@ -626,16 +983,22 @@ class MainWindow(QMainWindow):
             self._sleep_btn.setText("Sleep")
 
     def show_duplicates(self) -> None:
-        DuplicateDialog(self.library, self).exec()
+        dlg = DuplicateDialog(self.library, self)
+        try:
+            dlg.exec()
+        finally:
+            dlg.deleteLater()
         self.library_view.refresh()
 
     def open_equalizer(self) -> None:
         if self._equalizer_dialog is None:
-            self._equalizer_dialog = EqualizerDialog(self.settings, self)
-            self._equalizer_dialog.equalizer_changed.connect(self.player.set_equalizer)
-            self._equalizer_dialog.equalizer_changed.connect(self.video_player_view.apply_equalizer)
-            self._equalizer_dialog.settings_saved.connect(self._apply_equalizer_settings)
-            self._equalizer_dialog.finished.connect(self._clear_equalizer_dialog)
+            dialog = EqualizerDialog(self.settings, self)
+            dialog.equalizer_changed.connect(self.player.set_equalizer)
+            dialog.equalizer_changed.connect(self.video_player_view.apply_equalizer)
+            dialog.settings_saved.connect(self._apply_equalizer_settings)
+            dialog.finished.connect(self._clear_equalizer_dialog)
+            dialog.finished.connect(dialog.deleteLater)
+            self._equalizer_dialog = dialog
         self._equalizer_dialog.show()
         self._equalizer_dialog.raise_()
         self._equalizer_dialog.activateWindow()
@@ -661,9 +1024,14 @@ class MainWindow(QMainWindow):
         dlg.setInformativeText(
             "Sea Lyon is a music library manager, CD ripper, and player\n"
             "for Windows, macOS, and Linux.\n\n"
-            "Released under the MIT License."
+            f"{COPYRIGHT_NOTICE}\n\n"
+            "Released under the MIT License.\n\n"
+            f"{THIRD_PARTY_NOTICE}"
         )
-        dlg.exec()
+        try:
+            dlg.exec()
+        finally:
+            dlg.deleteLater()
 
     # ------------------------------------------------------------------ drag-and-drop
     _AUDIO_EXTENSIONS = frozenset(
@@ -694,6 +1062,7 @@ class MainWindow(QMainWindow):
                 if folder not in self.settings.library_paths:
                     self.settings.library_paths.append(folder)
             self.settings.save()
+            self._restart_library_watcher()
             self._start_scan(folders, f"Added {len(folders)} folder(s)")
         if files:
             for f in files:
@@ -708,6 +1077,18 @@ class MainWindow(QMainWindow):
         ev.acceptProposedAction()
 
     def closeEvent(self, ev) -> None:
+        self._watch_debounce_timer.stop()
+        self._library_watcher.stop()
+        if self._watch_index_thread is not None and self._watch_index_thread.isRunning():
+            self._watch_index_thread.request_stop()
+            if not self._watch_index_thread.wait(3000):
+                self.show_toast(
+                    "Library update is still stopping. Try closing again in a moment.",
+                    level="warning",
+                    duration_ms=5000,
+                )
+                ev.ignore()
+                return
         if self._scan_thread is not None and self._scan_thread.isRunning():
             self._scan_thread.request_stop()
             if not self._scan_thread.wait(3000):
@@ -718,13 +1099,33 @@ class MainWindow(QMainWindow):
                 )
                 ev.ignore()
                 return
+        if self._rg_scanner is not None and self._rg_scanner.isRunning():
+            scanner = self._rg_scanner
+            scanner.requestInterruption()
+            if not scanner.wait(3000):
+                self.show_toast(
+                    "ReplayGain scan is still stopping. Try closing again in a moment.",
+                    level="warning",
+                    duration_ms=5000,
+                )
+                ev.ignore()
+                return
+            if self._rg_scanner is scanner:
+                scanner.deleteLater()
+                self._rg_scanner = None
         self.player.stop()
         self.youtube_view.shutdown()
+        self.disc_view.shutdown()
         self.ripper_view.shutdown()
         self.settings.last_volume = self.player.volume()
         queue = self.player.queue()
-        self.settings.queue_track_paths = [t.path for t in queue]
-        self.settings.queue_current_index = max(0, self.player.current_index())
+        library_queue = [t for t in queue if t.is_library_item]
+        self.settings.queue_track_paths = [t.path for t in library_queue]
+        current = self.player.current()
+        if current is not None and current.is_library_item:
+            self.settings.queue_current_index = max(0, self.settings.queue_track_paths.index(current.path))
+        else:
+            self.settings.queue_current_index = 0
         self.settings.save()
         self.video_player_view.cleanup()
         self.player.cleanup()

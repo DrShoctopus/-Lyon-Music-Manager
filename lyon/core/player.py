@@ -1,8 +1,10 @@
 """High-level music player with queue and transport logic."""
 from __future__ import annotations
 
+import inspect
 import random
 from enum import Enum
+from pathlib import Path
 from typing import Callable, Optional
 
 from PySide6.QtCore import QObject, QTimer, Signal
@@ -10,6 +12,13 @@ from PySide6.QtCore import QObject, QTimer, Signal
 from .library import Library, Track
 from .equalizer import clamp_preamp, flat_equalizer_bands, normalize_equalizer_bands
 from .playback_backend import PlaybackBackend, create_playback_backend
+
+
+_GAPLESS_PREBUFFER_MS = 2000
+_GAPLESS_VLC_OPTIONS: tuple[str, ...] = (
+    "--audio-time-stretch-enabled=0",
+    "--file-caching=150",
+)
 
 
 class RepeatMode(Enum):
@@ -38,6 +47,7 @@ class Player(QObject):
             backend_factory if backend_factory is not None
             else (create_playback_backend if backend is None else None)
         )
+        self._gapless_vlc_options: tuple[str, ...] = ()
         self._backend = backend or self._create_backend()
         self._adopt_backend(self._backend)
 
@@ -56,6 +66,19 @@ class Player(QObject):
         self._fade_step = 0
         self._fade_total_steps = 1
         self._fade_out_backend: PlaybackBackend | None = None
+
+        self._rg_mode: str = "off"
+        self._rg_preamp_db: float = 0.0
+        self._rg_prevent_clipping: bool = True
+        self._rg_multiplier: float = 1.0          # multiplier for the active backend
+        self._rg_fade_out_multiplier: float = 1.0  # multiplier for the fading-out backend
+
+        self._audio_output: str = ""
+        self._audio_device: str = ""
+
+        self._gapless_playback: bool = False
+        self._gapless_prebuffer_backend: PlaybackBackend | None = None
+        self._gapless_prebuffer_index: int = -1
 
         self._connect_backend(self._backend)
 
@@ -102,6 +125,10 @@ class Player(QObject):
             return
         removing_current = idx == self._index
         was_playing = self.is_playing()
+        if idx == self._gapless_prebuffer_index:
+            self._cancel_gapless_prebuffer()
+        elif idx < self._gapless_prebuffer_index:
+            self._gapless_prebuffer_index -= 1
         del self._queue[idx]
         if not self._queue:
             self.stop()
@@ -136,6 +163,14 @@ class Player(QObject):
             self._index -= 1
         elif new_index <= self._index < old_index:
             self._index += 1
+        pb = self._gapless_prebuffer_index
+        if pb >= 0:
+            if pb == old_index:
+                self._gapless_prebuffer_index = new_index
+            elif old_index < pb <= new_index:
+                self._gapless_prebuffer_index -= 1
+            elif new_index <= pb < old_index:
+                self._gapless_prebuffer_index += 1
         self.queue_changed.emit()
 
     def current(self) -> Optional[Track]:
@@ -162,11 +197,13 @@ class Player(QObject):
             return
         if not self._ensure_playback_available():
             return
+        self._cancel_gapless_prebuffer()
         if self._should_crossfade_to(idx) and self._crossfade_to_index(idx):
             return
         self._cancel_crossfade()
         self._index = idx
         track = self._queue[idx]
+        self._rg_multiplier = self._rg_multiplier_for_track(track)
         self._start_backend_track(self._backend, track, self._user_volume)
         self.track_changed.emit(track)
 
@@ -190,11 +227,13 @@ class Player(QObject):
 
     def stop(self) -> None:
         self._cancel_crossfade()
+        self._cancel_gapless_prebuffer()
         self._backend.stop()
 
     def cleanup(self) -> None:
         """Release native backend resources. Call before the application exits."""
         self._cancel_crossfade()
+        self._cancel_gapless_prebuffer()
         self._cleanup_backend(self._backend)
 
     def next(self) -> None:
@@ -228,8 +267,9 @@ class Player(QObject):
 
     def set_volume(self, percent: int) -> None:
         self._cancel_crossfade(restore_active_volume=False)
-        self._user_volume = percent
-        self._backend.set_volume(percent)
+        volume = _clamp_volume(percent)
+        self._user_volume = volume
+        self._backend.set_volume(self._rg_applied_vol(volume, self._rg_multiplier))
 
     def volume(self) -> int:
         return self._user_volume
@@ -243,6 +283,45 @@ class Player(QObject):
 
     def equalizer(self) -> tuple[bool, list[int], int]:
         return self._equalizer_enabled, list(self._equalizer_bands), self._equalizer_preamp
+
+    def set_replaygain(
+        self,
+        mode: str,
+        preamp_db: float = 0.0,
+        prevent_clipping: bool = True,
+    ) -> None:
+        self._rg_mode = mode
+        self._rg_preamp_db = preamp_db
+        self._rg_prevent_clipping = prevent_clipping
+        track = self.current()
+        self._rg_multiplier = self._rg_multiplier_for_track(track) if track else 1.0
+        if self._fade_timer is None:
+            self._backend.set_volume(self._rg_applied_vol(self._user_volume, self._rg_multiplier))
+
+    def set_audio_device(self, audio_output: str, device_id: str) -> None:
+        """Apply audio output module and device. Takes effect on next play()."""
+        self._audio_output = audio_output
+        self._audio_device = device_id
+        self._set_backend_audio_device(self._backend, audio_output, device_id)
+        if self._fade_out_backend is not None:
+            self._set_backend_audio_device(self._fade_out_backend, audio_output, device_id)
+
+    def set_gapless(self, enabled: bool) -> None:
+        """Enable gapless pre-buffering. Has no effect when crossfade > 0."""
+        self._gapless_playback = bool(enabled)
+        self._gapless_vlc_options = _GAPLESS_VLC_OPTIONS if self._gapless_playback else ()
+
+    def list_audio_outputs(self) -> list[tuple[str, str]]:
+        lister = getattr(self._backend, "list_audio_outputs", None)
+        if callable(lister):
+            return lister()
+        return []
+
+    def list_audio_devices(self, audio_output: str = "") -> list[tuple[str, str]]:
+        lister = getattr(self._backend, "list_audio_devices", None)
+        if callable(lister):
+            return lister(audio_output)
+        return []
 
     def set_muted(self, muted: bool) -> None:
         self._backend.set_muted(muted)
@@ -269,9 +348,10 @@ class Player(QObject):
 
     # --------------------------------------------------------------- internals
     def _create_backend(self) -> PlaybackBackend:
-        if self._backend_factory is None:
-            return create_playback_backend(self)
-        return self._backend_factory(self)
+        factory = self._backend_factory or create_playback_backend
+        if factory is create_playback_backend and _accepts_vlc_instance_options(factory):
+            return factory(self, vlc_instance_options=self._gapless_vlc_options)
+        return factory(self)
 
     def _adopt_backend(self, backend: PlaybackBackend) -> None:
         backend_parent = getattr(backend, "parent", None)
@@ -300,14 +380,53 @@ class Player(QObject):
         if callable(cleanup):
             cleanup()
 
+    @staticmethod
+    def _set_backend_audio_device(
+        backend: PlaybackBackend,
+        audio_output: str,
+        device_id: str,
+    ) -> None:
+        setter = getattr(backend, "set_audio_device", None)
+        if callable(setter):
+            setter(audio_output, device_id)
+
+    def _dispose_transient_backend(self, backend: PlaybackBackend) -> None:
+        self._cleanup_backend(backend)
+        try:
+            backend.setParent(None)
+            backend.deleteLater()
+        except RuntimeError:
+            pass
+
+    def _clear_fade_timer(self) -> None:
+        timer = self._fade_timer
+        self._fade_timer = None
+        if timer is None:
+            return
+        timer.stop()
+        try:
+            timer.deleteLater()
+        except RuntimeError:
+            pass
+
     def _on_position_changed(self, pos_ms: int, dur_ms: int) -> None:
         self.position_changed.emit(pos_ms, dur_ms)
         self._maybe_auto_crossfade(pos_ms, dur_ms)
+        self._maybe_gapless_prebuffer(pos_ms, dur_ms)
 
     def _on_track_ended(self) -> None:
         if self._library is not None and 0 <= self._index < len(self._queue):
+            if not self._queue[self._index].is_library_item:
+                self._advance_after_end()
+                return
             self._library.increment_play_count(self._queue[self._index].id)
-        self.next()
+        self._advance_after_end()
+
+    def _advance_after_end(self) -> None:
+        if self._gapless_prebuffer_backend is not None:
+            self._promote_gapless_prebuffer()
+        else:
+            self.next()
 
     def _next_index(self) -> Optional[int]:
         if self._shuffle:
@@ -326,15 +445,20 @@ class Player(QObject):
         backend: PlaybackBackend,
         track: Track,
         volume: int,
+        muted: bool | None = None,
     ) -> None:
-        backend.set_source(track.path)
+        backend.set_source(
+            track.playback_uri or track.path,
+            is_location=track.playback_is_location,
+            options=track.playback_options,
+        )
         backend.apply_equalizer(
             self._equalizer_enabled,
             self._equalizer_bands,
             self._equalizer_preamp,
         )
-        backend.set_muted(self.is_muted())
-        backend.set_volume(volume)
+        backend.set_muted(self.is_muted() if muted is None else muted)
+        backend.set_volume(self._rg_applied_vol(volume, self._rg_multiplier))
         backend.play()
 
     def _should_crossfade_to(self, idx: int) -> bool:
@@ -362,13 +486,19 @@ class Player(QObject):
         nxt = self._next_index()
         if nxt is None or nxt == self._index:
             return
-        if self._library is not None and 0 <= self._index < len(self._queue):
+        if (
+            self._library is not None
+            and 0 <= self._index < len(self._queue)
+            and self._queue[self._index].is_library_item
+        ):
             self._library.increment_play_count(self._queue[self._index].id)
         self._crossfade_to_index(nxt)
 
     def _crossfade_to_index(self, idx: int) -> bool:
         if self._backend_factory is None:
             return False
+        if self._fade_timer is not None or self._fade_out_backend is not None:
+            self._cancel_crossfade()
         try:
             next_backend = self._create_backend()
         except Exception:
@@ -378,20 +508,24 @@ class Player(QObject):
         if callable(is_available) and not is_available():
             self._cleanup_backend(next_backend)
             return False
+        if self._audio_output or self._audio_device:
+            self._set_backend_audio_device(next_backend, self._audio_output, self._audio_device)
 
         previous_backend = self._backend
+        muted = previous_backend.is_muted()
         self._disconnect_backend(previous_backend)
         self._backend = next_backend
         self._connect_backend(next_backend)
 
+        self._rg_fade_out_multiplier = self._rg_multiplier
         self._index = idx
         track = self._queue[idx]
-        self._start_backend_track(next_backend, track, 0)
+        self._rg_multiplier = self._rg_multiplier_for_track(track)
+        self._start_backend_track(next_backend, track, 0, muted=muted)
         self.track_changed.emit(track)
 
         self._fade_out_backend = previous_backend
-        if self._fade_timer is not None:
-            self._fade_timer.stop()
+        self._clear_fade_timer()
         self._fade_target = self._user_volume
         self._fade_step = 0
         self._fade_total_steps = max(1, self._crossfade_seconds * 1000 // 50)
@@ -404,8 +538,10 @@ class Player(QObject):
     def _on_fade_tick(self) -> None:
         self._fade_step += 1
         progress = min(1.0, self._fade_step / self._fade_total_steps)
-        in_vol = int(self._fade_target * progress)
-        out_vol = int(self._fade_target * (1.0 - progress))
+        in_vol = self._rg_applied_vol(int(self._fade_target * progress), self._rg_multiplier)
+        out_vol = self._rg_applied_vol(
+            int(self._fade_target * (1.0 - progress)), self._rg_fade_out_multiplier
+        )
         self._backend.set_volume(in_vol)
         if self._fade_out_backend is not None:
             self._fade_out_backend.set_volume(out_vol)
@@ -413,25 +549,126 @@ class Player(QObject):
             self._finish_crossfade()
 
     def _finish_crossfade(self) -> None:
-        if self._fade_timer is not None:
-            self._fade_timer.stop()
-            self._fade_timer = None
+        self._clear_fade_timer()
         if self._fade_out_backend is not None:
-            self._fade_out_backend.stop()
-            self._cleanup_backend(self._fade_out_backend)
+            backend = self._fade_out_backend
             self._fade_out_backend = None
-        self._backend.set_volume(self._fade_target)
+            backend.stop()
+            self._dispose_transient_backend(backend)
+        self._backend.set_volume(self._rg_applied_vol(self._fade_target, self._rg_multiplier))
 
     def _cancel_crossfade(self, *, restore_active_volume: bool = True) -> None:
-        if self._fade_timer is not None:
-            self._fade_timer.stop()
-            self._fade_timer = None
+        self._clear_fade_timer()
         if self._fade_out_backend is not None:
-            self._fade_out_backend.stop()
-            self._cleanup_backend(self._fade_out_backend)
+            backend = self._fade_out_backend
             self._fade_out_backend = None
+            backend.stop()
+            self._dispose_transient_backend(backend)
         if restore_active_volume:
-            self._backend.set_volume(self._user_volume)
+            self._backend.set_volume(self._rg_applied_vol(self._user_volume, self._rg_multiplier))
+
+    def _maybe_gapless_prebuffer(self, pos_ms: int, dur_ms: int) -> None:
+        if (
+            not self._gapless_playback
+            or self._backend_factory is None
+            or self._crossfade_seconds > 0
+            or self._gapless_prebuffer_backend is not None
+            or self._fade_timer is not None
+            or self._repeat == RepeatMode.ONE
+            or dur_ms <= 0
+            or pos_ms <= 0
+            or not self._backend.is_playing()
+        ):
+            return
+        if dur_ms - pos_ms > _GAPLESS_PREBUFFER_MS:
+            return
+        nxt = self._next_index()
+        if nxt is None or nxt == self._index:
+            return
+        self._start_gapless_prebuffer(nxt)
+
+    def _start_gapless_prebuffer(self, idx: int) -> None:
+        try:
+            backend = self._create_backend()
+        except Exception:
+            return
+        self._adopt_backend(backend)
+        is_available = getattr(backend, "is_available", None)
+        if callable(is_available) and not is_available():
+            self._cleanup_backend(backend)
+            return
+        if self._audio_output or self._audio_device:
+            self._set_backend_audio_device(backend, self._audio_output, self._audio_device)
+        track = self._queue[idx]
+        backend.set_source(
+            track.playback_uri or track.path,
+            is_location=track.playback_is_location,
+            options=track.playback_options,
+        )
+        backend.apply_equalizer(self._equalizer_enabled, self._equalizer_bands, self._equalizer_preamp)
+        backend.set_muted(True)
+        backend.set_volume(0)
+        backend.play()
+        backend.pause()
+        backend.set_position(0)
+        self._gapless_prebuffer_backend = backend
+        self._gapless_prebuffer_index = idx
+
+    def _promote_gapless_prebuffer(self) -> None:
+        backend = self._gapless_prebuffer_backend
+        idx = self._gapless_prebuffer_index
+        self._gapless_prebuffer_backend = None
+        self._gapless_prebuffer_index = -1
+        if backend is None or not (0 <= idx < len(self._queue)):
+            if backend is not None:
+                self._cleanup_backend(backend)
+            self.next()
+            return
+        muted = self._backend.is_muted()
+        old_backend = self._backend
+        self._disconnect_backend(old_backend)
+        self._backend = backend
+        self._connect_backend(backend)
+        self._index = idx
+        track = self._queue[idx]
+        self._rg_multiplier = self._rg_multiplier_for_track(track)
+        backend.set_muted(muted)
+        backend.set_volume(self._rg_applied_vol(self._user_volume, self._rg_multiplier))
+        backend.play()
+        old_backend.stop()
+        self._dispose_transient_backend(old_backend)
+        self.track_changed.emit(track)
+
+    def _cancel_gapless_prebuffer(self) -> None:
+        backend = self._gapless_prebuffer_backend
+        self._gapless_prebuffer_backend = None
+        self._gapless_prebuffer_index = -1
+        if backend is not None:
+            backend.stop()
+            self._dispose_transient_backend(backend)
+
+    def _rg_multiplier_for_track(self, track: Track) -> float:
+        if self._rg_mode == "off":
+            return 1.0
+        try:
+            path = track.path
+        except AttributeError:
+            return 1.0
+        if not path or not Path(path).is_file():
+            return 1.0
+        from .replaygain import read_track_gain, read_album_gain, gain_multiplier
+        if self._rg_mode == "track":
+            gain_db = read_track_gain(path)
+        else:
+            album_gain_db = read_album_gain(path)
+            gain_db = album_gain_db if album_gain_db is not None else read_track_gain(path)
+        if gain_db is None:
+            return 1.0
+        return gain_multiplier(gain_db, self._rg_preamp_db, self._rg_prevent_clipping)
+
+    @staticmethod
+    def _rg_applied_vol(raw: int, multiplier: float) -> int:
+        return max(0, min(100, round(raw * multiplier)))
 
     def _ensure_playback_available(self) -> bool:
         if self.playback_available():
@@ -441,3 +678,23 @@ class Player(QObject):
         self.position_changed.emit(0, 0)
         self.playback_unavailable.emit(reason)
         return False
+
+
+def _clamp_volume(value: object) -> int:
+    try:
+        volume = int(value)
+    except (TypeError, ValueError):
+        volume = 80
+    return max(0, min(100, volume))
+
+
+def _accepts_vlc_instance_options(factory: Callable[..., PlaybackBackend]) -> bool:
+    try:
+        parameters = inspect.signature(factory).parameters.values()
+    except (TypeError, ValueError):
+        return True
+    return any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD
+        or parameter.name == "vlc_instance_options"
+        for parameter in parameters
+    )

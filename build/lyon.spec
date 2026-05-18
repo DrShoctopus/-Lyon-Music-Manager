@@ -12,7 +12,10 @@ from pathlib import Path
 
 from PIL import Image
 
-ROOT = Path(SPECPATH).resolve().parent
+SPEC_DIR = Path(SPECPATH).resolve()
+if not SPEC_DIR.is_dir():
+    SPEC_DIR = SPEC_DIR.parent
+ROOT = SPEC_DIR.parent
 BIN = ROOT / "bin"
 BRAND_DIRS = (
     ROOT / "docs" / "brand",
