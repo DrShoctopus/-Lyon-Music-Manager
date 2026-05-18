@@ -103,17 +103,17 @@ class DuplicateDialog(QDialog):
         is_fp = self._mode_combo.currentData() == self._MODE_FINGERPRINT
         self._scan_fp_btn.setVisible(is_fp)
         if is_fp:
-            from ..core.fingerprint import is_available, ACOUSTID_API_KEY
+            from ..core.fingerprint import is_available, is_lookup_configured
             if not is_available():
                 self._fp_warn.setText(
                     "fpcalc (Chromaprint) is not installed. "
                     "Download fpcalc and place it in the bin/ folder to enable fingerprint matching."
                 )
                 self._fp_warn.setVisible(True)
-            elif not ACOUSTID_API_KEY:
+            elif not is_lookup_configured():
                 self._fp_warn.setText(
-                    "AcoustID API key not configured. Set ACOUSTID_API_KEY in "
-                    "lyon/core/fingerprint.py to enable fingerprint lookup."
+                    "AcoustID API key not configured. Set ACOUSTID_API_KEY "
+                    "to enable fingerprint lookup."
                 )
                 self._fp_warn.setVisible(True)
             else:
@@ -233,14 +233,14 @@ class DuplicateDialog(QDialog):
     # ------------------------------------------------------------------ fingerprint scan
 
     def _scan_fingerprints(self) -> None:
-        from ..core.fingerprint import is_available, ACOUSTID_API_KEY
+        from ..core.fingerprint import is_available, is_lookup_configured
         if not is_available():
             QMessageBox.warning(self, "Not Available", "fpcalc is not installed.")
             return
-        if not ACOUSTID_API_KEY:
+        if not is_lookup_configured():
             QMessageBox.warning(
                 self, "API Key Required",
-                "Set ACOUSTID_API_KEY in lyon/core/fingerprint.py first."
+                "Set ACOUSTID_API_KEY first."
             )
             return
 

@@ -1437,11 +1437,17 @@ class LibraryView(QWidget):
         edit_metadata = menu.addAction("Edit Metadata")
         identify_act = None
         if len(selected) == 1:
-            from ..core.fingerprint import is_available as _fp_available
+            from ..core.fingerprint import (
+                is_available as _fp_available,
+                is_lookup_configured as _fp_configured,
+            )
             identify_act = menu.addAction("Identify Track…")
             if not _fp_available():
                 identify_act.setEnabled(False)
                 identify_act.setToolTip("Install pyacoustid and fpcalc to enable")
+            elif not _fp_configured():
+                identify_act.setEnabled(False)
+                identify_act.setToolTip("Set ACOUSTID_API_KEY to enable AcoustID lookup")
         scan_rg = menu.addAction("Scan ReplayGain…")
         youtube_search = menu.addAction("Search YouTube for Artist, Album, and Track")
         properties = menu.addAction("Properties")
@@ -1479,7 +1485,22 @@ class LibraryView(QWidget):
 
     def _identify_track(self, track: Track) -> None:
         """Launch the AcoustID lookup workflow for a single track."""
-        from ..core.fingerprint import lookup_candidates
+        from ..core.fingerprint import is_available, is_lookup_configured, lookup_candidates
+
+        if not is_available():
+            QMessageBox.warning(
+                self,
+                "Fingerprinting Not Available",
+                "Install pyacoustid and fpcalc to identify tracks.",
+            )
+            return
+        if not is_lookup_configured():
+            QMessageBox.warning(
+                self,
+                "AcoustID API Key Required",
+                "Set ACOUSTID_API_KEY to enable AcoustID lookup.",
+            )
+            return
 
         dlg = _IdentifyTrackDialog(track, self)
         dlg.show()

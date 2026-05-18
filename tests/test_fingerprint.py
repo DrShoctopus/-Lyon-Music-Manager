@@ -1,13 +1,16 @@
 """Tests for lyon.core.fingerprint and related library methods."""
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+import os
+from unittest.mock import patch
 
 import pytest
 
 from lyon.core.fingerprint import (
+    api_key,
     fingerprint_file,
     is_available,
+    is_lookup_configured,
     lookup_candidates,
     _fpcalc_path,
 )
@@ -42,6 +45,22 @@ class TestIsAvailable:
                 assert is_available()
             except ImportError:
                 pytest.skip("pyacoustid not installed")
+
+
+class TestApiKey:
+    def test_empty_when_constant_and_environment_missing(self, monkeypatch):
+        monkeypatch.setattr("lyon.core.fingerprint.ACOUSTID_API_KEY", "")
+        monkeypatch.delenv("ACOUSTID_API_KEY", raising=False)
+
+        assert api_key() == ""
+        assert not is_lookup_configured()
+
+    def test_environment_overrides_constant(self, monkeypatch):
+        monkeypatch.setattr("lyon.core.fingerprint.ACOUSTID_API_KEY", "constant-key")
+        monkeypatch.setenv("ACOUSTID_API_KEY", " env-key ")
+
+        assert api_key() == "env-key"
+        assert is_lookup_configured()
 
 
 # ------------------------------------------------------------------ fingerprint_file
@@ -85,11 +104,13 @@ class TestFingerprintFile:
 class TestLookupCandidates:
     def test_empty_when_no_api_key(self, monkeypatch):
         monkeypatch.setattr("lyon.core.fingerprint.ACOUSTID_API_KEY", "")
+        monkeypatch.delenv("ACOUSTID_API_KEY", raising=False)
         result = lookup_candidates("/some/file.flac")
         assert result == []
 
     def test_empty_when_fingerprint_fails(self, monkeypatch):
         monkeypatch.setattr("lyon.core.fingerprint.ACOUSTID_API_KEY", "testkey")
+        monkeypatch.delenv("ACOUSTID_API_KEY", raising=False)
         monkeypatch.setattr("lyon.core.fingerprint.fingerprint_file", lambda p: None)
         result = lookup_candidates("/some/file.flac")
         assert result == []
@@ -101,6 +122,7 @@ class TestLookupCandidates:
             pytest.skip("pyacoustid not installed")
 
         monkeypatch.setattr("lyon.core.fingerprint.ACOUSTID_API_KEY", "testkey")
+        monkeypatch.delenv("ACOUSTID_API_KEY", raising=False)
         monkeypatch.setattr("lyon.core.fingerprint.fingerprint_file", lambda p: (180, "AQAD"))
 
         fake_response = {
@@ -139,6 +161,7 @@ class TestLookupCandidates:
             pytest.skip("pyacoustid not installed")
 
         monkeypatch.setattr("lyon.core.fingerprint.ACOUSTID_API_KEY", "testkey")
+        monkeypatch.delenv("ACOUSTID_API_KEY", raising=False)
         monkeypatch.setattr("lyon.core.fingerprint.fingerprint_file", lambda p: (180, "AQAD"))
         monkeypatch.setattr("acoustid.lookup", lambda *a, **kw: {"status": "ok", "results": []})
         monkeypatch.setattr(
@@ -159,6 +182,7 @@ class TestLookupCandidates:
             pytest.skip("pyacoustid not installed")
 
         monkeypatch.setattr("lyon.core.fingerprint.ACOUSTID_API_KEY", "testkey")
+        monkeypatch.delenv("ACOUSTID_API_KEY", raising=False)
         monkeypatch.setattr("lyon.core.fingerprint.fingerprint_file", lambda p: (180, "AQAD"))
         monkeypatch.setattr("acoustid.lookup", lambda *a, **kw: (_ for _ in ()).throw(Exception("net error")))
 
@@ -258,3 +282,50 @@ class TestLibraryFingerprintMethods:
         assert len(groups) == 1
         # Higher bitrate should be first (group[0] = best)
         assert groups[0][0].bitrate >= groups[0][1].bitrate
+
+    def test_reindex_changed_audio_clears_stale_acoustid(self, tmp_path, monkeypatch):
+        from lyon.core import library as library_module
+        from lyon.core.library import Library
+
+        class _FakeInfo:
+            length = 60.0
+            bitrate = 320_000
+            sample_rate = 44_100
+
+        class _FakeAudio(dict):
+            info = _FakeInfo()
+
+            def get(self, key):
+                return {
+                    "title": ["Song"],
+                    "artist": ["Artist"],
+                    "albumartist": ["Artist"],
+                    "album": ["Album"],
+                    "tracknumber": ["1"],
+                    "discnumber": ["1"],
+                    "date": ["2024"],
+                    "genre": ["Rock"],
+                }.get(key)
+
+        monkeypatch.setattr(library_module, "MutagenFile", lambda *_a, **_k: _FakeAudio())
+
+        audio = tmp_path / "song.flac"
+        audio.write_bytes(b"a" * 200_000)
+        os.utime(audio, ns=(1_700_000_000_000_000_000, 1_700_000_000_000_000_000))
+
+        lib = Library(str(tmp_path / "test.db"))
+        assert lib.index_file(audio).status == "added"
+        lib.commit()
+        track = next(lib.all_tracks())
+        lib.update_acoustid(track.id, "stale-id")
+
+        audio.write_bytes(b"b" * 200_000)
+        os.utime(audio, ns=(1_700_000_100_000_000_000, 1_700_000_100_000_000_000))
+        assert lib.index_file(audio).status == "updated"
+        lib.commit()
+
+        row = lib.conn.execute(
+            "SELECT acoustid_id FROM tracks WHERE id = ?", (track.id,)
+        ).fetchone()
+        assert row["acoustid_id"] is None
+        assert any(t.id == track.id for t in lib.tracks_without_acoustid())

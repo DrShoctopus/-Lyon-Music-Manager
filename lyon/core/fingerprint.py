@@ -19,6 +19,16 @@ LOG = logging.getLogger(__name__)
 ACOUSTID_API_KEY: str = ""
 
 
+def api_key() -> str:
+    """Return the configured AcoustID API key, preferring the environment."""
+    return (os.environ.get("ACOUSTID_API_KEY") or ACOUSTID_API_KEY).strip()
+
+
+def is_lookup_configured() -> bool:
+    """Return True when AcoustID web lookups have an API key configured."""
+    return bool(api_key())
+
+
 def _fpcalc_path() -> str | None:
     """Return the path to the fpcalc binary, checking the app bin/ dir first."""
     binary = "fpcalc.exe" if sys.platform == "win32" else "fpcalc"
@@ -90,7 +100,8 @@ def lookup_candidates(path: str | Path) -> list[dict]:
 
     Returns an empty list on any failure.
     """
-    if not ACOUSTID_API_KEY:
+    key = api_key()
+    if not key:
         LOG.debug("ACOUSTID_API_KEY not configured — skipping lookup")
         return []
 
@@ -102,7 +113,7 @@ def lookup_candidates(path: str | Path) -> list[dict]:
     try:
         import acoustid
         data = acoustid.lookup(
-            ACOUSTID_API_KEY, fp, duration,
+            key, fp, duration,
             meta=["recordings", "releases"],
             timeout=15,
         )

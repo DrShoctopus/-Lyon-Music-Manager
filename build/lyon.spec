@@ -3,6 +3,7 @@
 #
 # Drop these into a `bin/` folder at the project root before building:
 #   bin/ffmpeg.exe         (static Windows build, e.g. from gyan.dev)
+#   bin/fpcalc.exe         (Chromaprint fpcalc Windows release)
 #   bin/discid.dll         (libdiscid Windows release)
 #   optional: a VLC runtime directory if you choose to bundle libVLC
 #
@@ -83,6 +84,7 @@ a = Analysis(
         "urllib3",
         "certifi",
         "yt_dlp",
+        "acoustid",
     ],
     hookspath=[],
     runtime_hooks=[],

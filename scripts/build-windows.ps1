@@ -8,14 +8,14 @@
     installer (dist\SeaLyonMediaManager-{version}-Setup.exe).
 
     Steps: create Python 3.11 venv, install dependencies, download
-    ffmpeg.exe, libdiscid.dll, and the VLC runtime into bin\, run
+    ffmpeg.exe, fpcalc.exe, libdiscid.dll, and the VLC runtime into bin\, run
     PyInstaller, zip output, compile installer.
 
     Run from the project root:
         scripts\build-windows.ps1
 
     Optional flags:
-        -SkipBinaries   Don't re-download ffmpeg / libdiscid / VLC if bin\ is already populated.
+        -SkipBinaries   Don't re-download ffmpeg / fpcalc / libdiscid / VLC if bin\ is already populated.
         -SkipZip        Build the bundle but don't zip it.
         -SkipInstaller  Skip the Inno Setup installer step (requires Inno Setup 6 on PATH or default install location).
         -Clean          Wipe .venv, build\, dist\ before building.
@@ -110,6 +110,59 @@ function Invoke-VerifiedDownload {
     Assert-FileSha256 -Path $OutFile -Expected $expected -Label ([System.IO.Path]::GetFileName($OutFile))
 }
 
+function Get-LatestFpcalcRelease {
+    Write-Host "==> Resolving latest fpcalc release" -ForegroundColor Cyan
+    $release = Invoke-RestMethod `
+        -Uri 'https://api.github.com/repos/acoustid/chromaprint/releases/latest' `
+        -Headers @{ 'User-Agent' = 'SeaLyonMediaManager-Build' } `
+        -ErrorAction Stop
+    $asset = $release.assets |
+        Where-Object { $_.name -match '^chromaprint-fpcalc-.+-windows-x86_64\.zip$' } |
+        Select-Object -First 1
+    if (-not $asset) {
+        throw "Latest Chromaprint release did not include a Windows x86_64 fpcalc zip."
+    }
+    $version = ([string]$release.tag_name) -replace '^v', ''
+    Write-Host "    Latest fpcalc: $version ($($asset.name))"
+    [pscustomobject]@{
+        Version = $version
+        Name = [string]$asset.name
+        Url = [string]$asset.browser_download_url
+    }
+}
+
+function Test-FpcalcVersion {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$ExpectedVersion
+    )
+
+    if (-not (Test-Path $Path)) { return $false }
+    try {
+        $output = & $Path -version 2>&1
+        if ($LASTEXITCODE -ne 0) { return $false }
+        return ([string]$output) -match [regex]::Escape($ExpectedVersion)
+    } catch {
+        return $false
+    }
+}
+
+function Assert-FpcalcVersion {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$ExpectedVersion
+    )
+
+    $output = & $Path -version 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "fpcalc.exe -version failed: $output"
+    }
+    if (([string]$output) -notmatch [regex]::Escape($ExpectedVersion)) {
+        throw "Expected fpcalc $ExpectedVersion, got: $output"
+    }
+    Write-Host "    Verified fpcalc version: $output"
+}
+
 # 0. Optional clean -----------------------------------------------------------
 if ($Clean) {
     Write-Host "==> Cleaning previous build artefacts" -ForegroundColor Yellow
@@ -158,19 +211,35 @@ if ($LASTEXITCODE -ne 0) { throw "pip install -r requirements.txt failed" }
 & $venvPython -m pip install pyinstaller --quiet
 if ($LASTEXITCODE -ne 0) { throw "pyinstaller install failed" }
 
-# 4. Fetch ffmpeg.exe + libdiscid.dll + VLC runtime into bin\ -----------------
+# 4. Fetch ffmpeg.exe + fpcalc.exe + libdiscid.dll + VLC runtime into bin\ -----
 $bin = Join-Path $Root 'bin'
 New-Item -ItemType Directory -Force -Path $bin | Out-Null
 
 $needFfmpeg = -not (Test-Path (Join-Path $bin 'ffmpeg.exe'))
+$fpcalcPath = Join-Path $bin 'fpcalc.exe'
+$fpcalcRelease = $null
+$needFpcalc = -not (Test-Path $fpcalcPath)
 $needDiscid = -not (Test-Path (Join-Path $bin 'discid.dll'))
 $vlcDir = Join-Path $bin 'vlc'
 $needVlc = -not (Test-Path (Join-Path $vlcDir 'libvlc.dll')) -or
            -not (Test-Path (Join-Path $vlcDir 'libvlccore.dll')) -or
            -not (Test-Path (Join-Path $vlcDir 'plugins'))
 
+if (-not $SkipBinaries) {
+    $fpcalcRelease = Get-LatestFpcalcRelease
+    if (Test-Path $fpcalcPath) {
+        if (Test-FpcalcVersion -Path $fpcalcPath -ExpectedVersion $fpcalcRelease.Version) {
+            $needFpcalc = $false
+        } else {
+            Write-Host "    bin\fpcalc.exe is missing or not version $($fpcalcRelease.Version); refreshing"
+            $needFpcalc = $true
+        }
+    }
+}
+
 if ($SkipBinaries) {
     if ($needFfmpeg) { Write-Warning "bin\ffmpeg.exe missing; CD ripping won't work in the built app." }
+    if ($needFpcalc) { Write-Warning "bin\fpcalc.exe missing; AcoustID fingerprinting won't work in the built app." }
     if ($needDiscid) { Write-Warning "bin\discid.dll missing; CD detection won't work in the built app." }
     if ($needVlc) { Write-Warning "bin\vlc runtime missing; packaged audio/video playback and EQ will be disabled." }
 } else {
@@ -193,6 +262,24 @@ if ($SkipBinaries) {
         Remove-Item $tmp; Remove-Item $extract -Recurse -Force
     } else {
         Write-Host "    bin\ffmpeg.exe already present; skipping"
+    }
+
+    if ($needFpcalc) {
+        if (-not $fpcalcRelease) { $fpcalcRelease = Get-LatestFpcalcRelease }
+        Write-Host "==> Downloading fpcalc.exe (Chromaprint $($fpcalcRelease.Version))" -ForegroundColor Cyan
+        $tmp = Join-Path $env:TEMP $fpcalcRelease.Name
+        $extract = Join-Path $env:TEMP 'lyon-fpcalc-extract'
+        if (Test-Path $tmp) { Remove-Item $tmp -Force }
+        if (Test-Path $extract) { Remove-Item $extract -Recurse -Force }
+        Invoke-WebRequest -Uri $fpcalcRelease.Url -OutFile $tmp -UseBasicParsing -ErrorAction Stop
+        Expand-Archive $tmp -DestinationPath $extract -Force
+        $exe = Get-ChildItem -Path $extract -Recurse -Filter fpcalc.exe | Select-Object -First 1
+        if (-not $exe) { throw "fpcalc.exe not found inside $($fpcalcRelease.Name)." }
+        Copy-Item $exe.FullName -Destination $fpcalcPath -Force
+        Assert-FpcalcVersion -Path $fpcalcPath -ExpectedVersion $fpcalcRelease.Version
+        Remove-Item $tmp; Remove-Item $extract -Recurse -Force
+    } else {
+        Write-Host "    bin\fpcalc.exe already present and up to date; skipping"
     }
 
     if ($needDiscid) {
@@ -284,10 +371,12 @@ if (Test-Path $vlcDir) {
 if ($LASTEXITCODE -ne 0) { throw "Import smoke test failed; aborting before PyInstaller." }
 & $venvPython -c "from PySide6.QtCore import QCoreApplication; app = QCoreApplication([]); from lyon.core.playback_backend import create_playback_backend; backend = create_playback_backend(); print(type(backend).__name__); assert type(backend).__name__ == 'VlcPlaybackBackend'"
 if ($LASTEXITCODE -ne 0) { throw "VLC backend smoke test failed; aborting before PyInstaller." }
+& $venvPython -c "from lyon.core.fingerprint import is_available; assert is_available(); print('fpcalc OK')"
+if ($LASTEXITCODE -ne 0) { throw "fpcalc smoke test failed; aborting before PyInstaller." }
 
 # 6. PyInstaller bundle -------------------------------------------------------
 Write-Host "==> Validating PyInstaller inputs" -ForegroundColor Cyan
-foreach ($required in @('main.py', 'docs\brand\lyon-app-icon.png', 'bin\ffmpeg.exe')) {
+foreach ($required in @('main.py', 'docs\brand\lyon-app-icon.png', 'bin\ffmpeg.exe', 'bin\fpcalc.exe')) {
     if (-not (Test-Path (Join-Path $Root $required))) {
         throw "Required build input missing: $required"
     }
@@ -304,6 +393,9 @@ if (-not (Test-Path $bundleVlc)) { $bundleVlc = Join-Path $bundle 'bin\vlc' }
 if (-not (Test-Path (Join-Path $bundleVlc 'libvlc.dll'))) { throw "Packaged app is missing libvlc.dll." }
 if (-not (Test-Path (Join-Path $bundleVlc 'libvlccore.dll'))) { throw "Packaged app is missing libvlccore.dll." }
 if (-not (Test-Path (Join-Path $bundleVlc 'plugins'))) { throw "Packaged app is missing VLC plugins." }
+$bundleBin = Join-Path $bundle '_internal\bin'
+if (-not (Test-Path $bundleBin)) { $bundleBin = Join-Path $bundle 'bin' }
+if (-not (Test-Path (Join-Path $bundleBin 'fpcalc.exe'))) { throw "Packaged app is missing fpcalc.exe." }
 
 # Read the app version from the Python package for use in output filenames.
 $initPy = Join-Path $Root 'lyon\__init__.py'

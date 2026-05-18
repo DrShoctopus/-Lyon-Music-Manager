@@ -398,6 +398,22 @@ class Library:
                 None,
                 file_hash,
             )
+            previous_hash = (
+                row["file_hash"]
+                if row is not None and "file_hash" in row.keys()
+                else None
+            )
+            acoustid_id = (
+                row["acoustid_id"]
+                if (
+                    row is not None
+                    and "acoustid_id" in row.keys()
+                    and media_type == "audio"
+                    and previous_hash is not None
+                    and previous_hash == file_hash
+                )
+                else None
+            )
             if row is None:
                 cur = self.conn.execute(
                     """INSERT OR IGNORE INTO tracks
@@ -414,14 +430,14 @@ class Library:
 
             self.conn.execute(
                 """UPDATE tracks
-                   SET title = ?, artist = ?, album_artist = ?, album = ?,
-                       track_no = ?, disc_no = ?, year = ?, genre = ?,
-                       grouping = ?, duration = ?, bitrate = ?, samplerate = ?,
-                       artwork_path = ?, media_type = ?, disc_id = ?,
-                       file_size = ?, file_mtime_ns = ?, last_scanned_at = ?,
-                       scan_error = ?, file_hash = ?
-                   WHERE path = ?""",
-                (*values, path),
+                       SET title = ?, artist = ?, album_artist = ?, album = ?,
+                           track_no = ?, disc_no = ?, year = ?, genre = ?,
+                           grouping = ?, duration = ?, bitrate = ?, samplerate = ?,
+                           artwork_path = ?, media_type = ?, disc_id = ?,
+                           file_size = ?, file_mtime_ns = ?, last_scanned_at = ?,
+                           scan_error = ?, file_hash = ?, acoustid_id = ?
+                       WHERE path = ?""",
+                (*values, acoustid_id, path),
             )
             return IndexResult("updated", path)
 
