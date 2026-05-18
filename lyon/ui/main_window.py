@@ -518,10 +518,16 @@ class MainWindow(QMainWindow):
     def _on_yt_download(self, url: str) -> None:
         dlg = YtDownloadDialog(url, self.settings, self.library, self)
         dlg.library_updated.connect(self._library_refresh_timer.start)
+        dlg.video_download_finished.connect(self._on_yt_video_download_finished)
         try:
             dlg.exec()
         finally:
             dlg.deleteLater()
+
+    def _on_yt_video_download_finished(self) -> None:
+        self.tab_bar.setCurrentIndex(self._tab_index["Video"])
+        self.video_player_view.refresh_catalog()
+        self._library_refresh_timer.start()
 
     def _search_youtube_for_track(self, query: str) -> None:
         if not query:

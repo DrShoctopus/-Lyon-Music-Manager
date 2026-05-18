@@ -127,3 +127,29 @@ def test_yt_download_dialog_log_is_monospace(app):
     src = Path(mod.__file__).read_text()
     assert 'setObjectName("monoLog")' in src
     assert 'setObjectName("sectionHeading")' in src
+
+
+def test_yt_video_success_emits_completion_signal(app, tmp_path):
+    from lyon.core.library import Library
+    from lyon.ui.yt_download_dialog import YtDownloadDialog
+
+    library = Library(tmp_path / "library.db")
+    dlg = YtDownloadDialog(
+        "https://www.youtube.com/watch?v=example",
+        Settings(music_root=str(tmp_path / "Music")),
+        library,
+    )
+    emitted = []
+    dlg.video_download_finished.connect(lambda: emitted.append(True))
+
+    try:
+        dlg._active_mode = "audio"
+        dlg._on_finished(1, 0)
+        dlg._active_mode = "video"
+        dlg._on_finished(0, 1)
+        dlg._on_finished(1, 0)
+
+        assert emitted == [True]
+    finally:
+        library.close()
+        dlg.deleteLater()

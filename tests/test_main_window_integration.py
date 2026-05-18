@@ -133,6 +133,22 @@ def test_video_disc_handoff_reports_unavailable_video_player(main_window, monkey
     assert "libVLC missing" in main_window.statusBar().currentMessage()
 
 
+def test_youtube_video_completion_switches_to_video_tab_and_refreshes_catalog(main_window, monkeypatch):
+    calls = []
+    monkeypatch.setattr(main_window.video_player_view, "refresh_catalog", lambda: calls.append("refresh"))
+    main_window.tab_bar.setCurrentIndex(main_window._tab_index["YouTube"])
+    main_window._library_refresh_timer.stop()
+
+    try:
+        main_window._on_yt_video_download_finished()
+
+        assert main_window.stack.currentWidget() is main_window.video_player_view
+        assert calls == ["refresh"]
+        assert main_window._library_refresh_timer.isActive()
+    finally:
+        main_window._library_refresh_timer.stop()
+
+
 def test_show_toast_creates_and_replaces_previous(main_window, qapp):
     from lyon.ui.toast import Toast
 

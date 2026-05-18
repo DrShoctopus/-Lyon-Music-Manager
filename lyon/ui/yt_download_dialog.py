@@ -24,6 +24,7 @@ class YtDownloadDialog(QDialog):
     result to the Lyon library."""
 
     library_updated = Signal()  # emitted whenever a file is added to library
+    video_download_finished = Signal()  # emitted after a fully successful video download
 
     def __init__(
         self,
@@ -36,6 +37,7 @@ class YtDownloadDialog(QDialog):
         self.settings = settings
         self.library = library
         self._worker: YtDownloadWorker | None = None
+        self._active_mode: str | None = None
         self._canceling = False
         self._current_toast: Toast | None = None
 
@@ -172,6 +174,7 @@ class YtDownloadDialog(QDialog):
         mode = "audio" if self.radio_audio.isChecked() else "video"
         fmt = self.fmt_combo.currentText()
         playlist = self.playlist_check.isChecked()
+        self._active_mode = mode
 
         self.log.clear()
         self._log(f"Starting {'playlist' if playlist else 'single'} download → {output_dir}")
@@ -230,6 +233,8 @@ class YtDownloadDialog(QDialog):
         if failed == 0 and succeeded > 0:
             noun = "file" if succeeded == 1 else "files"
             self._show_toast(f"Downloaded {succeeded} {noun}", "success")
+            if self._active_mode == "video":
+                self.video_download_finished.emit()
         elif succeeded == 0 and failed > 0:
             self._show_toast(f"{failed} download{'s' if failed != 1 else ''} failed", "error")
         elif succeeded > 0 and failed > 0:
