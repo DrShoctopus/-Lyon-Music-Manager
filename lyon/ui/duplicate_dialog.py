@@ -4,9 +4,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QDesktopServices, QStandardItem
 from PySide6.QtWidgets import (
-    QAbstractItemView, QDialog, QDialogButtonBox, QHBoxLayout,
+    QAbstractItemView, QComboBox, QDialog, QDialogButtonBox, QHBoxLayout,
     QHeaderView, QLabel, QMessageBox, QPushButton, QTreeWidget,
     QTreeWidgetItem, QVBoxLayout, QWidget,
 )
@@ -18,30 +18,44 @@ from ..core.library import Library, Track
 class DuplicateDialog(QDialog):
     """Shows groups of duplicate tracks and lets the user keep only the best copy."""
 
+    _MODE_TITLE = "title"
+    _MODE_HASH  = "hash"
+
     def __init__(self, library: Library, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.library = library
         self.setWindowTitle("Find Duplicates")
-        self.resize(860, 520)
-        self._groups: list[list[Track]] = library.find_duplicates()
+        self.resize(860, 540)
+        self._groups: list[list[Track]] = []
         self._build_ui()
+        self._refresh_groups()
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
 
-        if not self._groups:
-            layout.addWidget(QLabel("No duplicate tracks found."))
-            close_box = QDialogButtonBox(QDialogButtonBox.Close)
-            close_box.rejected.connect(self.reject)
-            layout.addWidget(close_box)
-            return
-
-        summary = QLabel(
-            f"Found {len(self._groups)} group(s) of duplicates "
-            f"({sum(len(g) - 1 for g in self._groups)} extra copies)."
+        # Mode selector row
+        mode_row = QHBoxLayout()
+        mode_row.addWidget(QLabel("Find duplicates:"))
+        self._mode_combo = QComboBox()
+        self._mode_combo.addItem("By Title + Artist", self._MODE_TITLE)
+        self._mode_combo.addItem("By File Hash (exact copies)", self._MODE_HASH)
+        fp_idx = self._mode_combo.count()
+        self._mode_combo.addItem("By Fingerprint (coming in v0.8)", "fingerprint")
+        fp_item = self._mode_combo.model().item(fp_idx)
+        fp_item.setEnabled(False)
+        self._mode_combo.setToolTip(
+            "Title+Artist: matches tracks with identical tags\n"
+            "File Hash: matches byte-identical files regardless of tags"
         )
-        summary.setObjectName("dialogSummary")
-        layout.addWidget(summary)
+        self._mode_combo.currentIndexChanged.connect(self._refresh_groups)
+        mode_row.addWidget(self._mode_combo)
+        mode_row.addStretch(1)
+        layout.addLayout(mode_row)
+
+        # Summary label (updated by _refresh_groups)
+        self._summary_label = QLabel("")
+        self._summary_label.setObjectName("dialogSummary")
+        layout.addWidget(self._summary_label)
 
         self._tree = QTreeWidget()
         self._tree.setColumnCount(4)
@@ -54,7 +68,6 @@ class DuplicateDialog(QDialog):
         self._tree.setSelectionMode(QAbstractItemView.SingleSelection)
         self._tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self._tree.customContextMenuRequested.connect(self._show_context_menu)
-        self._populate_tree()
         layout.addWidget(self._tree, 1)
 
         controls = QHBoxLayout()
@@ -71,6 +84,25 @@ class DuplicateDialog(QDialog):
         close_box = QDialogButtonBox(QDialogButtonBox.Close)
         close_box.rejected.connect(self.reject)
         layout.addWidget(close_box)
+
+    def _refresh_groups(self) -> None:
+        mode = self._mode_combo.currentData()
+        if mode == self._MODE_HASH:
+            self._groups = self.library.find_duplicates_by_hash()
+        else:
+            self._groups = self.library.find_duplicates()
+        self._update_summary()
+        self._populate_tree()
+
+    def _update_summary(self) -> None:
+        if not self._groups:
+            self._summary_label.setText("No duplicate tracks found.")
+        else:
+            extras = sum(len(g) - 1 for g in self._groups)
+            self._summary_label.setText(
+                f"Found {len(self._groups)} group(s) of duplicates "
+                f"({extras} extra {'copy' if extras == 1 else 'copies'})."
+            )
 
     def _populate_tree(self) -> None:
         self._tree.clear()
@@ -123,8 +155,7 @@ class DuplicateDialog(QDialog):
             )
             if r == QMessageBox.Yes:
                 self.library.delete_track(track.id)
-                self._groups = self.library.find_duplicates()
-                self._populate_tree()
+                self._refresh_groups()
 
     def _keep_best(self) -> None:
         to_remove = sum(len(g) - 1 for g in self._groups)
@@ -140,12 +171,11 @@ class DuplicateDialog(QDialog):
         )
         if r != QMessageBox.Yes:
             return
-        # find_duplicates() orders each group by bitrate DESC — group[0] is best
+        # find_duplicates*() orders each group by bitrate DESC — group[0] is best.
         for group in self._groups:
             for track in group[1:]:
                 self.library.delete_track(track.id)
-        self._groups = self.library.find_duplicates()
-        self._populate_tree()
+        self._refresh_groups()
         if not self._groups:
             QMessageBox.information(self, "Done", "All duplicates removed.")
             self.accept()

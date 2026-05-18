@@ -1,6 +1,7 @@
 """SQLite-backed music library."""
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import sqlite3
@@ -30,6 +31,7 @@ SUPPORTED_AUDIO_EXTS = {
 }
 SUPPORTED_VIDEO_EXTS = {".mp4", ".mkv", ".webm", ".avi", ".mov"}
 SUPPORTED_EXTS = SUPPORTED_AUDIO_EXTS | SUPPORTED_VIDEO_EXTS
+SUPPORTED_CUE_EXT = ".cue"
 
 DISPLAY_ARTIST_SQL = "COALESCE(NULLIF(album_artist,''), NULLIF(artist,''), 'Unknown Artist')"
 DISPLAY_ALBUM_SQL = "COALESCE(NULLIF(album,''), 'Unknown Album')"
@@ -93,6 +95,11 @@ _MIGRATIONS: list[tuple[int, str]] = [
     # GROUPING / MP4 ©grp / ASF WM/ContentGroupDescription on disk)
     (7, "ALTER TABLE tracks ADD COLUMN grouping TEXT NOT NULL DEFAULT ''"),
     (7, "CREATE INDEX IF NOT EXISTS idx_tracks_grouping ON tracks(grouping)"),
+    # v8 — fast duplicate detection via MD5 header hash; CUE sheet virtual tracks
+    (8, "ALTER TABLE tracks ADD COLUMN file_hash TEXT"),
+    (8, "CREATE INDEX IF NOT EXISTS idx_tracks_file_hash ON tracks(file_hash)"),
+    (8, "ALTER TABLE tracks ADD COLUMN cue_image_path TEXT"),
+    (8, "ALTER TABLE tracks ADD COLUMN cue_offset_sectors INTEGER"),
 ]
 
 _PAGE_SIZE = 500  # rows per page in streaming queries
@@ -280,10 +287,13 @@ class Library:
                     return summary
                 for name in files:
                     ext = os.path.splitext(name)[1].lower()
-                    if ext not in SUPPORTED_EXTS:
-                        continue
-                    full = os.path.join(dirpath, name)
-                    summary.add_result(self.index_file(full, force=force))
+                    if ext in SUPPORTED_EXTS:
+                        full = os.path.join(dirpath, name)
+                        summary.add_result(self.index_file(full, force=force))
+                    elif ext == SUPPORTED_CUE_EXT:
+                        full = os.path.join(dirpath, name)
+                        summary.merge(self._index_cue_file(full, force=force))
+        summary.removed += self.remove_stale_cue_tracks()
         with self._lock:
             self.conn.commit()
         return summary
@@ -359,6 +369,8 @@ class Library:
         file_path = Path(path)
         art = _find_video_artwork(file_path) if media_type == "video" else None
         art = art or _find_local_artwork(file_path.parent)
+        # Hash audio files only; video files are large and hashing gives little benefit.
+        file_hash = _compute_file_hash(path) if media_type == "audio" else None
         now = time.time()
         with self._lock:
             values = (
@@ -381,6 +393,7 @@ class Library:
                 int(stat.st_mtime_ns),
                 now,
                 None,
+                file_hash,
             )
             if row is None:
                 cur = self.conn.execute(
@@ -388,8 +401,8 @@ class Library:
                        (title, artist, album_artist, album, track_no, disc_no,
                         year, genre, grouping, duration, bitrate, samplerate,
                         artwork_path, media_type, disc_id, file_size,
-                        file_mtime_ns, last_scanned_at, scan_error, path)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        file_mtime_ns, last_scanned_at, scan_error, file_hash, path)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (*values, path),
                 )
                 if cur.rowcount > 0:
@@ -403,7 +416,7 @@ class Library:
                        grouping = ?, duration = ?, bitrate = ?, samplerate = ?,
                        artwork_path = ?, media_type = ?, disc_id = ?,
                        file_size = ?, file_mtime_ns = ?, last_scanned_at = ?,
-                       scan_error = ?
+                       scan_error = ?, file_hash = ?
                    WHERE path = ?""",
                 (*values, path),
             )
@@ -441,6 +454,150 @@ class Library:
                    WHERE path = ?""",
                 (int(stat.st_size), int(stat.st_mtime_ns), time.time(), error, path),
             )
+
+    def _index_cue_file(self, cue_path_str: str, *, force: bool = False) -> ScanSummary:
+        """Parse a CUE sheet and upsert one library row per audio track it describes."""
+        from .cue_parser import parse_cue
+        summary = ScanSummary()
+        cue_path = Path(cue_path_str)
+
+        cue_stat = _safe_stat(cue_path_str)
+        if cue_stat is None:
+            summary.failed += 1
+            return summary
+
+        try:
+            cue_sheet = parse_cue(cue_path)
+        except Exception as exc:
+            LOG.warning("Failed to parse CUE file %s: %s", cue_path, exc)
+            summary.failed += 1
+            return summary
+        if cue_sheet is None:
+            return summary  # empty CUE (no TRACK lines), silently skip
+
+        # Bulk-fetch any existing rows for this CUE file to detect additions / removals.
+        with self._lock:
+            existing: dict[str, sqlite3.Row] = {
+                row["path"]: row
+                for row in self.conn.execute(
+                    "SELECT * FROM tracks WHERE path LIKE ? AND media_type = 'cue_track'",
+                    (f"{cue_path_str}::%",),
+                ).fetchall()
+            }
+
+        # If nothing changed and all tracks are already indexed, skip.
+        first_path = f"{cue_path_str}::1"
+        if (
+            not force
+            and first_path in existing
+            and len(existing) == len(cue_sheet.tracks)
+            and _row_matches_stat(existing[first_path], cue_stat)
+        ):
+            summary.unchanged += len(cue_sheet.tracks)
+            return summary
+
+        art = _find_local_artwork(cue_path.parent)
+        now = time.time()
+        new_paths: set[str] = set()
+
+        with self._lock:
+            for track in cue_sheet.tracks:
+                track_path = f"{cue_path_str}::{track.number}"
+                new_paths.add(track_path)
+
+                if track.end_sectors is not None:
+                    duration = (track.end_sectors - track.start_sectors) / 75.0
+                else:
+                    duration = 0.0  # last track: length unknown without decoding
+
+                values = (
+                    track.title or f"Track {track.number}",
+                    track.performer or cue_sheet.performer or "",
+                    cue_sheet.performer or "",
+                    cue_sheet.album or "",
+                    track.number,
+                    1,
+                    0,
+                    "",
+                    "",
+                    duration,
+                    0,
+                    0,
+                    str(art) if art else None,
+                    "cue_track",
+                    None,
+                    int(cue_stat.st_size),
+                    int(cue_stat.st_mtime_ns),
+                    now,
+                    None,
+                    None,
+                    str(cue_sheet.image_path) if cue_sheet.image_path else None,
+                    track.start_sectors,
+                )
+                if track_path not in existing:
+                    self.conn.execute(
+                        """INSERT OR IGNORE INTO tracks
+                           (title, artist, album_artist, album, track_no, disc_no,
+                            year, genre, grouping, duration, bitrate, samplerate,
+                            artwork_path, media_type, disc_id, file_size,
+                            file_mtime_ns, last_scanned_at, scan_error, file_hash,
+                            cue_image_path, cue_offset_sectors, path)
+                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        (*values, track_path),
+                    )
+                    summary.added += 1
+                else:
+                    self.conn.execute(
+                        """UPDATE tracks
+                           SET title=?, artist=?, album_artist=?, album=?,
+                               track_no=?, disc_no=?, year=?, genre=?,
+                               grouping=?, duration=?, bitrate=?, samplerate=?,
+                               artwork_path=?, media_type=?, disc_id=?,
+                               file_size=?, file_mtime_ns=?, last_scanned_at=?,
+                               scan_error=?, file_hash=?,
+                               cue_image_path=?, cue_offset_sectors=?
+                           WHERE path=?""",
+                        (*values, track_path),
+                    )
+                    summary.updated += 1
+
+            # Remove rows for tracks that no longer appear in the CUE file.
+            for orphan_path in existing:
+                if orphan_path not in new_paths:
+                    self.conn.execute("DELETE FROM tracks WHERE path = ?", (orphan_path,))
+                    summary.removed += 1
+
+            self.conn.commit()
+
+        return summary
+
+    def remove_stale_cue_tracks(self) -> int:
+        """Remove CUE virtual tracks whose parent .cue file no longer exists on disk."""
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT DISTINCT path FROM tracks WHERE media_type = 'cue_track'"
+            ).fetchall()
+
+        cue_file_paths: set[str] = set()
+        for row in rows:
+            sep = row["path"].rfind("::")
+            if sep > 0:
+                cue_file_paths.add(row["path"][:sep])
+
+        missing = [p for p in cue_file_paths if not Path(p).exists()]
+        if not missing:
+            return 0
+
+        removed = 0
+        with self._lock:
+            for cue_path in missing:
+                cur = self.conn.execute(
+                    "DELETE FROM tracks WHERE path LIKE ? AND media_type = 'cue_track'",
+                    (f"{cue_path}::%",),
+                )
+                removed += cur.rowcount
+            self.conn.commit()
+        return removed
 
     def remove_path(self, path: str | os.PathLike, *, commit: bool = True) -> int:
         """Remove a library record for *path* without touching the filesystem."""
@@ -861,6 +1018,37 @@ class Library:
             groups.append(current_group)
         return groups
 
+    def find_duplicates_by_hash(self) -> list[list[Track]]:
+        """Return groups of audio tracks sharing an identical MD5 header hash."""
+        with self._lock:
+            rows = self.conn.execute(
+                """WITH dupe_keys AS (
+                       SELECT file_hash FROM tracks
+                       WHERE file_hash IS NOT NULL AND media_type = 'audio'
+                       GROUP BY file_hash HAVING COUNT(*) > 1
+                   )
+                   SELECT tracks.*
+                   FROM tracks
+                   JOIN dupe_keys ON dupe_keys.file_hash = tracks.file_hash
+                   ORDER BY tracks.file_hash,
+                            tracks.bitrate DESC,
+                            tracks.samplerate DESC,
+                            tracks.duration DESC"""
+            ).fetchall()
+        groups: list[list[Track]] = []
+        current_hash: str | None = None
+        current_group: list[Track] = []
+        for row in rows:
+            h = row["file_hash"]
+            if current_hash is not None and h != current_hash:
+                groups.append(current_group)
+                current_group = []
+            current_hash = h
+            current_group.append(_row_to_track(row))
+        if current_group:
+            groups.append(current_group)
+        return groups
+
     # ------------------------------------------------------------------ playlist CRUD
     def all_playlists(self) -> list[Playlist]:
         with self._lock:
@@ -988,7 +1176,9 @@ class Library:
 
     def remove_missing(self) -> int:
         with self._lock:
-            rows = self.conn.execute("SELECT id, path FROM tracks").fetchall()
+            rows = self.conn.execute(
+                "SELECT id, path FROM tracks WHERE media_type != 'cue_track'"
+            ).fetchall()
         # Path existence checks run outside the lock to avoid blocking queries.
         missing_ids = [r["id"] for r in rows if not Path(r["path"]).exists()]
         if not missing_ids:
@@ -1014,7 +1204,9 @@ class Library:
             return 0
 
         with self._lock:
-            rows = self.conn.execute("SELECT id, path FROM tracks").fetchall()
+            rows = self.conn.execute(
+                "SELECT id, path FROM tracks WHERE media_type != 'cue_track'"
+            ).fetchall()
 
         missing_ids: list[int] = []
         for row in rows:
@@ -1040,6 +1232,19 @@ class Library:
 
 def _row_to_track(r: sqlite3.Row) -> Track:
     keys = r.keys()
+    media_type = r["media_type"] if r["media_type"] else "audio"
+
+    # CUE virtual tracks route playback through the parent image file.
+    playback_uri: str | None = None
+    playback_options: tuple[str, ...] = ()
+    if media_type == "cue_track" and "cue_image_path" in keys and r["cue_image_path"]:
+        start_s = (r["cue_offset_sectors"] or 0) / 75.0
+        dur = r["duration"] or 0.0
+        playback_uri = r["cue_image_path"]
+        playback_options = (f"--start-time={start_s:.3f}",)
+        if dur > 0:
+            playback_options = (*playback_options, f"--stop-time={start_s + dur:.3f}")
+
     return Track(
         id=r["id"],
         path=r["path"],
@@ -1055,7 +1260,7 @@ def _row_to_track(r: sqlite3.Row) -> Track:
         bitrate=r["bitrate"] or 0,
         samplerate=r["samplerate"] or 0,
         artwork_path=r["artwork_path"],
-        media_type=r["media_type"] if r["media_type"] else "audio",
+        media_type=media_type,
         rating=int(r["rating"] or 0) if "rating" in keys else 0,
         play_count=int(r["play_count"] or 0) if "play_count" in keys else 0,
         last_played=r["last_played"] if "last_played" in keys else None,
@@ -1066,7 +1271,23 @@ def _row_to_track(r: sqlite3.Row) -> Track:
         last_scanned_at=r["last_scanned_at"] if "last_scanned_at" in keys else None,
         scan_error=r["scan_error"] if "scan_error" in keys else None,
         grouping=(r["grouping"] or "") if "grouping" in keys else "",
+        playback_uri=playback_uri,
+        playback_options=playback_options,
     )
+
+
+def _compute_file_hash(path: str) -> str | None:
+    """Return the MD5 hex digest of the first 64 KB of *path*, or None on error.
+
+    Reading only the header keeps hashing cheap for large files while still
+    distinguishing distinct audio content reliably enough for duplicate detection.
+    """
+    try:
+        with open(path, "rb") as fh:
+            data = fh.read(65536)
+        return hashlib.md5(data).hexdigest()
+    except OSError:
+        return None
 
 
 def _is_safe_migration_skip(exc: sqlite3.OperationalError) -> bool:
