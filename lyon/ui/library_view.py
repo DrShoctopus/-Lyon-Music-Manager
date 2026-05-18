@@ -1771,6 +1771,7 @@ class LibraryView(QWidget):
         menu = QMenu(self)
         new_act = menu.addAction("New Playlist…")
         new_smart_act = menu.addAction("New Smart Playlist…")
+        import_act = menu.addAction("Import Playlist…")
         rename_act = edit_rules_act = remove_act = export_act = None
         playlist_id: int | None = None
         is_smart = False
@@ -1792,6 +1793,8 @@ class LibraryView(QWidget):
             self._new_playlist_dialog()
         elif action == new_smart_act:
             self._new_smart_playlist_dialog()
+        elif action == import_act:
+            self._import_playlist_dialog()
         elif action == rename_act and playlist_id is not None:
             self._rename_playlist_dialog(
                 playlist_id,
@@ -1933,3 +1936,33 @@ class LibraryView(QWidget):
             )
         except OSError as exc:
             self.status_message.emit(f"Export failed: {exc}")
+
+    def _import_playlist_dialog(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Import Playlist", "", "Playlists (*.m3u *.m3u8 *.pls)"
+        )
+        if not path:
+            return
+        from ..core.playlist_import import import_playlist
+        try:
+            result = import_playlist(self.library, Path(path))
+        except Exception as exc:
+            self.status_message.emit(f"Import failed: {exc}")
+            return
+        self._refresh_playlists()
+        for row in range(self.playlists_model.rowCount()):
+            if self.playlists_model.index(row, 0).data(Qt.UserRole) == result.playlist_id:
+                self.playlists_view.setCurrentIndex(self.playlists_model.index(row, 0))
+                break
+        msg = f"Imported {result.matched} track{'s' if result.matched != 1 else ''} from {Path(path).name}"
+        if result.unmatched:
+            n = len(result.unmatched)
+            detail = "\n".join(result.unmatched[:10])
+            if n > 10:
+                detail += f"\n…and {n - 10} more"
+            QMessageBox.warning(
+                self,
+                "Unmatched Paths",
+                f"{n} path{'s' if n != 1 else ''} from the playlist were not found in the library:\n\n{detail}",
+            )
+        self.status_message.emit(msg)
