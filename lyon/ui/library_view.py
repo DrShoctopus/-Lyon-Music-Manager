@@ -13,7 +13,8 @@ from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
     QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QListView, QMenu,
     QMessageBox, QPushButton, QSpinBox, QSplitter, QStackedWidget,
-    QStyledItemDelegate, QStyleOptionViewItem, QTableView, QVBoxLayout, QWidget,
+    QStyledItemDelegate, QStyleOptionViewItem, QTableView, QTableWidget,
+    QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from ..core.library import Library, Track
@@ -256,6 +257,79 @@ class _FormatDelegate(QStyledItemDelegate):
 
     def sizeHint(self, option: QStyleOptionViewItem, index: QModelIndex) -> QSize:
         return QSize(60, option.rect.height())
+
+
+class _FingerprintSignals(QObject):
+    done = Signal(list)   # list[dict] candidates
+    error = Signal(str)   # error message
+
+
+class _IdentifyTrackDialog(QDialog):
+    """Shows AcoustID fingerprint candidates and lets the user apply one."""
+
+    def __init__(self, track: "Track", parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(f"Identify Track — {track.title or track.path}")
+        self.resize(680, 380)
+        self.selected_candidate: dict | None = None
+
+        layout = QVBoxLayout(self)
+
+        self._status = QLabel("Fingerprinting… (this may take a moment)")
+        self._status.setObjectName("dialogSubtitle")
+        layout.addWidget(self._status)
+
+        self._table = QTableWidget(0, 4)
+        self._table.setHorizontalHeaderLabels(["Score", "Artist", "Title", "Release"])
+        self._table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self._table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self._table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self._table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
+        self._table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self._table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self._table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self._table.setAlternatingRowColors(True)
+        self._table.itemSelectionChanged.connect(self._on_selection)
+        layout.addWidget(self._table, 1)
+
+        bb = QDialogButtonBox()
+        self._apply_btn = bb.addButton("Apply Selected", QDialogButtonBox.AcceptRole)
+        self._apply_btn.setEnabled(False)
+        bb.addButton(QDialogButtonBox.Cancel)
+        bb.accepted.connect(self._on_apply)
+        bb.rejected.connect(self.reject)
+        layout.addWidget(bb)
+
+        self._candidates: list[dict] = []
+
+    def on_candidates(self, candidates: list) -> None:
+        self._candidates = candidates
+        self._table.setRowCount(0)
+        if not candidates:
+            self._status.setText("No matches found.")
+            return
+        self._status.setText(f"Found {len(candidates)} candidate(s). Select one to apply.")
+        for c in candidates:
+            row = self._table.rowCount()
+            self._table.insertRow(row)
+            self._table.setItem(row, 0, QTableWidgetItem(f"{c['score']:.0%}"))
+            self._table.setItem(row, 1, QTableWidgetItem(c.get("artist", "")))
+            self._table.setItem(row, 2, QTableWidgetItem(c.get("title", "")))
+            self._table.setItem(row, 3, QTableWidgetItem(c.get("album", "")))
+
+    def on_error(self, message: str) -> None:
+        self._status.setText(f"Error: {message}")
+
+    def _on_selection(self) -> None:
+        self._apply_btn.setEnabled(bool(self._table.selectedItems()))
+
+    def _on_apply(self) -> None:
+        rows = {i.row() for i in self._table.selectedItems()}
+        if rows:
+            row = next(iter(rows))
+            if 0 <= row < len(self._candidates):
+                self.selected_candidate = self._candidates[row]
+        self.accept()
 
 
 _GRID_ICON_SIZE = 180
@@ -1361,6 +1435,13 @@ class LibraryView(QWidget):
         menu.addSeparator()
         open_folder = menu.addAction("Open Containing Folder")
         edit_metadata = menu.addAction("Edit Metadata")
+        identify_act = None
+        if len(selected) == 1:
+            from ..core.fingerprint import is_available as _fp_available
+            identify_act = menu.addAction("Identify Track…")
+            if not _fp_available():
+                identify_act.setEnabled(False)
+                identify_act.setToolTip("Install pyacoustid and fpcalc to enable")
         scan_rg = menu.addAction("Scan ReplayGain…")
         youtube_search = menu.addAction("Search YouTube for Artist, Album, and Track")
         properties = menu.addAction("Properties")
@@ -1383,6 +1464,8 @@ class LibraryView(QWidget):
                 self._show_batch_metadata_dialog(selected)
             else:
                 self._show_edit_metadata_dialog(primary_track)
+        elif identify_act is not None and action == identify_act:
+            self._identify_track(primary_track)
         elif action == scan_rg:
             self.request_scan_replaygain.emit(list(selected))
         elif action == properties:
@@ -1391,6 +1474,54 @@ class LibraryView(QWidget):
             self.request_youtube_search.emit(self._youtube_query_for_track(primary_track))
         elif go_to_album is not None and action == go_to_album:
             self.reveal_track(primary_track)
+
+    # ------------------------------------------------------------------ identify track (AcoustID)
+
+    def _identify_track(self, track: Track) -> None:
+        """Launch the AcoustID lookup workflow for a single track."""
+        from ..core.fingerprint import lookup_candidates
+
+        dlg = _IdentifyTrackDialog(track, self)
+        dlg.show()
+        dlg.raise_()
+
+        signals = _FingerprintSignals(self)
+        signals.done.connect(dlg.on_candidates)
+        signals.error.connect(dlg.on_error)
+
+        class _Worker(QRunnable):
+            def __init__(self, path, sigs):
+                super().__init__()
+                self.setAutoDelete(True)
+                self._path = path
+                self._sigs = sigs
+            def run(self):
+                try:
+                    candidates = lookup_candidates(self._path)
+                    self._sigs.done.emit(candidates)
+                except Exception as exc:
+                    self._sigs.error.emit(str(exc))
+
+        QThreadPool.globalInstance().start(_Worker(track.path, signals))
+
+        if dlg.exec() == QDialog.Accepted and dlg.selected_candidate:
+            c = dlg.selected_candidate
+            fields: dict = {}
+            if c.get("title"):
+                fields["title"] = c["title"]
+            if c.get("artist"):
+                fields["artist"] = c["artist"]
+            if c.get("album"):
+                fields["album"] = c["album"]
+            if fields:
+                self.library.update_track(track.id, fields)
+                track_path = Path(track.path)
+                if track_path.is_file():
+                    write_partial_tags(track_path, fields)
+            if c.get("acoustid"):
+                self.library.update_acoustid(track.id, c["acoustid"])
+            self.status_message.emit(f"Applied: {c.get('artist', '')} — {c.get('title', '')}")
+            self.refresh()
 
     def _open_containing_folder(self, track: Track) -> None:
         folder = Path(track.path).expanduser().parent

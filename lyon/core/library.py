@@ -100,6 +100,9 @@ _MIGRATIONS: list[tuple[int, str]] = [
     (8, "CREATE INDEX IF NOT EXISTS idx_tracks_file_hash ON tracks(file_hash)"),
     (8, "ALTER TABLE tracks ADD COLUMN cue_image_path TEXT"),
     (8, "ALTER TABLE tracks ADD COLUMN cue_offset_sectors INTEGER"),
+    # v9 — AcoustID fingerprint result UUID for acoustic duplicate detection
+    (9, "ALTER TABLE tracks ADD COLUMN acoustid_id TEXT"),
+    (9, "CREATE INDEX IF NOT EXISTS idx_tracks_acoustid_id ON tracks(acoustid_id)"),
 ]
 
 _PAGE_SIZE = 500  # rows per page in streaming queries
@@ -1065,6 +1068,57 @@ class Library:
         if current_group:
             groups.append(current_group)
         return groups
+
+    def find_duplicates_by_fingerprint(self) -> list[list[Track]]:
+        """Return groups of audio tracks sharing the same AcoustID UUID."""
+        with self._lock:
+            rows = self.conn.execute(
+                """WITH dupe_keys AS (
+                       SELECT acoustid_id FROM tracks
+                       WHERE acoustid_id IS NOT NULL AND acoustid_id != ''
+                         AND media_type = 'audio'
+                       GROUP BY acoustid_id HAVING COUNT(*) > 1
+                   )
+                   SELECT tracks.*
+                   FROM tracks
+                   JOIN dupe_keys ON dupe_keys.acoustid_id = tracks.acoustid_id
+                   ORDER BY tracks.acoustid_id,
+                            tracks.bitrate DESC,
+                            tracks.samplerate DESC,
+                            tracks.duration DESC"""
+            ).fetchall()
+        groups: list[list[Track]] = []
+        current_id: str | None = None
+        current_group: list[Track] = []
+        for row in rows:
+            aid = row["acoustid_id"]
+            if current_id is not None and aid != current_id:
+                groups.append(current_group)
+                current_group = []
+            current_id = aid
+            current_group.append(_row_to_track(row))
+        if current_group:
+            groups.append(current_group)
+        return groups
+
+    def update_acoustid(self, track_id: int, acoustid_id: str) -> None:
+        """Store an AcoustID UUID on a track row."""
+        with self._lock:
+            self.conn.execute(
+                "UPDATE tracks SET acoustid_id = ? WHERE id = ?",
+                (acoustid_id or None, track_id),
+            )
+            self.conn.commit()
+
+    def tracks_without_acoustid(self) -> list[Track]:
+        """Return audio tracks that have no acoustid_id stored yet."""
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT * FROM tracks WHERE media_type = 'audio' "
+                "AND (acoustid_id IS NULL OR acoustid_id = '') "
+                "ORDER BY artist COLLATE NOCASE, album COLLATE NOCASE, track_no"
+            ).fetchall()
+        return [_row_to_track(r) for r in rows]
 
     # ------------------------------------------------------------------ playlist CRUD
     def all_playlists(self) -> list[Playlist]:
