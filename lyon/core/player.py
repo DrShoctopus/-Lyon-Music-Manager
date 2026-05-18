@@ -3,11 +3,11 @@ from __future__ import annotations
 
 import random
 from enum import Enum
-from typing import Optional
+from typing import Callable, Optional
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, QTimer, Signal
 
-from .library import Track
+from .library import Library, Track
 from .equalizer import clamp_preamp, flat_equalizer_bands, normalize_equalizer_bands
 from .playback_backend import PlaybackBackend, create_playback_backend
 
@@ -25,12 +25,21 @@ class Player(QObject):
     queue_changed = Signal()
     playback_unavailable = Signal(str)
 
-    def __init__(self, parent: Optional[QObject] = None, backend: PlaybackBackend | None = None):
+    def __init__(
+        self,
+        parent: Optional[QObject] = None,
+        backend: PlaybackBackend | None = None,
+        library: Library | None = None,
+        backend_factory: Callable[[QObject | None], PlaybackBackend] | None = None,
+    ):
         super().__init__(parent)
-        self._backend = backend or create_playback_backend(self)
-        backend_parent = getattr(self._backend, "parent", None)
-        if callable(backend_parent) and backend_parent() is None:
-            self._backend.setParent(self)
+        self._library = library
+        self._backend_factory = (
+            backend_factory if backend_factory is not None
+            else (create_playback_backend if backend is None else None)
+        )
+        self._backend = backend or self._create_backend()
+        self._adopt_backend(self._backend)
 
         self._queue: list[Track] = []
         self._index: int = -1
@@ -40,11 +49,25 @@ class Player(QObject):
         self._equalizer_preamp = 0
         self._equalizer_bands = flat_equalizer_bands()
 
-        self._backend.position_changed.connect(self.position_changed.emit)
-        self._backend.state_changed.connect(self.state_changed.emit)
-        self._backend.end_reached.connect(self.next)
+        self._crossfade_seconds = 0
+        self._fade_timer: QTimer | None = None
+        self._user_volume = 80   # tracks the volume the user actually wants
+        self._fade_target = 80
+        self._fade_step = 0
+        self._fade_total_steps = 1
+        self._fade_out_backend: PlaybackBackend | None = None
+
+        self._connect_backend(self._backend)
 
     # --------------------------------------------------------------- queue
+    def load_queue(self, tracks: list[Track], current_index: int = 0) -> None:
+        """Restore a saved queue without starting playback."""
+        self._queue = list(tracks)
+        self._index = max(-1, min(current_index, len(tracks) - 1)) if tracks else -1
+        self.queue_changed.emit()
+        if 0 <= self._index < len(self._queue):
+            self.track_changed.emit(self._queue[self._index])
+
     def set_queue(self, tracks: list[Track], start_index: int = 0) -> None:
         self._queue = list(tracks)
         self._index = -1
@@ -139,11 +162,12 @@ class Player(QObject):
             return
         if not self._ensure_playback_available():
             return
+        if self._should_crossfade_to(idx) and self._crossfade_to_index(idx):
+            return
+        self._cancel_crossfade()
         self._index = idx
         track = self._queue[idx]
-        self._backend.set_source(track.path)
-        self._backend.apply_equalizer(self._equalizer_enabled, self._equalizer_bands, self._equalizer_preamp)
-        self._backend.play()
+        self._start_backend_track(self._backend, track, self._user_volume)
         self.track_changed.emit(track)
 
     def play(self) -> None:
@@ -155,6 +179,7 @@ class Player(QObject):
         self._backend.play()
 
     def pause(self) -> None:
+        self._cancel_crossfade()
         self._backend.pause()
 
     def toggle(self) -> None:
@@ -164,11 +189,13 @@ class Player(QObject):
             self.play()
 
     def stop(self) -> None:
+        self._cancel_crossfade()
         self._backend.stop()
 
     def cleanup(self) -> None:
         """Release native backend resources. Call before the application exits."""
-        self._backend.cleanup()
+        self._cancel_crossfade()
+        self._cleanup_backend(self._backend)
 
     def next(self) -> None:
         if not self._queue:
@@ -192,14 +219,20 @@ class Player(QObject):
             self.play_index(self._index - 1)
 
     def seek(self, ms: int) -> None:
+        self._cancel_crossfade()
         self._backend.set_position(ms)
 
     # --------------------------------------------------------------- modes
+    def set_crossfade(self, seconds: int) -> None:
+        self._crossfade_seconds = max(0, int(seconds))
+
     def set_volume(self, percent: int) -> None:
+        self._cancel_crossfade(restore_active_volume=False)
+        self._user_volume = percent
         self._backend.set_volume(percent)
 
     def volume(self) -> int:
-        return self._backend.volume()
+        return self._user_volume
 
     def set_equalizer(self, enabled: bool, bands: list[int], preamp: int = 0) -> None:
         """Store and apply the active ten-band equalizer curve."""
@@ -213,6 +246,8 @@ class Player(QObject):
 
     def set_muted(self, muted: bool) -> None:
         self._backend.set_muted(muted)
+        if self._fade_out_backend is not None:
+            self._fade_out_backend.set_muted(muted)
 
     def is_muted(self) -> bool:
         return self._backend.is_muted()
@@ -233,6 +268,47 @@ class Player(QObject):
         return self._repeat
 
     # --------------------------------------------------------------- internals
+    def _create_backend(self) -> PlaybackBackend:
+        if self._backend_factory is None:
+            return create_playback_backend(self)
+        return self._backend_factory(self)
+
+    def _adopt_backend(self, backend: PlaybackBackend) -> None:
+        backend_parent = getattr(backend, "parent", None)
+        if callable(backend_parent) and backend_parent() is None:
+            backend.setParent(self)
+
+    def _connect_backend(self, backend: PlaybackBackend) -> None:
+        backend.position_changed.connect(self._on_position_changed)
+        backend.state_changed.connect(self.state_changed.emit)
+        backend.end_reached.connect(self._on_track_ended)
+
+    def _disconnect_backend(self, backend: PlaybackBackend) -> None:
+        for signal, slot in (
+            (backend.position_changed, self._on_position_changed),
+            (backend.state_changed, self.state_changed.emit),
+            (backend.end_reached, self._on_track_ended),
+        ):
+            try:
+                signal.disconnect(slot)
+            except (RuntimeError, TypeError):
+                pass
+
+    @staticmethod
+    def _cleanup_backend(backend: PlaybackBackend) -> None:
+        cleanup = getattr(backend, "cleanup", None)
+        if callable(cleanup):
+            cleanup()
+
+    def _on_position_changed(self, pos_ms: int, dur_ms: int) -> None:
+        self.position_changed.emit(pos_ms, dur_ms)
+        self._maybe_auto_crossfade(pos_ms, dur_ms)
+
+    def _on_track_ended(self) -> None:
+        if self._library is not None and 0 <= self._index < len(self._queue):
+            self._library.increment_play_count(self._queue[self._index].id)
+        self.next()
+
     def _next_index(self) -> Optional[int]:
         if self._shuffle:
             candidates = [i for i in range(len(self._queue)) if i != self._index]
@@ -244,6 +320,118 @@ class Player(QObject):
         if self._repeat == RepeatMode.ALL:
             return 0
         return None
+
+    def _start_backend_track(
+        self,
+        backend: PlaybackBackend,
+        track: Track,
+        volume: int,
+    ) -> None:
+        backend.set_source(track.path)
+        backend.apply_equalizer(
+            self._equalizer_enabled,
+            self._equalizer_bands,
+            self._equalizer_preamp,
+        )
+        backend.set_muted(self.is_muted())
+        backend.set_volume(volume)
+        backend.play()
+
+    def _should_crossfade_to(self, idx: int) -> bool:
+        return (
+            self._crossfade_seconds > 0
+            and self._backend_factory is not None
+            and self._backend.is_playing()
+            and 0 <= self._index < len(self._queue)
+            and idx != self._index
+        )
+
+    def _maybe_auto_crossfade(self, pos_ms: int, dur_ms: int) -> None:
+        if (
+            self._crossfade_seconds <= 0
+            or self._fade_timer is not None
+            or self._repeat == RepeatMode.ONE
+            or dur_ms <= 0
+            or pos_ms <= 0
+            or not self._backend.is_playing()
+        ):
+            return
+        remaining_ms = dur_ms - pos_ms
+        if remaining_ms > self._crossfade_seconds * 1000:
+            return
+        nxt = self._next_index()
+        if nxt is None or nxt == self._index:
+            return
+        if self._library is not None and 0 <= self._index < len(self._queue):
+            self._library.increment_play_count(self._queue[self._index].id)
+        self._crossfade_to_index(nxt)
+
+    def _crossfade_to_index(self, idx: int) -> bool:
+        if self._backend_factory is None:
+            return False
+        try:
+            next_backend = self._create_backend()
+        except Exception:
+            return False
+        self._adopt_backend(next_backend)
+        is_available = getattr(next_backend, "is_available", None)
+        if callable(is_available) and not is_available():
+            self._cleanup_backend(next_backend)
+            return False
+
+        previous_backend = self._backend
+        self._disconnect_backend(previous_backend)
+        self._backend = next_backend
+        self._connect_backend(next_backend)
+
+        self._index = idx
+        track = self._queue[idx]
+        self._start_backend_track(next_backend, track, 0)
+        self.track_changed.emit(track)
+
+        self._fade_out_backend = previous_backend
+        if self._fade_timer is not None:
+            self._fade_timer.stop()
+        self._fade_target = self._user_volume
+        self._fade_step = 0
+        self._fade_total_steps = max(1, self._crossfade_seconds * 1000 // 50)
+        self._fade_timer = QTimer(self)
+        self._fade_timer.setInterval(50)
+        self._fade_timer.timeout.connect(self._on_fade_tick)
+        self._fade_timer.start()
+        return True
+
+    def _on_fade_tick(self) -> None:
+        self._fade_step += 1
+        progress = min(1.0, self._fade_step / self._fade_total_steps)
+        in_vol = int(self._fade_target * progress)
+        out_vol = int(self._fade_target * (1.0 - progress))
+        self._backend.set_volume(in_vol)
+        if self._fade_out_backend is not None:
+            self._fade_out_backend.set_volume(out_vol)
+        if self._fade_step >= self._fade_total_steps:
+            self._finish_crossfade()
+
+    def _finish_crossfade(self) -> None:
+        if self._fade_timer is not None:
+            self._fade_timer.stop()
+            self._fade_timer = None
+        if self._fade_out_backend is not None:
+            self._fade_out_backend.stop()
+            self._cleanup_backend(self._fade_out_backend)
+            self._fade_out_backend = None
+        self._backend.set_volume(self._fade_target)
+
+    def _cancel_crossfade(self, *, restore_active_volume: bool = True) -> None:
+        if self._fade_timer is not None:
+            self._fade_timer.stop()
+            self._fade_timer = None
+        if self._fade_out_backend is not None:
+            self._fade_out_backend.stop()
+            self._cleanup_backend(self._fade_out_backend)
+            self._fade_out_backend = None
+        if restore_active_volume:
+            self._backend.set_volume(self._user_volume)
 
     def _ensure_playback_available(self) -> bool:
         if self.playback_available():

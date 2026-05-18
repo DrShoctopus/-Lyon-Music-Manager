@@ -5,7 +5,7 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, QRectF, QThread, QTimer, Signal
 from PySide6.QtGui import (
-    QColor, QLinearGradient, QPainter, QPainterPath,
+    QColor, QFont, QLinearGradient, QPainter, QPainterPath,
     QPixmap, QStandardItem, QStandardItemModel,
 )
 from PySide6.QtWidgets import (
@@ -82,12 +82,20 @@ def _draw_app_progress_bar(painter: QPainter, rect, pct: int, label: str) -> Non
         chunk_path = chunk_path.intersected(bg_path)
         painter.fillPath(chunk_path, grad)
 
-    # Label – dark grey over the filled area, light over the empty area
+    # Label – bold dark text over the filled area, light text over the empty area.
+    # Bold + near-black gives strong contrast against the blue gradient when the
+    # bar has overtaken the percentage/label text.
+    normal_font = painter.font()
+    bold_font = QFont(normal_font)
+    bold_font.setBold(True)
+
     painter.setClipping(True)
     if chunk_w > 0.5:
         painter.setClipRect(QRectF(r.left(), r.top(), chunk_w, r.height()))
-        painter.setPen(QColor("#3a3a3a"))
+        painter.setFont(bold_font)
+        painter.setPen(QColor("#0d0d0d"))
         painter.drawText(rect, Qt.AlignCenter, label)
+        painter.setFont(normal_font)
     rest_w = r.width() - chunk_w
     if rest_w > 0.5:
         painter.setClipRect(QRectF(r.left() + chunk_w, r.top(), rest_w, r.height()))

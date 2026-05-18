@@ -103,6 +103,24 @@ def test_tracks_for_artist_returns_all_albums_without_extra_view_queries(tmp_pat
     ]
 
 
+def test_playlist_rows_cascade_when_playlist_or_track_is_deleted(tmp_path):
+    library = Library(tmp_path / "library.db")
+    add_track(library, "/music/song_one.flac", artist="Artist", album="Album")
+    add_track(library, "/music/song_two.flac", artist="Artist", album="Album")
+    first, second = list(library.all_tracks())
+
+    playlist_id = library.create_playlist("Manual")
+    library.add_to_playlist(playlist_id, [first.id, second.id])
+
+    library.delete_track(first.id)
+
+    assert [track.id for track in library.playlist_tracks(playlist_id)] == [second.id]
+
+    library.delete_playlist(playlist_id)
+    count = library.conn.execute("SELECT COUNT(*) FROM playlist_tracks").fetchone()[0]
+    assert count == 0
+
+
 def test_add_file_backfills_disc_id_for_existing_track(tmp_path):
     """add_file() must write disc_id even when the path already exists in the DB.
 

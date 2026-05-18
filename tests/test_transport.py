@@ -12,6 +12,7 @@ from lyon.core.library import Track
 from lyon.core.player import Player, RepeatMode
 from lyon.ui.now_playing import NowPlayingView, TransportBar
 from lyon.ui.transport import (
+    HeartButton,
     NextButton, PlayPauseButton, PlayPauseSideButton, PrevButton,
     RepeatButton, ShuffleButton, StopButton, VolumeButton,
 )
@@ -92,6 +93,14 @@ def test_shuffle_button_is_checkable(app):
     btn = ShuffleButton()
     assert btn.isCheckable()
     assert btn._glyph_name() == "shuffle"
+
+
+def test_heart_button_toggles_between_empty_and_filled(app):
+    btn = HeartButton()
+    assert btn.isCheckable()
+    assert btn._glyph_name() == "heart-empty"
+    btn.setChecked(True)
+    assert btn._glyph_name() == "heart-filled"
 
 
 def test_repeat_button_cycles_three_states(app):

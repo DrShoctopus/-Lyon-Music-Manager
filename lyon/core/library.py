@@ -5,6 +5,7 @@ import logging
 import os
 import sqlite3
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable, Iterator
@@ -59,6 +60,18 @@ _MIGRATIONS: list[tuple[int, str]] = [
     # v2 — MusicBrainz disc ID for duplicate-CD detection
     (2, "ALTER TABLE tracks ADD COLUMN disc_id TEXT"),
     (2, "CREATE INDEX IF NOT EXISTS idx_tracks_disc_id ON tracks(disc_id)"),
+    # v3 — star ratings and play statistics
+    (3, "ALTER TABLE tracks ADD COLUMN rating INTEGER NOT NULL DEFAULT 0"),
+    (3, "CREATE INDEX IF NOT EXISTS idx_tracks_rating ON tracks(rating)"),
+    (3, "ALTER TABLE tracks ADD COLUMN play_count INTEGER NOT NULL DEFAULT 0"),
+    (3, "ALTER TABLE tracks ADD COLUMN last_played REAL"),
+    # v4 — named playlists (rules=NULL → manual, rules=JSON → smart)
+    (4, "CREATE TABLE IF NOT EXISTS playlists (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL, created_at REAL NOT NULL DEFAULT (strftime('%s','now')), rules TEXT)"),
+    (4, "CREATE TABLE IF NOT EXISTS playlist_tracks (playlist_id INTEGER NOT NULL, track_id INTEGER NOT NULL, position INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (playlist_id, track_id), FOREIGN KEY (playlist_id) REFERENCES playlists(id) ON DELETE CASCADE, FOREIGN KEY (track_id) REFERENCES tracks(id) ON DELETE CASCADE)"),
+    (4, "CREATE INDEX IF NOT EXISTS idx_pt_playlist ON playlist_tracks(playlist_id, position)"),
+    # v5 — user-liked flag (heart toggle)
+    (5, "ALTER TABLE tracks ADD COLUMN liked INTEGER NOT NULL DEFAULT 0"),
+    (5, "CREATE INDEX IF NOT EXISTS idx_tracks_liked ON tracks(liked)"),
 ]
 
 _PAGE_SIZE = 500  # rows per page in streaming queries
@@ -81,6 +94,11 @@ class Track:
     samplerate: int = 0
     artwork_path: str | None = None
     media_type: str = "audio"
+    rating: int = 0
+    play_count: int = 0
+    last_played: float | None = None
+    liked: bool = False
+    disc_id: str | None = None
 
     @property
     def display_artist(self) -> str:
@@ -91,6 +109,18 @@ class Track:
         return self.media_type == "video"
 
 
+@dataclass
+class Playlist:
+    id: int
+    name: str
+    created_at: float
+    rules: str | None = None  # None = manual playlist; JSON string = smart playlist
+
+    @property
+    def is_smart(self) -> bool:
+        return self.rules is not None
+
+
 class Library:
     def __init__(self, db_path: Path | None = None):
         self.db_path = db_path or (app_data_dir() / "library.db")
@@ -98,6 +128,7 @@ class Library:
         self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         with self._lock:
+            self.conn.execute("PRAGMA foreign_keys = ON")
             self.conn.executescript(_SCHEMA_V0)
             self._migrate()
             self.conn.commit()
@@ -114,7 +145,9 @@ class Library:
             try:
                 self.conn.execute(sql)
             except sqlite3.OperationalError as exc:
-                # Index/column already exists from a previous partial run — safe to skip.
+                if not _is_safe_migration_skip(exc):
+                    raise
+                # Index/column already exists from a previous partial run.
                 LOG.debug("Migration v%d skipped (%s): %s", version, sql[:60], exc)
         # Write outside the per-statement loop so the stamp is atomic with commit().
         self.conn.execute(f"PRAGMA user_version = {target}")
@@ -192,6 +225,19 @@ class Library:
                 }
             else:
                 return False
+
+        # Videos without artist metadata (e.g. yt-dlp downloads where mutagen
+        # parses the container but no tags are present) fall back to the parent
+        # folder name so they group under "YouTube Downloads" rather than the
+        # catch-all "Unknown Artist" display.
+        if media_type == "video" and not (meta["artist"] or meta["album_artist"]):
+            folder_name = Path(path).parent.name or "Videos"
+            if not meta["artist"]:
+                meta["artist"] = folder_name
+            if not meta["album_artist"]:
+                meta["album_artist"] = folder_name
+            if not meta["album"]:
+                meta["album"] = folder_name
         # Look for adjacent cover art.  YouTube video downloads keep their
         # thumbnail as a same-stem sidecar image next to the media file, so
         # prefer that exact match before falling back to album-folder art.
@@ -235,14 +281,20 @@ class Library:
             return inserted
 
     # ------------------------------------------------------------------ queries
-    def all_artists(self, media_type: str | None = None) -> list[str]:
-        filter_sql = "" if media_type is None else "AND media_type = ?"
-        params = () if media_type is None else (media_type,)
+    def all_artists(self, media_type: str | None = None, genre: str | None = None) -> list[str]:
+        conditions: list[str] = ["1=1"]
+        params: list = []
+        if media_type is not None:
+            conditions.append("media_type = ?")
+            params.append(media_type)
+        if genre is not None:
+            conditions.append("genre = ?")
+            params.append(genre)
+        where = " AND ".join(conditions)
         with self._lock:
             rows = self.conn.execute(
                 f"""SELECT DISTINCT {DISPLAY_ARTIST_SQL} AS a
-                    FROM tracks
-                    WHERE 1=1 {filter_sql}
+                    FROM tracks WHERE {where}
                     ORDER BY a COLLATE NOCASE""",
                 params,
             ).fetchall()
@@ -372,7 +424,7 @@ class Library:
         return (row["a"], row["b"]) if row else None
 
     def update_track(self, track_id: int, fields: dict) -> None:
-        allowed = {"title", "artist", "album_artist", "album", "track_no", "disc_no", "year", "genre"}
+        allowed = {"title", "artist", "album_artist", "album", "track_no", "disc_no", "year", "genre", "artwork_path"}
         safe = {k: v for k, v in fields.items() if k in allowed}
         if not safe:
             return
@@ -383,6 +435,263 @@ class Library:
                 [*safe.values(), track_id],
             )
             self.conn.commit()
+
+    def update_liked(self, track_id: int, liked: bool) -> None:
+        with self._lock:
+            self.conn.execute(
+                "UPDATE tracks SET liked = ? WHERE id = ?", (int(liked), track_id)
+            )
+            self.conn.commit()
+
+    def update_rating(self, track_id: int, rating: int) -> None:
+        rating = max(0, min(5, int(rating)))
+        with self._lock:
+            self.conn.execute(
+                "UPDATE tracks SET rating = ? WHERE id = ?", (rating, track_id)
+            )
+            self.conn.commit()
+
+    def increment_play_count(self, track_id: int) -> None:
+        now = time.time()
+        with self._lock:
+            self.conn.execute(
+                "UPDATE tracks SET play_count = play_count + 1, last_played = ? WHERE id = ?",
+                (now, track_id),
+            )
+            self.conn.commit()
+
+    # ------------------------------------------------------------------ genre queries
+    def all_genres(self, media_type: str | None = None) -> list[str]:
+        filter_sql = "" if media_type is None else "AND media_type = ?"
+        params: tuple = () if media_type is None else (media_type,)
+        with self._lock:
+            rows = self.conn.execute(
+                f"""SELECT DISTINCT genre AS g FROM tracks
+                    WHERE genre IS NOT NULL AND genre != '' {filter_sql}
+                    ORDER BY genre COLLATE NOCASE""",
+                params,
+            ).fetchall()
+        return [r["g"] for r in rows]
+
+    def tracks_for_genre(self, genre: str, media_type: str | None = None) -> list[Track]:
+        filter_sql = "" if media_type is None else "AND media_type = ?"
+        params: tuple = (genre, media_type) if media_type is not None else (genre,)
+        with self._lock:
+            rows = self.conn.execute(
+                f"""SELECT * FROM tracks WHERE genre = ? {filter_sql}
+                    ORDER BY {DISPLAY_ARTIST_SQL}, {DISPLAY_ALBUM_SQL}, disc_no, track_no""",
+                params,
+            ).fetchall()
+        return [_row_to_track(r) for r in rows]
+
+    # ------------------------------------------------------------------ virtual collections
+    def recently_added(self, limit: int = 50, media_type: str | None = None) -> list[Track]:
+        filter_sql = "" if media_type is None else "AND media_type = ?"
+        params: tuple = (media_type, limit) if media_type is not None else (limit,)
+        with self._lock:
+            rows = self.conn.execute(
+                f"SELECT * FROM tracks WHERE 1=1 {filter_sql} ORDER BY added_at DESC LIMIT ?",
+                params,
+            ).fetchall()
+        return [_row_to_track(r) for r in rows]
+
+    def recently_played(self, limit: int = 50, media_type: str | None = None) -> list[Track]:
+        filter_sql = "" if media_type is None else "AND media_type = ?"
+        params: tuple = (media_type, limit) if media_type is not None else (limit,)
+        with self._lock:
+            rows = self.conn.execute(
+                f"""SELECT * FROM tracks WHERE last_played IS NOT NULL {filter_sql}
+                    ORDER BY last_played DESC LIMIT ?""",
+                params,
+            ).fetchall()
+        return [_row_to_track(r) for r in rows]
+
+    def most_played(self, limit: int = 50, media_type: str | None = None) -> list[Track]:
+        filter_sql = "" if media_type is None else "AND media_type = ?"
+        params: tuple = (media_type, limit) if media_type is not None else (limit,)
+        with self._lock:
+            rows = self.conn.execute(
+                f"""SELECT * FROM tracks WHERE play_count > 0 {filter_sql}
+                    ORDER BY play_count DESC LIMIT ?""",
+                params,
+            ).fetchall()
+        return [_row_to_track(r) for r in rows]
+
+    def top_rated(self, min_rating: int = 4, limit: int = 100, media_type: str | None = None) -> list[Track]:
+        filter_sql = "" if media_type is None else "AND media_type = ?"
+        params: tuple = (min_rating, media_type, limit) if media_type is not None else (min_rating, limit)
+        with self._lock:
+            rows = self.conn.execute(
+                f"""SELECT * FROM tracks WHERE rating >= ? {filter_sql}
+                    ORDER BY rating DESC, {DISPLAY_ARTIST_SQL}, {DISPLAY_ALBUM_SQL}
+                    LIMIT ?""",
+                params,
+            ).fetchall()
+        return [_row_to_track(r) for r in rows]
+
+    def find_duplicates(self) -> list[list[Track]]:
+        """Return groups of tracks sharing the same display_artist + normalised title."""
+        with self._lock:
+            rows = self.conn.execute(
+                f"""WITH dupe_keys AS (
+                        SELECT {DISPLAY_ARTIST_SQL} AS display_artist,
+                               LOWER(TRIM(title)) AS norm_title
+                        FROM tracks
+                        WHERE title IS NOT NULL AND TRIM(title) != ''
+                        GROUP BY display_artist, norm_title
+                        HAVING COUNT(*) > 1
+                    )
+                    SELECT tracks.*,
+                           {DISPLAY_ARTIST_SQL} AS display_artist,
+                           LOWER(TRIM(tracks.title)) AS norm_title
+                    FROM tracks
+                    JOIN dupe_keys
+                      ON dupe_keys.display_artist = {DISPLAY_ARTIST_SQL}
+                     AND dupe_keys.norm_title = LOWER(TRIM(tracks.title))
+                    ORDER BY dupe_keys.display_artist COLLATE NOCASE,
+                             dupe_keys.norm_title COLLATE NOCASE,
+                             tracks.bitrate DESC,
+                             tracks.samplerate DESC,
+                             tracks.duration DESC"""
+            ).fetchall()
+        groups: list[list[Track]] = []
+        current_key: tuple[str, str] | None = None
+        current_group: list[Track] = []
+        for row in rows:
+            key = (row["display_artist"], row["norm_title"])
+            if current_key is not None and key != current_key:
+                groups.append(current_group)
+                current_group = []
+            current_key = key
+            current_group.append(_row_to_track(row))
+        if current_group:
+            groups.append(current_group)
+        return groups
+
+    # ------------------------------------------------------------------ playlist CRUD
+    def all_playlists(self) -> list[Playlist]:
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT id, name, created_at, rules FROM playlists ORDER BY name COLLATE NOCASE"
+            ).fetchall()
+        return [
+            Playlist(id=r["id"], name=r["name"], created_at=r["created_at"] or 0.0, rules=r["rules"])
+            for r in rows
+        ]
+
+    def smart_playlist_tracks(self, rules_json: str) -> list[Track]:
+        from .smart_playlist import spec_from_json, spec_to_where, spec_order_and_limit
+        spec = spec_from_json(rules_json)
+        where, params = spec_to_where(spec)
+        order, limit = spec_order_and_limit(spec)
+        query = (
+            f"SELECT * FROM tracks "
+            f"WHERE media_type = 'audio' AND ({where}) "
+            f"ORDER BY {order}"
+            + (f" {limit}" if limit else "")
+        )
+        with self._lock:
+            rows = self.conn.execute(query, params).fetchall()
+        return [_row_to_track(r) for r in rows]
+
+    def create_smart_playlist(self, name: str, rules_json: str) -> int:
+        now = time.time()
+        with self._lock:
+            cur = self.conn.execute(
+                "INSERT INTO playlists (name, created_at, rules) VALUES (?, ?, ?)",
+                (name.strip(), now, rules_json),
+            )
+            self.conn.commit()
+            return cur.lastrowid  # type: ignore[return-value]
+
+    def update_playlist_rules(self, playlist_id: int, rules_json: str) -> None:
+        with self._lock:
+            self.conn.execute(
+                "UPDATE playlists SET rules = ? WHERE id = ?", (rules_json, playlist_id)
+            )
+            self.conn.commit()
+
+    def create_playlist(self, name: str) -> int:
+        now = time.time()
+        with self._lock:
+            cur = self.conn.execute(
+                "INSERT INTO playlists (name, created_at) VALUES (?, ?)", (name.strip(), now)
+            )
+            self.conn.commit()
+            return cur.lastrowid  # type: ignore[return-value]
+
+    def rename_playlist(self, playlist_id: int, name: str) -> None:
+        with self._lock:
+            self.conn.execute(
+                "UPDATE playlists SET name = ? WHERE id = ?", (name.strip(), playlist_id)
+            )
+            self.conn.commit()
+
+    def delete_playlist(self, playlist_id: int) -> None:
+        with self._lock:
+            self.conn.execute("DELETE FROM playlists WHERE id = ?", (playlist_id,))
+            self.conn.commit()
+
+    def playlist_tracks(self, playlist_id: int) -> list[Track]:
+        with self._lock:
+            rows = self.conn.execute(
+                """SELECT t.* FROM tracks t
+                   JOIN playlist_tracks pt ON pt.track_id = t.id
+                   WHERE pt.playlist_id = ?
+                   ORDER BY pt.position, pt.rowid""",
+                (playlist_id,),
+            ).fetchall()
+        return [_row_to_track(r) for r in rows]
+
+    def add_to_playlist(self, playlist_id: int, track_ids: list[int]) -> None:
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT COALESCE(MAX(position), -1) FROM playlist_tracks WHERE playlist_id = ?",
+                (playlist_id,),
+            ).fetchone()
+            pos = (row[0] + 1) if row else 0
+            for tid in track_ids:
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO playlist_tracks (playlist_id, track_id, position) VALUES (?, ?, ?)",
+                    (playlist_id, tid, pos),
+                )
+                pos += 1
+            self.conn.commit()
+
+    def remove_from_playlist(self, playlist_id: int, track_id: int) -> None:
+        with self._lock:
+            self.conn.execute(
+                "DELETE FROM playlist_tracks WHERE playlist_id = ? AND track_id = ?",
+                (playlist_id, track_id),
+            )
+            self.conn.commit()
+
+    def reorder_playlist(self, playlist_id: int, ordered_track_ids: list[int]) -> None:
+        with self._lock:
+            for pos, tid in enumerate(ordered_track_ids):
+                self.conn.execute(
+                    "UPDATE playlist_tracks SET position = ? WHERE playlist_id = ? AND track_id = ?",
+                    (pos, playlist_id, tid),
+                )
+            self.conn.commit()
+
+    def delete_track(self, track_id: int) -> None:
+        """Remove a single track record from the library (does not delete the file)."""
+        with self._lock:
+            self.conn.execute("DELETE FROM tracks WHERE id = ?", (track_id,))
+            self.conn.commit()
+
+    def tracks_for_paths(self, paths: list[str]) -> list[Track]:
+        """Return Track objects for the given file paths, preserving order, skipping unknowns."""
+        if not paths:
+            return []
+        placeholders = ",".join("?" * len(paths))
+        with self._lock:
+            rows = self.conn.execute(
+                f"SELECT * FROM tracks WHERE path IN ({placeholders})", paths
+            ).fetchall()
+        path_to_track = {r["path"]: _row_to_track(r) for r in rows}
+        return [path_to_track[p] for p in paths if p in path_to_track]
 
     def remove_missing(self) -> int:
         with self._lock:
@@ -400,6 +709,7 @@ class Library:
 
 
 def _row_to_track(r: sqlite3.Row) -> Track:
+    keys = r.keys()
     return Track(
         id=r["id"],
         path=r["path"],
@@ -416,7 +726,18 @@ def _row_to_track(r: sqlite3.Row) -> Track:
         samplerate=r["samplerate"] or 0,
         artwork_path=r["artwork_path"],
         media_type=r["media_type"] if r["media_type"] else "audio",
+        rating=int(r["rating"] or 0) if "rating" in keys else 0,
+        play_count=int(r["play_count"] or 0) if "play_count" in keys else 0,
+        last_played=r["last_played"] if "last_played" in keys else None,
+        liked=bool(r["liked"]) if "liked" in keys else False,
+        disc_id=r["disc_id"] if "disc_id" in keys else None,
     )
+
+
+def _is_safe_migration_skip(exc: sqlite3.OperationalError) -> bool:
+    """Return True for idempotent migration reruns after a partial previous run."""
+    msg = str(exc).lower()
+    return "duplicate column name" in msg or "already exists" in msg
 
 
 def _read_tags(path: str) -> dict | None:
