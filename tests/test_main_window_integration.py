@@ -282,6 +282,24 @@ def test_watcher_events_are_filtered_to_current_library_roots(main_window, tmp_p
     }
 
 
+def test_watched_indexing_waits_while_ripping(main_window, tmp_path, monkeypatch):
+    from lyon.core.library_watcher import WatchBatch
+
+    rip_output = tmp_path / "Music" / "01 - Track.flac"
+    main_window._watch_pending = WatchBatch(changed_paths={str(rip_output)})
+    monkeypatch.setattr(main_window, "_ripper_is_running", lambda: True)
+
+    main_window._flush_library_watch_events()
+
+    try:
+        assert not main_window._watch_pending.is_empty()
+        assert main_window._watch_index_thread is None
+        assert not main_window._scan_progress.isVisible()
+        assert not main_window._scan_status_label.isVisible()
+    finally:
+        main_window._watch_debounce_timer.stop()
+
+
 def test_main_window_stays_usable_when_playback_backend_is_unavailable(qapp, monkeypatch, tmp_path):
     from lyon.core import player as player_mod
     from lyon.core.library import Library

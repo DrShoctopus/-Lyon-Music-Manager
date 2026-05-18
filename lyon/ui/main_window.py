@@ -698,6 +698,9 @@ class MainWindow(QMainWindow):
     def _flush_library_watch_events(self) -> None:
         if self._watch_pending.is_empty():
             return
+        if self._ripper_is_running():
+            self._watch_debounce_timer.start(1500)
+            return
         if self._scan_thread is not None and self._scan_thread.isRunning():
             self._watch_debounce_timer.start(1000)
             return
@@ -749,6 +752,15 @@ class MainWindow(QMainWindow):
         self._scan_progress.setVisible(False)
         self.show_toast(f"Library update failed: {error}", level="error", duration_ms=6000)
         self._watch_index_thread = None
+
+    def _ripper_is_running(self) -> bool:
+        ripper = getattr(getattr(self, "ripper_view", None), "ripper", None)
+        if ripper is None:
+            return False
+        try:
+            return bool(ripper.is_running())
+        except RuntimeError:
+            return False
 
     def remove_missing(self) -> None:
         confirm = QMessageBox.question(
