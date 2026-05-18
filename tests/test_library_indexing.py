@@ -167,6 +167,42 @@ def test_remove_paths_under_deletes_only_that_folder(tmp_path):
         library.close()
 
 
+def test_scan_prune_ignores_missing_files_under_offline_roots(tmp_path):
+    mounted_root = tmp_path / "Mounted"
+    offline_root = tmp_path / "Offline"
+    mounted_root.mkdir()
+    present_file = mounted_root / "present.flac"
+    present_file.write_bytes(b"present")
+    missing_mounted = mounted_root / "missing.flac"
+    missing_offline = offline_root / "missing.flac"
+
+    library = Library(tmp_path / "library.db")
+    try:
+        for path, title in (
+            (present_file, "Present"),
+            (missing_mounted, "Missing Mounted"),
+            (missing_offline, "Missing Offline"),
+        ):
+            library.conn.execute(
+                """INSERT INTO tracks
+                   (path, title, artist, album_artist, album, track_no, disc_no, year,
+                    genre, duration, bitrate, samplerate)
+                   VALUES (?, ?, '', '', '', 1, 1, 0, '', 1, 1, 1)""",
+                (str(path), title),
+            )
+        library.commit()
+
+        removed = library.remove_missing_under_existing_roots([mounted_root, offline_root])
+
+        assert removed == 1
+        assert {track.title for track in library.all_tracks()} == {
+            "Present",
+            "Missing Offline",
+        }
+    finally:
+        library.close()
+
+
 def test_watch_batch_coalesces_duplicate_and_conflicting_events():
     target = WatchBatch(changed_paths={"/music/a.flac"})
     coalesce_batch(target, WatchBatch(deleted_paths={"/music/a.flac"}))

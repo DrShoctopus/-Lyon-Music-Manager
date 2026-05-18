@@ -1000,6 +1000,43 @@ class Library:
             self.conn.commit()
         return len(missing_ids)
 
+    def remove_missing_under_existing_roots(self, roots: Iterable[str | os.PathLike]) -> int:
+        """Remove missing rows only for library roots that are currently reachable."""
+        existing_roots: list[str] = []
+        for root in roots:
+            try:
+                root_path = Path(root)
+                if root_path.exists():
+                    existing_roots.append(os.path.normcase(os.path.abspath(root_path)))
+            except OSError:
+                continue
+        if not existing_roots:
+            return 0
+
+        with self._lock:
+            rows = self.conn.execute("SELECT id, path FROM tracks").fetchall()
+
+        missing_ids: list[int] = []
+        for row in rows:
+            path = row["path"]
+            if Path(path).exists():
+                continue
+            try:
+                path_norm = os.path.normcase(os.path.abspath(path))
+                if any(os.path.commonpath([root, path_norm]) == root for root in existing_roots):
+                    missing_ids.append(row["id"])
+            except (OSError, ValueError):
+                continue
+
+        if not missing_ids:
+            return 0
+        with self._lock:
+            self.conn.executemany(
+                "DELETE FROM tracks WHERE id = ?", [(id_,) for id_ in missing_ids]
+            )
+            self.conn.commit()
+        return len(missing_ids)
+
 
 def _row_to_track(r: sqlite3.Row) -> Track:
     keys = r.keys()

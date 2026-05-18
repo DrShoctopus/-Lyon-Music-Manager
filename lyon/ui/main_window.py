@@ -66,7 +66,11 @@ class _LibraryScanThread(QThread):
         try:
             should_cancel = lambda: self._cancel or self.isInterruptionRequested()
             summary = ScanSummary()
-            summary.removed = self.library.remove_missing() if self.prune and not should_cancel() else 0
+            summary.removed = (
+                self.library.remove_missing_under_existing_roots(self.roots)
+                if self.prune and not should_cancel()
+                else 0
+            )
             scan_summary = (
                 self.library.scan_paths_summary(self.roots, should_cancel=should_cancel)
                 if not should_cancel()
