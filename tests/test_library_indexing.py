@@ -230,11 +230,44 @@ def test_library_index_thread_applies_watched_folder_batch(tmp_path, monkeypatch
 
         assert [track.title for track in library.all_tracks()] == ["song"]
 
+        path.unlink()
         batch = WatchBatch(deleted_paths={str(path)})
         worker = LibraryIndexThread(library, batch, settle_ms=0)
         worker.run()
 
         assert list(library.all_tracks()) == []
+    finally:
+        library.close()
+
+
+def test_library_index_thread_reindexes_stale_delete_event_when_file_exists(tmp_path):
+    media_dir = tmp_path / "YouTube" / "Uploader"
+    media_dir.mkdir(parents=True)
+    video = media_dir / "Example Video.mp4"
+    video.write_bytes(b"not a real mp4")
+
+    library = Library(tmp_path / "library.db")
+    try:
+        assert library.index_file(video).status == "added"
+        library.commit()
+        assert next(library.all_tracks(media_type="video")).artwork_path is None
+
+        thumbnail = media_dir / "Example Video.jpg"
+        thumbnail.write_bytes(b"thumbnail")
+        summaries = []
+        worker = LibraryIndexThread(
+            library,
+            WatchBatch(deleted_paths={str(video)}),
+            settle_ms=0,
+        )
+        worker.finished_with.connect(summaries.append)
+        worker.run()
+
+        track = next(library.all_tracks(media_type="video"))
+        assert track.path == str(video)
+        assert track.artwork_path == str(thumbnail)
+        assert summaries[0].removed == 0
+        assert summaries[0].updated == 1
     finally:
         library.close()
 

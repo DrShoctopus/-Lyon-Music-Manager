@@ -221,8 +221,21 @@ class LibraryIndexThread(QThread):
                 if self._should_cancel():
                     break
                 if _is_indexable(path):
+                    if Path(path).exists():
+                        self._wait_for_stable_file(path)
+                        summary.add_result(self.library.index_file(path, force=True))
+                        continue
                     summary.removed += self.library.remove_path(path, commit=False)
                 else:
+                    if Path(path).exists():
+                        summary.merge(
+                            self.library.scan_paths_summary(
+                                [path],
+                                should_cancel=self._should_cancel,
+                                force=True,
+                            )
+                        )
+                        continue
                     summary.removed += self.library.remove_paths_under(path, commit=False)
 
             for root in sorted(self.batch.scan_roots):
