@@ -470,6 +470,8 @@ class MainWindow(QMainWindow):
             self.library_view.refresh_playlists()
         if is_rip:
             self.player.stop()
+        if is_video and self.player.is_playing():
+            self.player.pause()
         if not is_video:
             self.video_player_view.pause_playback()
 

@@ -6,6 +6,7 @@ Phases 1–7 still holds together:
 - tab order matches the documented Library/Now Playing/Video/Disc/Rip/YouTube
 - clicking a tab swaps the QStackedWidget page
 - transport bar hides on the rip + video tabs, shows elsewhere
+- entering the Video tab pauses music playback
 - show_toast creates a Toast and replaces any prior toast
 - scan progress indicator toggles visibility around _start_scan
 - Ctrl+1..5 shortcuts are wired to the View menu
@@ -84,6 +85,16 @@ def test_transport_visible_on_library_hidden_on_rip(main_window):
     assert not main_window.transport.isHidden()
     main_window.tab_bar.setCurrentIndex(main_window._tab_index["Now Playing"])
     assert not main_window.transport.isHidden()
+
+
+def test_selecting_video_tab_pauses_music_player(main_window, fake_backend):
+    fake_backend.play()
+    assert main_window.player.is_playing()
+
+    main_window.tab_bar.setCurrentIndex(main_window._tab_index["Video"])
+
+    assert main_window.stack.currentWidget() is main_window.video_player_view
+    assert not main_window.player.is_playing()
 
 
 def test_disc_tab_no_drive_state(main_window):
