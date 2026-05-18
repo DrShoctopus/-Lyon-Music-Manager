@@ -183,6 +183,43 @@ def test_scan_progress_indicator_hidden_by_default(main_window):
     assert not main_window._scan_status_label.isVisible()
 
 
+def test_startup_scan_prunes_missing_library_rows(qapp, fake_backend, monkeypatch, tmp_path):
+    from lyon.core import player as player_mod
+    from lyon.core.library import Library
+    from lyon.core.settings import Settings
+    from lyon.ui import main_window as main_window_mod
+
+    monkeypatch.setattr(player_mod, "create_playback_backend", lambda _parent: fake_backend)
+    library_root = tmp_path / "Music"
+    library_root.mkdir()
+    settings = Settings(
+        music_root=str(library_root),
+        library_paths=[str(library_root)],
+        watch_library_folders=False,
+        first_run_completed=True,
+    )
+    monkeypatch.setattr(Settings, "load", classmethod(lambda cls: settings))
+    monkeypatch.setattr(
+        main_window_mod,
+        "Library",
+        lambda: Library(tmp_path / "library.db"),
+    )
+    scan_calls = []
+
+    def record_start_scan(self, roots, label, prune=False):
+        scan_calls.append((roots, label, prune))
+
+    monkeypatch.setattr(main_window_mod.MainWindow, "_start_scan", record_start_scan)
+
+    w = main_window_mod.MainWindow()
+    try:
+        assert scan_calls == [([str(library_root)], "Scanned", True)]
+    finally:
+        w.player.stop()
+        w.library.close()
+        w.deleteLater()
+
+
 def test_window_icon_is_set(main_window):
     icon = main_window.windowIcon()
     # Either we have a real branded icon or a fallback null one. Both are

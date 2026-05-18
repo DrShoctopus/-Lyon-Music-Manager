@@ -275,7 +275,7 @@ class MainWindow(QMainWindow):
 
         # Initial scan of saved roots.
         if self.settings.library_paths and self.settings.first_run_completed:
-            self._start_scan(self.settings.library_paths, "Scanned")
+            self._start_scan(self.settings.library_paths, "Scanned", prune=True)
 
         # Menu + keyboard shortcuts
         self._build_menu()
