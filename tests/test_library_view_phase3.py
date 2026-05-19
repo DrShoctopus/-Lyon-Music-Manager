@@ -21,12 +21,15 @@ from lyon.ui.library_view import (
 
 
 def _track(id_: int, title: str, artist: str, album: str,
-           track_no: int = 1, duration: float = 180.0) -> Track:
+           track_no: int = 1, duration: float = 180.0,
+           media_type: str = "audio") -> Track:
+    ext = ".mp4" if media_type == "video" else ".flac"
     return Track(
-        id=id_, path=f"/m/{id_}.flac",
+        id=id_, path=f"/m/{id_}{ext}",
         title=title, artist=artist, album_artist=artist, album=album,
         track_no=track_no, disc_no=1, year=2024, genre="",
         duration=duration, bitrate=900_000, samplerate=44_100,
+        media_type=media_type,
     )
 
 
@@ -35,20 +38,57 @@ class FakeLibrary:
         self._map = artists_map
         self.updated_tracks: list[tuple[int, dict]] = []
 
-    def all_artists(self, _media=None) -> list[str]:
-        return list(self._map.keys())
+    def _iter_tracks(self, media_type=None, genre=None):
+        for albums in self._map.values():
+            for tracks in albums.values():
+                for track in tracks:
+                    if media_type is not None and track.media_type != media_type:
+                        continue
+                    if genre is not None and track.genre != genre:
+                        continue
+                    yield track
+
+    def all_artists(self, _media=None, genre=None) -> list[str]:
+        out: list[str] = []
+        seen: set[str] = set()
+        for track in self._iter_tracks(_media, genre=genre):
+            artist = track.display_artist
+            if artist not in seen:
+                seen.add(artist)
+                out.append(artist)
+        return out
 
     def albums_for_artist(self, artist: str, _media=None):
-        for album_name in self._map.get(artist, {}):
-            yield (album_name, None)
+        for album_name, tracks in self._map.get(artist, {}).items():
+            if any(_media is None or track.media_type == _media for track in tracks):
+                yield (album_name, None)
+
+    def all_albums(self, _media=None):
+        out: list[tuple[str, str, None]] = []
+        seen: set[tuple[str, str]] = set()
+        for track in self._iter_tracks(_media):
+            album = track.album or "Unknown Album"
+            key = (track.display_artist, album)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append((track.display_artist, album, None))
+        return out
 
     def tracks_for_album(self, artist: str, album: str, _media=None) -> list[Track]:
-        return list(self._map.get(artist, {}).get(album, []))
+        return [
+            track
+            for track in self._map.get(artist, {}).get(album, [])
+            if _media is None or track.media_type == _media
+        ]
 
     def tracks_for_artist(self, artist: str, _media=None) -> list[Track]:
         out: list[Track] = []
         for tracks in self._map.get(artist, {}).values():
-            out.extend(tracks)
+            out.extend(
+                track for track in tracks
+                if _media is None or track.media_type == _media
+            )
         return out
 
     def search(self, q: str, _media=None) -> list[Track]:
@@ -57,7 +97,7 @@ class FakeLibrary:
         for albums in self._map.values():
             for tracks in albums.values():
                 for t in tracks:
-                    if q_lower in t.title.lower():
+                    if (_media is None or t.media_type == _media) and q_lower in t.title.lower():
                         out.append(t)
         return out
 
@@ -104,6 +144,36 @@ def test_all_albums_pseudo_entry_when_artist_has_multiple_albums(view):
 def test_all_albums_aggregates_tracks(view):
     view.albums.setCurrentIndex(view.albums_model.index(0, 0))
     assert view.tracks_model.rowCount() == 3  # 2 from First Album + 1 from Second
+
+
+def test_grid_albums_respect_show_videos_toggle(app):
+    library = FakeLibrary({
+        "Audio Artist": {
+            "Audio Album": [
+                _track(11, "Song", "Audio Artist", "Audio Album"),
+            ],
+        },
+        "Video Artist": {
+            "Video Album": [
+                _track(12, "Clip", "Video Artist", "Video Album", media_type="video"),
+            ],
+        },
+    })
+    view = LibraryView(library)
+
+    view._grid_mode_btn.setChecked(True)
+
+    assert [
+        view._grid_albums_model.item(row, 0).text()
+        for row in range(view._grid_albums_model.rowCount())
+    ] == ["Audio Album\nAudio Artist"]
+
+    view._show_videos_cb.setChecked(True)
+
+    assert [
+        view._grid_albums_model.item(row, 0).text()
+        for row in range(view._grid_albums_model.rowCount())
+    ] == ["Audio Album\nAudio Artist", "Video Album\nVideo Artist"]
 
 
 def test_single_album_artist_skips_pseudo_entry(view):

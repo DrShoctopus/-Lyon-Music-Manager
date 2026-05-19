@@ -52,6 +52,34 @@ def test_radio_view_play_selected_emits_url_and_remembers_stream(qapp, monkeypat
         view.deleteLater()
 
 
+def test_radio_view_filter_disables_hidden_selection(qapp, monkeypatch):
+    settings = Settings(
+        radio_stations=[
+            {"name": "Sea Jazz", "url": "https://jazz.example.test/live", "genre": "Jazz"},
+            {"name": "Sea News", "url": "https://news.example.test/live", "genre": "News"},
+        ]
+    )
+    monkeypatch.setattr(settings, "save", lambda: None)
+    view = RadioView(settings)
+    played: list[tuple[str, str]] = []
+    view.play_requested.connect(lambda url, title: played.append((url, title)))
+
+    try:
+        view.table.selectRow(0)
+        view.search.setText("news")
+
+        assert view.table.isRowHidden(0)
+        assert not view.play_btn.isEnabled()
+        assert not view.remove_btn.isEnabled()
+
+        view._play_selected()
+
+        assert played == []
+        assert settings.recent_stream_urls == []
+    finally:
+        view.deleteLater()
+
+
 def test_radio_view_add_station_dialog_persists_station(qapp, monkeypatch):
     settings = Settings()
     monkeypatch.setattr(settings, "save", lambda: None)

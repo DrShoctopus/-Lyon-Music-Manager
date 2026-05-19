@@ -729,6 +729,17 @@ class LibraryView(QWidget):
         except TypeError:
             return list(fn())
 
+    def _library_all_albums(
+        self, media_type: str | None = None
+    ) -> list[tuple[str, str, str | None]]:
+        fn = getattr(self.library, "all_albums", None)
+        if not callable(fn):
+            return []
+        try:
+            return list(fn(media_type))
+        except TypeError:
+            return list(fn())
+
     def _library_all_playlists(self) -> list:
         fn = getattr(self.library, "all_playlists", None)
         return list(fn()) if callable(fn) else []
@@ -950,7 +961,7 @@ class LibraryView(QWidget):
         genre = None if genre_key == _ALL_GENRES_KEY else genre_key
 
         if genre is None:
-            albums = self.library.all_albums()
+            albums = self._library_all_albums(self._media_type_filter)
         else:
             tracks = self.library.tracks_for_genre(genre, self._media_type_filter)
             seen: set[tuple[str, str]] = set()

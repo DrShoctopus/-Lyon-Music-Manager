@@ -10,12 +10,13 @@ def add_track(
     artist: str = "",
     album_artist: str = "",
     album: str = "",
+    media_type: str = "audio",
 ) -> None:
     library.conn.execute(
         """INSERT INTO tracks
-           (path, title, artist, album_artist, album, track_no, disc_no, year, genre, duration, bitrate, samplerate)
-           VALUES (?, ?, ?, ?, ?, 1, 1, 0, '', 60.0, 320000, 48000)""",
-        (path, Path(path).stem, artist, album_artist, album),
+           (path, title, artist, album_artist, album, track_no, disc_no, year, genre, duration, bitrate, samplerate, media_type)
+           VALUES (?, ?, ?, ?, ?, 1, 1, 0, '', 60.0, 320000, 48000, ?)""",
+        (path, Path(path).stem, artist, album_artist, album, media_type),
     )
     library.conn.commit()
 
@@ -125,6 +126,25 @@ def test_tracks_for_artist_returns_all_albums_without_extra_view_queries(tmp_pat
     assert [track.path for track in tracks] == [
         "/music/a_first.flac",
         "/music/b_second.flac",
+    ]
+
+
+def test_all_albums_respects_media_type_filter(tmp_path):
+    library = Library(tmp_path / "library.db")
+    add_track(library, "/music/song.flac", artist="Artist", album="Album")
+    add_track(
+        library,
+        "/videos/clip.mp4",
+        artist="Video Artist",
+        album="Videos",
+        media_type="video",
+    )
+
+    assert library.all_albums("audio") == [("Artist", "Album", None)]
+    assert library.all_albums("video") == [("Video Artist", "Videos", None)]
+    assert library.all_albums() == [
+        ("Artist", "Album", None),
+        ("Video Artist", "Videos", None),
     ]
 
 

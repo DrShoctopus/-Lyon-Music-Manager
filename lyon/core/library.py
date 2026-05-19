@@ -805,14 +805,17 @@ class Library:
             ).fetchall()
         return [(r["display_album"], r["art"]) for r in rows]
 
-    def all_albums(self) -> list[tuple[str, str, str | None]]:
+    def all_albums(self, media_type: str | None = None) -> list[tuple[str, str, str | None]]:
+        filter_sql = "" if media_type is None else "WHERE media_type = ?"
+        params: tuple = () if media_type is None else (media_type,)
         with self._lock:
             rows = self.conn.execute(
                 f"""SELECT {DISPLAY_ARTIST_SQL} AS a,
                            {DISPLAY_ALBUM_SQL} AS display_album, MAX(artwork_path) AS art
-                    FROM tracks
+                    FROM tracks {filter_sql}
                     GROUP BY a, display_album
-                    ORDER BY a COLLATE NOCASE, display_album COLLATE NOCASE"""
+                    ORDER BY a COLLATE NOCASE, display_album COLLATE NOCASE""",
+                params,
             ).fetchall()
         return [(r["a"], r["display_album"], r["art"]) for r in rows]
 

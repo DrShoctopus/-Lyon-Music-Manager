@@ -160,7 +160,7 @@ class RadioView(QWidget):
 
     def _current_station(self) -> RadioStation | None:
         row = self.table.currentRow()
-        if row < 0:
+        if row < 0 or self.table.isRowHidden(row):
             return None
         item = self.table.item(row, _COL_NAME)
         if item is None:
