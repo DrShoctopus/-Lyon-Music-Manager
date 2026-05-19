@@ -133,14 +133,32 @@ def _parse_pls(text: str, *, base_url: str = "") -> list[RadioStation]:
 
 def _parse_extinf(line: str) -> tuple[str, int]:
     payload = line.split(":", 1)[1]
-    attrs, _, name = payload.partition(",")
+    attrs, name = _split_extinf_payload(payload)
     return name.strip(), _parse_bitrate(attrs)
 
 
+def _split_extinf_payload(payload: str) -> tuple[str, str]:
+    """Split EXTINF attrs from name on the first comma outside quotes."""
+    in_quote = False
+    for index, ch in enumerate(payload):
+        if ch == '"':
+            in_quote = not in_quote
+        elif ch == "," and not in_quote:
+            return payload[:index], payload[index + 1:]
+    return payload, ""
+
+
 def _parse_bitrate(text: str) -> int:
-    for token in text.replace("=", " ").replace('"', " ").split():
+    """Read a bitrate attribute from an EXTINF attribute string.
+
+    The first token is the duration in seconds and must be skipped — otherwise
+    `#EXTINF:300,Station` would treat 300s of duration as 300 kbps.
+    """
+    tokens = text.split(None, 1)
+    remainder = tokens[1] if len(tokens) > 1 else ""
+    for token in remainder.replace("=", " ").replace('"', " ").split():
         number = _safe_int(token)
-        if number > 0 and number < 10000:
+        if 0 < number < 10000:
             return number
     return 0
 

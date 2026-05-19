@@ -33,6 +33,37 @@ def test_parse_pls_reads_titles_bitrates_and_dedupes():
     assert stations[0].bitrate == 192
 
 
+def test_parse_extinf_duration_is_not_treated_as_bitrate():
+    stations = parse_playlist_text(
+        "#EXTM3U\n"
+        "#EXTINF:300,Sea Lyon Live\n"
+        "https://radio.example.test/live\n"
+    )
+
+    assert stations[0].bitrate == 0
+
+
+def test_parse_extinf_reads_bitrate_attribute():
+    stations = parse_playlist_text(
+        "#EXTM3U\n"
+        '#EXTINF:-1 tvg-id="lyon" bitrate="192",Sea Lyon HQ\n'
+        "https://radio.example.test/hq\n"
+    )
+
+    assert stations[0].name == "Sea Lyon HQ"
+    assert stations[0].bitrate == 192
+
+
+def test_parse_extinf_respects_quoted_commas_in_attributes():
+    stations = parse_playlist_text(
+        "#EXTM3U\n"
+        '#EXTINF:-1 tvg-name="Lyon, Live",Sea Lyon Live\n'
+        "https://radio.example.test/live\n"
+    )
+
+    assert stations[0].name == "Sea Lyon Live"
+
+
 def test_parse_hls_variant_playlist_resolves_relative_urls():
     stations = parse_playlist_text(
         "#EXTM3U\n"
@@ -75,7 +106,9 @@ def test_radio_station_settings_normalize_and_merge():
     ])
 
     assert normalize_radio_stations("bad") == []
+    # Bitrate from the original "One" entry is preserved because the update
+    # left bitrate blank — see Settings.add_radio_stations.
     assert settings.radio_stations == [
-        {"name": "One Updated", "url": "https://one.example.test/live", "genre": "News", "bitrate": 0},
+        {"name": "One Updated", "url": "https://one.example.test/live", "genre": "News", "bitrate": 128},
         {"name": "Two", "url": "https://two.example.test/live", "genre": "", "bitrate": 0},
     ]

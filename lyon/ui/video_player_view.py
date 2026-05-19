@@ -1017,6 +1017,21 @@ class VideoPlayerView(QWidget):
         options: tuple[str, ...] = (),
         label: str | None = None,
     ) -> None:
+        # When the user re-activates the same source while it is still
+        # loaded, skip the reload so we don't prompt them to resume the
+        # position they're already at.
+        reloading_same_source = (
+            source == self._current_path
+            and is_location == self._current_is_location
+            and self._player is not None
+            and self._player.get_media() is not None
+        )
+        if reloading_same_source:
+            if not self._player.is_playing():
+                self._player.play()
+                self._timer.start()
+                self._play_btn.set_playing(True)
+            return
         self._save_resume_position()
         self._video_output_generation += 1
         self._video_stack.setCurrentIndex(1)
@@ -1386,6 +1401,7 @@ class VideoPlayerView(QWidget):
             LOG.debug("Video poll error: %s", exc)
 
     def _on_ended(self) -> None:
+        self._clear_resume_position()
         self._timer.stop()
         self._play_btn.set_playing(False)
         self._seek.blockSignals(True)
@@ -1393,6 +1409,19 @@ class VideoPlayerView(QWidget):
         self._seek.setValue(dur)
         self._seek.blockSignals(False)
         self._video_stack.setCurrentIndex(0)
+
+    def _clear_resume_position(self) -> None:
+        """Reset the saved resume position so a fully-watched video does
+        not prompt the user to resume on next play."""
+        if self._library is None or self._current_track_id is None or self._current_is_location:
+            return
+        updater = getattr(self._library, "update_resume_position", None)
+        if not callable(updater):
+            return
+        try:
+            updater(self._current_track_id, 0)
+        except Exception as exc:
+            LOG.debug("Could not clear video resume position: %s", exc)
 
     # ---------------------------------------------------------------- shortcuts / OSD
 

@@ -447,11 +447,10 @@ class Player(QObject):
         self._maybe_gapless_prebuffer(pos_ms, dur_ms)
 
     def _on_track_ended(self) -> None:
-        if self._library is not None and 0 <= self._index < len(self._queue):
-            if not self._queue[self._index].is_library_item:
-                self._advance_after_end()
-                return
-            self._library.increment_play_count(self._queue[self._index].id)
+        if 0 <= self._index < len(self._queue):
+            track = self._queue[self._index]
+            if track.is_library_item and self._library is not None:
+                self._library.increment_play_count(track.id)
         self._advance_after_end()
 
     def _advance_after_end(self) -> None:

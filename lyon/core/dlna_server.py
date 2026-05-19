@@ -601,12 +601,27 @@ def _send_error(handler: BaseHTTPRequestHandler, status: HTTPStatus, message: st
 
 
 def _local_ip() -> str:
+    """Resolve a LAN-reachable IPv4 address for DLNA discovery URLs.
+
+    The connect-to-internet trick works on most setups but fails on
+    air-gapped LANs; falling back to host-interface enumeration keeps
+    the server reachable without exposing loopback as a last resort.
+    """
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
             sock.connect(("8.8.8.8", 80))
             return sock.getsockname()[0]
     except OSError:
-        return "127.0.0.1"
+        pass
+    try:
+        hostname = socket.gethostname()
+        for info in socket.getaddrinfo(hostname, None, socket.AF_INET):
+            address = info[4][0]
+            if address and not address.startswith("127."):
+                return address
+    except OSError:
+        pass
+    return "127.0.0.1"
 
 
 def _server_header() -> str:

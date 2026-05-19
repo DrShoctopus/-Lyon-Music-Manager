@@ -731,3 +731,23 @@ def test_metadata_diagnostics_logs_empty_disc_provider_summary(monkeypatch, tmp_
                 metadata.LOG.removeHandler(handler)
                 handler.close()
         metadata._metadata_file_handler = None
+
+
+def test_theaudiodb_artist_match_accepts_the_prefix_variants():
+    from lyon.core.metadata import _is_theaudiodb_artist_match
+    assert _is_theaudiodb_artist_match({"strArtist": "The Beatles"}, "Beatles")
+    assert _is_theaudiodb_artist_match({"strArtist": "The Beatles"}, "The Beatles")
+    assert _is_theaudiodb_artist_match({"strArtist": "Fleetwood Mac"}, "Mac")
+
+
+def test_theaudiodb_artist_match_rejects_substring_overlaps():
+    from lyon.core.metadata import _is_theaudiodb_artist_match
+    # Loose substring matches were producing wrong bios in the field.
+    assert not _is_theaudiodb_artist_match({"strArtist": "The Dreadnoughts"}, "Dre")
+    assert not _is_theaudiodb_artist_match({"strArtist": "Beatlemania"}, "Beatles")
+    assert not _is_theaudiodb_artist_match({"strArtist": "Dr. Dre"}, "Dr")
+
+
+def test_split_similar_artists_keeps_slash_in_band_names():
+    from lyon.core.metadata import _split_similar_artists
+    assert _split_similar_artists("AC/DC, Metallica") == ["AC/DC", "Metallica"]

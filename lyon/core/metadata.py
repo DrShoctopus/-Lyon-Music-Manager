@@ -868,9 +868,10 @@ def _split_similar_artists(value: Any) -> list[str]:
     text = _text(value)
     if not text:
         return []
+    # Do not split on '/' — band names like "AC/DC" contain a slash.
     return [
         item.strip()
-        for item in re.split(r"[,;/|]", text)
+        for item in re.split(r"[,;|]", text)
         if item.strip()
     ][:8]
 
@@ -1026,7 +1027,21 @@ def _is_theaudiodb_album_match(item: dict[str, Any], artist: str, album: str) ->
 
 def _is_theaudiodb_artist_match(item: dict[str, Any], artist: str) -> bool:
     artist_name = _text(item.get("strArtist"))
-    return bool(artist_name) and _normalize(artist) in _normalize(artist_name)
+    if not artist_name:
+        return False
+    needle = _normalize(artist)
+    haystack = _normalize(artist_name)
+    if not needle or not haystack:
+        return False
+    if needle == haystack:
+        return True
+    # Accept "Beatles" / "The Beatles" by comparing whole-token suffixes;
+    # reject substring overlaps like "Dre" inside "Dreadnoughts".
+    haystack_tokens = haystack.split()
+    needle_tokens = needle.split()
+    if len(needle_tokens) > len(haystack_tokens):
+        return False
+    return needle_tokens == haystack_tokens[-len(needle_tokens):]
 
 
 def _musicbrainz_toc_to_ctdb_toc(toc: str | None) -> str:

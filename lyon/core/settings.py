@@ -287,13 +287,29 @@ class Settings:
         self.recent_stream_urls = normalize_stream_urls([url, *self.recent_stream_urls])
 
     def add_radio_stations(self, stations: list[dict[str, object]]) -> None:
-        """Append or update saved radio stations by URL."""
+        """Append or update saved radio stations by URL.
+
+        Existing fields are preserved when the incoming station leaves them
+        blank, so re-importing a playlist without a bitrate does not wipe a
+        bitrate the user had captured earlier.
+        """
         merged: dict[str, dict[str, object]] = {
             str(station["url"]).casefold(): dict(station)
             for station in normalize_radio_stations(self.radio_stations)
         }
         for station in normalize_radio_stations(stations):
-            merged[str(station["url"]).casefold()] = station
+            key = str(station["url"]).casefold()
+            existing = merged.get(key)
+            if existing is None:
+                merged[key] = station
+                continue
+            combined = dict(existing)
+            for field_name in ("name", "genre", "bitrate"):
+                incoming = station.get(field_name)
+                if incoming:
+                    combined[field_name] = incoming
+            combined["url"] = station["url"]
+            merged[key] = combined
         self.radio_stations = normalize_radio_stations(list(merged.values()))
 
     @classmethod

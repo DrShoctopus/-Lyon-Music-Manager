@@ -314,8 +314,9 @@ class NowPlayingView(QWidget):
     _artist_ready = Signal(str, object, object)  # cache key, ArtistInfo | None, image bytes | None
     request_edit_metadata = Signal(object)  # Track
 
-    # In-memory lyrics cache cap; oldest entries evicted FIFO when exceeded.
-    _LYRICS_CACHE_MAX = 256
+    # In-memory cap for the lyrics + artist side-panel caches; oldest entries
+    # are evicted FIFO when exceeded.
+    _PANEL_CACHE_MAX = 256
 
     def __init__(
         self,
@@ -543,10 +544,12 @@ class NowPlayingView(QWidget):
             self._update_background(track.artwork_path)
             if track.is_library_item:
                 self._load_lyrics(track)
+                self._load_artist_info(track)
             else:
                 self._lyrics_panel.clear()
+                self._artist_task_key = ""
+                self._artist_panel.set_empty("No artist info for network streams.")
             self._info_panel.set_track(track, self._library)
-            self._load_artist_info(track)
         self._refresh_queue()
 
     def _on_position(self, pos_ms: int, dur_ms: int) -> None:
@@ -614,8 +617,8 @@ class NowPlayingView(QWidget):
         # Cache the response unconditionally — even empty results, so we don't
         # re-hit LRCLIB for a track we've already determined has no online lyrics.
         self._lyrics_cache[task_id] = (synced_lrc, plain)
-        if len(self._lyrics_cache) > self._LYRICS_CACHE_MAX:
-            for key in list(self._lyrics_cache.keys())[:-self._LYRICS_CACHE_MAX]:
+        if len(self._lyrics_cache) > self._PANEL_CACHE_MAX:
+            for key in list(self._lyrics_cache.keys())[:-self._PANEL_CACHE_MAX]:
                 del self._lyrics_cache[key]
         if task_id != self._lyrics_task_id:
             return  # stale result — track changed while fetch was in flight
@@ -659,8 +662,8 @@ class NowPlayingView(QWidget):
     def _on_artist_ready(self, key: str, info: object, image_bytes: object) -> None:
         image = image_bytes if isinstance(image_bytes, bytes) else None
         self._artist_cache[key] = (info, image)
-        if len(self._artist_cache) > self._LYRICS_CACHE_MAX:
-            for cache_key in list(self._artist_cache.keys())[:-self._LYRICS_CACHE_MAX]:
+        if len(self._artist_cache) > self._PANEL_CACHE_MAX:
+            for cache_key in list(self._artist_cache.keys())[:-self._PANEL_CACHE_MAX]:
                 del self._artist_cache[cache_key]
         if key != self._artist_task_key:
             return

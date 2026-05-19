@@ -199,7 +199,7 @@ def test_lyrics_cache_serves_hit_without_spawning_thread(player, tmp_path):
 
 def test_lyrics_cache_evicts_oldest_when_over_capacity(player):
     view = NowPlayingView(player, settings=Settings())
-    view._LYRICS_CACHE_MAX = 3  # shrink for the test
+    view._PANEL_CACHE_MAX = 3  # shrink for the test
     view._lyrics_task_id = 1
     for i in range(1, 6):
         view._on_lyrics_ready(i, "", f"text{i}")
