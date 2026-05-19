@@ -448,6 +448,36 @@ class RipperView(QWidget):
             self.status_label.setText("No audio disc detected.")
             return
 
+        self.load_detected_disc(toc)
+
+    def load_detected_disc(self, toc: cd_detect.DiscToc, album: AlbumInfo | None = None) -> None:
+        """Load a TOC read elsewhere, avoiding a second physical disc read."""
+        if self.ripper.is_running():
+            return
+        if self._lookup is not None:
+            try:
+                self._lookup.finished_with.disconnect(self._on_lookup_done)
+            except (TypeError, RuntimeError):
+                pass
+            if self._lookup.isRunning():
+                self._lookup.cancel()
+            self._lookup = None
+        if self._search is not None:
+            try:
+                self._search.finished_with.disconnect(self._on_search_done)
+            except (TypeError, RuntimeError):
+                pass
+            if self._search.isRunning():
+                self._search.cancel()
+            self._search = None
+        if self.drive_combo.findText(toc.drive) < 0:
+            self.drive_combo.addItem(toc.drive)
+        self.drive_combo.setEnabled(True)
+        self.drive_combo.setCurrentText(toc.drive)
+        self.detect_btn.setEnabled(True)
+        self.refresh_btn.setEnabled(True)
+        self.settings.cd_drive = toc.drive
+
         if toc.discid and self.library.has_disc(toc.discid, toc.track_count):
             album_info = self.library.album_for_disc(toc.discid)
             label = f"{album_info[0]} – {album_info[1]}" if album_info else "this disc"
@@ -461,12 +491,15 @@ class RipperView(QWidget):
             )
             return
 
+        self._reset_disc_state()
         self._toc = toc
         self.status_label.setText(
             f"Disc found in {toc.drive} ({toc.track_count} tracks). Looking up metadata..."
         )
         self._populate_default_tracks(toc.track_count)
-        if self.settings.auto_lookup_metadata:
+        if album is not None:
+            self._apply_album(album)
+        elif self.settings.auto_lookup_metadata:
             self._start_lookup(toc)
         else:
             self.start_btn.setEnabled(True)

@@ -35,6 +35,9 @@ _RIP_FORMATS = [
 ]
 _LOSSY_FORMATS = {"mp3", "aac", "opus", "ogg", "wma"}
 _FLAC_FORMAT = "flac"
+_DIALOG_DEFAULT_WIDTH = 900
+_DIALOG_DEFAULT_HEIGHT = 460
+_DIALOG_MIN_WIDTH = 760
 
 
 class SettingsDialog(QDialog):
@@ -49,7 +52,8 @@ class SettingsDialog(QDialog):
     ):
         super().__init__(parent)
         self.setWindowTitle("Settings")
-        self.resize(540, 460)
+        self.setMinimumWidth(_DIALOG_MIN_WIDTH)
+        self.resize(_DIALOG_DEFAULT_WIDTH, _DIALOG_DEFAULT_HEIGHT)
         self.result_settings = replace(settings)
         self.result_settings.library_paths = normalize_library_paths(settings.library_paths)
         self._initial_music_root = settings.music_root.strip()

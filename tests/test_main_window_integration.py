@@ -127,6 +127,40 @@ def test_video_disc_handoff_uses_video_player_after_switching_tabs(main_window, 
     assert calls == [("dvd:///D:/", {"label": "DVD"}, main_window.video_player_view)]
 
 
+def test_audio_disc_handoff_reuses_disc_tab_read_on_rip_tab(main_window, monkeypatch):
+    from lyon.core.cd_detect import DiscToc
+    from lyon.core.metadata import AlbumInfo, TrackInfo
+
+    monkeypatch.setattr(
+        "lyon.ui.ripper_view.cd_detect.read_disc",
+        lambda *_: (_ for _ in ()).throw(AssertionError("ripper should reuse the Disc tab TOC")),
+    )
+    toc = DiscToc(
+        drive="D:",
+        discid="disc-id",
+        toc_string="toc",
+        track_count=1,
+        track_offsets=[150],
+        sectors=15150,
+    )
+    album = AlbumInfo(
+        artist="Artist",
+        album="Album",
+        tracks=[TrackInfo(1, "Song")],
+    )
+    main_window.disc_view._on_audio_read(toc, album)
+
+    main_window._rip_disc_drive("D:")
+
+    assert main_window.stack.currentWidget() is main_window.ripper_view
+    assert main_window.ripper_view._toc is toc
+    assert main_window.ripper_view.album_edit.text() == "Album"
+    assert main_window.ripper_view.artist_edit.text() == "Artist"
+    assert main_window.ripper_view.tracks_model.rowCount() == 1
+    assert main_window.ripper_view.tracks_model.item(0, 1).text() == "Song"
+    assert main_window.ripper_view.start_btn.isEnabled()
+
+
 def test_library_video_handoff_uses_video_tab(main_window, monkeypatch, qapp):
     from lyon.core.library import Track
 

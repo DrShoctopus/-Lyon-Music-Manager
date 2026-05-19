@@ -58,6 +58,8 @@ class DiscView(QWidget):
         super().__init__(parent)
         self.settings = settings
         self._audio_tracks: list[Track] = []
+        self._audio_toc: cd_detect.DiscToc | None = None
+        self._audio_album: AlbumInfo | None = None
         self._reader: _DiscReadThread | None = None
         self._video_source: VideoDiscSource | None = None
 
@@ -214,6 +216,8 @@ class DiscView(QWidget):
             return
         self.settings.cd_drive = drive
         self._audio_tracks = []
+        self._audio_toc = None
+        self._audio_album = None
         self._video_source = None
         self._set_busy(True)
         requested = self.kind_combo.currentData()
@@ -237,6 +241,8 @@ class DiscView(QWidget):
             source = probe_video_disc(self._selected_drive())
             self._show_video_source(source)
             return
+        self._audio_toc = toc
+        self._audio_album = album
         self._audio_tracks = tracks_from_audio_cd(toc, album)
         title = album.album if album else "Audio CD"
         artist = album.artist if album else ""
@@ -280,6 +286,10 @@ class DiscView(QWidget):
     def _selected_audio_rows(self) -> list[int]:
         rows = sorted({idx.row() for idx in self.track_table.selectionModel().selectedRows()})
         return [row for row in rows if 0 <= row < len(self._audio_tracks)]
+
+    def current_audio_disc(self) -> tuple[cd_detect.DiscToc | None, AlbumInfo | None]:
+        """Return the currently loaded Audio CD data for reuse by the ripper."""
+        return self._audio_toc, self._audio_album
 
     def _play_selected_audio(self) -> None:
         rows = self._selected_audio_rows()

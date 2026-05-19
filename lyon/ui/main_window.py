@@ -875,6 +875,9 @@ class MainWindow(QMainWindow):
         if drive:
             self.settings.cd_drive = drive
             self.ripper_view.drive_combo.setCurrentText(drive)
+        toc, album = self.disc_view.current_audio_disc()
+        if toc is not None and (not drive or toc.drive == drive):
+            self.ripper_view.load_detected_disc(toc, album)
         self.tab_bar.setCurrentIndex(self._tab_index["Rip"])
 
     def open_settings(self) -> None:

@@ -13,6 +13,7 @@ from lyon.core.settings import Settings
 from lyon.ui.about import COPYRIGHT_NOTICE
 from lyon.ui import settings_dialog as settings_dialog_module
 from lyon.ui.settings_dialog import SettingsDialog
+from lyon.ui.styles import WMP_QSS
 
 
 @pytest.fixture(scope="module")
@@ -60,6 +61,23 @@ def test_settings_dialog_toggles_metadata_diagnostics(app, monkeypatch):
     dialog._accept()
 
     assert dialog.result_settings.metadata_diagnostics_enabled is True
+
+
+def test_settings_dialog_opens_wide_enough_for_top_tabs(app):
+    previous_stylesheet = app.styleSheet()
+    app.setStyleSheet(WMP_QSS)
+    try:
+        dialog = SettingsDialog(Settings(), None)
+        tabs = dialog.findChild(QtWidgets.QTabWidget)
+        assert tabs is not None
+
+        margins = dialog.layout().contentsMargins()
+        needed_width = tabs.tabBar().sizeHint().width() + margins.left() + margins.right()
+
+        assert dialog.width() >= needed_width
+        assert dialog.minimumWidth() >= needed_width
+    finally:
+        app.setStyleSheet(previous_stylesheet)
 
 
 def test_settings_dialog_persists_library_paths_without_duplicates(app, monkeypatch):

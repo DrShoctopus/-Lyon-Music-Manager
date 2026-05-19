@@ -93,7 +93,10 @@ def test_disc_view_populates_audio_cd_tracks(qapp):
 
         view._on_audio_read(toc, album)
 
+        cached_toc, cached_album = view.current_audio_disc()
         assert view.stack.currentWidget() is view.track_table.parentWidget()
+        assert cached_toc is toc
+        assert cached_album is album
         assert view.track_table.rowCount() == 1
         assert view.track_table.item(0, 1).text() == "Song"
     finally:
