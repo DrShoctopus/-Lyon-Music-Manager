@@ -7,6 +7,7 @@ import os
 import sys
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
+from urllib.parse import urlparse
 
 from .equalizer import (
     DEFAULT_EQ_CURVE_NAME,
@@ -22,6 +23,17 @@ LOG = logging.getLogger(__name__)
 _RIP_FORMATS = {"flac", "mp3", "aac", "opus", "ogg", "alac", "wav", "aiff", "wma"}
 _YT_AUDIO_FORMATS = {"flac", "mp3"}
 _YT_VIDEO_FORMATS = {"mp4", "mkv", "webm"}
+_STREAM_URL_SCHEMES = {
+    "http",
+    "https",
+    "rtmp",
+    "rtmps",
+    "rtsp",
+    "mms",
+    "mmsh",
+    "icy",
+}
+_MAX_RECENT_STREAM_URLS = 25
 
 
 def _default_music_root() -> Path:
@@ -105,6 +117,34 @@ def normalize_library_paths(paths: object) -> list[str]:
     return normalized
 
 
+def normalize_stream_urls(urls: object, *, limit: int = _MAX_RECENT_STREAM_URLS) -> list[str]:
+    """Return valid network stream URLs without duplicates, preserving order."""
+    if not isinstance(urls, list | tuple):
+        return []
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in urls:
+        url = str(value).strip()
+        if not _is_network_stream_url(url):
+            continue
+        key = url.casefold()
+        if key in seen:
+            continue
+        normalized.append(url)
+        seen.add(key)
+        if len(normalized) >= limit:
+            break
+    return normalized
+
+
+def _is_network_stream_url(url: str) -> bool:
+    if not url:
+        return False
+    parsed = urlparse(url)
+    return parsed.scheme.casefold() in _STREAM_URL_SCHEMES and bool(parsed.netloc)
+
+
 @dataclass
 class Settings:
     music_root: str = field(default_factory=lambda: str(_default_music_root()))
@@ -150,6 +190,10 @@ class Settings:
     lastfm_scrobbling_enabled: bool = False
     listenbrainz_token: str = ""        # per-user token from listenbrainz.org/profile/
     listenbrainz_scrobbling_enabled: bool = False
+    recent_stream_urls: list[str] = field(default_factory=list)
+    dlna_enabled: bool = False
+    dlna_port: int = 8200
+    dlna_friendly_name: str = "Sea Lyon Media Manager"
 
     def __post_init__(self) -> None:
         self.rip_format = str(self.rip_format or "flac").lower()
@@ -176,6 +220,10 @@ class Settings:
         self.lastfm_session_key = str(self.lastfm_session_key or "").strip()
         self.lastfm_username = str(self.lastfm_username or "").strip()
         self.listenbrainz_token = str(self.listenbrainz_token or "").strip()
+        self.recent_stream_urls = normalize_stream_urls(self.recent_stream_urls)
+        self.dlna_enabled = _bool_value(self.dlna_enabled, False)
+        self.dlna_port = _clamp_int(self.dlna_port, 8200, 0, 65535)
+        self.dlna_friendly_name = str(self.dlna_friendly_name or "").strip() or "Sea Lyon Media Manager"
         self.yt_audio_format = str(self.yt_audio_format or "flac").lower()
         if self.yt_audio_format not in _YT_AUDIO_FORMATS:
             self.yt_audio_format = "flac"
@@ -199,6 +247,10 @@ class Settings:
             custom_curve_selected or built_in_curve_selected
         ):
             self.equalizer_curve_name = DEFAULT_EQ_CURVE_NAME
+
+    def remember_stream_url(self, url: str) -> None:
+        """Move a valid stream URL to the front of the recents list."""
+        self.recent_stream_urls = normalize_stream_urls([url, *self.recent_stream_urls])
 
     @classmethod
     def load(cls) -> "Settings":

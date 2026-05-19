@@ -697,7 +697,8 @@ class NowPlayingView(QWidget):
         if ext:
             bits.append(ext)
         elif not track.is_library_item and track.playback_is_location:
-            bits.append("Audio CD")
+            uri = (track.playback_uri or track.path or "").casefold()
+            bits.append("Audio CD" if uri.startswith("cdda://") else "Stream")
         if getattr(track, "bitrate", 0):
             kbps = round(track.bitrate / 1000)
             if kbps > 0:

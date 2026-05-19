@@ -6,6 +6,7 @@ import random
 from enum import Enum
 from pathlib import Path
 from typing import Callable, Optional
+from urllib.parse import unquote, urlparse
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
@@ -214,6 +215,37 @@ class Player(QObject):
         if not self._ensure_playback_available():
             return
         self._backend.play()
+
+    def play_url(
+        self,
+        uri: str,
+        *,
+        title: str | None = None,
+        options: tuple[str, ...] = (),
+    ) -> None:
+        """Play a VLC location/MRL as a one-item, non-library queue."""
+        uri = str(uri or "").strip()
+        if not uri:
+            return
+        track = Track(
+            id=0,
+            path=uri,
+            title=(title or "").strip() or _title_from_uri(uri),
+            artist="Network Stream",
+            album_artist="",
+            album="",
+            track_no=0,
+            disc_no=0,
+            year=0,
+            genre="",
+            duration=0.0,
+            media_type="audio",
+            playback_uri=uri,
+            playback_is_location=True,
+            playback_options=tuple(options),
+            is_library_item=False,
+        )
+        self.set_queue([track], 0)
 
     def pause(self) -> None:
         self._cancel_crossfade()
@@ -686,6 +718,16 @@ def _clamp_volume(value: object) -> int:
     except (TypeError, ValueError):
         volume = 80
     return max(0, min(100, volume))
+
+
+def _title_from_uri(uri: str) -> str:
+    parsed = urlparse(uri)
+    tail = Path(unquote(parsed.path or "")).name
+    if parsed.hostname and tail:
+        return f"{parsed.hostname} / {tail}"
+    if parsed.hostname:
+        return parsed.hostname
+    return uri
 
 
 def _accepts_vlc_instance_options(factory: Callable[..., PlaybackBackend]) -> bool:
