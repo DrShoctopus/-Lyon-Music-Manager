@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 from collections.abc import Callable
@@ -79,6 +80,19 @@ class AlbumInfo:
         if self.date and self.date[:4].isdigit():
             return int(self.date[:4])
         return 0
+
+
+@dataclass
+class ArtistInfo:
+    name: str
+    biography: str = ""
+    image_url: str = ""
+    genre: str = ""
+    country: str = ""
+    formed_year: int = 0
+    website: str = ""
+    similar_artists: list[str] = field(default_factory=list)
+    metadata_source: str = "theaudiodb"
 
 
 def _get_http_session() -> requests.Session:
@@ -508,6 +522,32 @@ def search_theaudiodb_album(artist: str, album: str) -> Optional[AlbumInfo]:
     return info
 
 
+def lookup_artist_info(artist: str) -> Optional[ArtistInfo]:
+    """Look up artist biography and image data from TheAudioDB."""
+    artist = artist.strip()
+    if not artist or artist.casefold() == "unknown artist":
+        return None
+    payload = _get_json(_theaudiodb_url("search.php"), params={"s": artist})
+    artists = _ensure_list(payload.get("artists") or payload.get("artist"))
+    match = next(
+        (
+            item for item in artists
+            if isinstance(item, dict) and _is_theaudiodb_artist_match(item, artist)
+        ),
+        None,
+    )
+    if not isinstance(match, dict):
+        return None
+    return _theaudiodb_artist_to_info(match, artist)
+
+
+def fetch_artist_image(artist: ArtistInfo) -> bytes | None:
+    """Fetch the preferred artist image bytes, bounded by artwork size limits."""
+    if not artist.image_url:
+        return None
+    return _fetch_artwork_url(artist.image_url)
+
+
 def _album_search_providers() -> tuple[Callable[[str, str], Optional[AlbumInfo]], ...]:
     return (search_musicbrainz_album, search_theaudiodb_album)
 
@@ -798,6 +838,43 @@ def _theaudiodb_artwork_url(data: dict[str, Any]) -> str:
     return ""
 
 
+def _theaudiodb_artist_to_info(data: dict[str, Any], artist: str) -> ArtistInfo:
+    return ArtistInfo(
+        name=_text(data.get("strArtist")) or artist,
+        biography=_text(
+            data.get("strBiographyEN")
+            or data.get("strBiography")
+            or data.get("strDescriptionEN")
+        ),
+        image_url=_theaudiodb_artist_image_url(data),
+        genre=_text(data.get("strGenre") or data.get("strStyle")),
+        country=_text(data.get("strCountry")),
+        formed_year=_safe_int(data.get("intFormedYear"), 0),
+        website=_text(data.get("strWebsite") or data.get("strFacebook") or data.get("strTwitter")),
+        similar_artists=_split_similar_artists(data.get("strSimilarArtists") or data.get("strSimilar")),
+        metadata_source="theaudiodb",
+    )
+
+
+def _theaudiodb_artist_image_url(data: dict[str, Any]) -> str:
+    for key in ("strArtistThumb", "strArtistFanart", "strArtistLogo", "strArtistBanner"):
+        url = _text(data.get(key))
+        if url:
+            return url
+    return ""
+
+
+def _split_similar_artists(value: Any) -> list[str]:
+    text = _text(value)
+    if not text:
+        return []
+    return [
+        item.strip()
+        for item in re.split(r"[,;/|]", text)
+        if item.strip()
+    ][:8]
+
+
 def _with_theaudiodb_enrichment(info: AlbumInfo | None) -> AlbumInfo | None:
     if not info or not (info.artist and info.album):
         return info
@@ -945,6 +1022,11 @@ def _is_theaudiodb_album_match(item: dict[str, Any], artist: str, album: str) ->
     return _normalize(album) in _normalize(title) and (
         not artist or _normalize(artist) in _normalize(artist_name)
     )
+
+
+def _is_theaudiodb_artist_match(item: dict[str, Any], artist: str) -> bool:
+    artist_name = _text(item.get("strArtist"))
+    return bool(artist_name) and _normalize(artist) in _normalize(artist_name)
 
 
 def _musicbrainz_toc_to_ctdb_toc(toc: str | None) -> str:

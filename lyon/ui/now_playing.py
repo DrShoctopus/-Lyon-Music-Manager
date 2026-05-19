@@ -16,9 +16,11 @@ from PySide6.QtWidgets import (
     QStackedWidget, QVBoxLayout, QWidget,
 )
 
+from ..core import metadata
 from ..core.library import Library, Track
 from ..core.player import Player, RepeatMode
 from ..core.settings import Settings
+from .artist_panel import ArtistPanel
 from .transport import (
     HeartButton, NextButton, PlayPauseButton, PrevButton, RepeatButton,
     ShuffleButton, StopButton, VolumeButton,
@@ -309,6 +311,7 @@ class NowPlayingView(QWidget):
 
     # Emitted from the lyrics-fetch worker thread; always delivered on the main thread.
     _lyrics_ready = Signal(int, str, str)   # task_id, synced_lrc, plain_text
+    _artist_ready = Signal(str, object, object)  # cache key, ArtistInfo | None, image bytes | None
     request_edit_metadata = Signal(object)  # Track
 
     # In-memory lyrics cache cap; oldest entries evicted FIFO when exceeded.
@@ -332,6 +335,8 @@ class NowPlayingView(QWidget):
         self._lyrics_task_id: int = 0   # track.id of the in-flight LRCLIB request; 0 = none
         # track.id → (synced_lrc, plain_text); empty strings mean "we asked LRCLIB and got nothing".
         self._lyrics_cache: dict[int, tuple[str, str]] = {}
+        self._artist_task_key = ""
+        self._artist_cache: dict[str, tuple[object, bytes | None]] = {}
 
         # ---- Album cover
         self.cover = QLabel()
@@ -395,12 +400,17 @@ class NowPlayingView(QWidget):
         info_btn.setCheckable(True)
         info_btn.setObjectName("panelTab")
         info_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        artist_btn = QPushButton("Artist")
+        artist_btn.setCheckable(True)
+        artist_btn.setObjectName("panelTab")
+        artist_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         tab_row = QHBoxLayout()
         tab_row.setSpacing(4)
         tab_row.addWidget(queue_btn, 1)
         tab_row.addWidget(lyrics_btn, 1)
         tab_row.addWidget(info_btn, 1)
+        tab_row.addWidget(artist_btn, 1)
 
         # Queue panel
         self._queue_list = QListWidget()
@@ -421,25 +431,17 @@ class NowPlayingView(QWidget):
 
         # Info panel
         self._info_panel = _InfoPanel()
+        self._artist_panel = ArtistPanel()
 
         self._panel_stack = QStackedWidget()
         self._panel_stack.addWidget(self._queue_list)   # 0: queue
         self._panel_stack.addWidget(self._lyrics_panel)  # 1: lyrics
         self._panel_stack.addWidget(self._info_panel)    # 2: info
+        self._panel_stack.addWidget(self._artist_panel)  # 3: artist
 
-        def _make_tab_switch(btn, other1, other2, page):
-            def _switch(checked):
-                if checked:
-                    other1.setChecked(False)
-                    other2.setChecked(False)
-                    self._panel_stack.setCurrentIndex(page)
-                elif not other1.isChecked() and not other2.isChecked():
-                    btn.setChecked(True)  # prevent all-unchecked state
-            return _switch
-
-        queue_btn.toggled.connect(_make_tab_switch(queue_btn, lyrics_btn, info_btn, 0))
-        lyrics_btn.toggled.connect(_make_tab_switch(lyrics_btn, queue_btn, info_btn, 1))
-        info_btn.toggled.connect(_make_tab_switch(info_btn, queue_btn, lyrics_btn, 2))
+        self._panel_tabs = (queue_btn, lyrics_btn, info_btn, artist_btn)
+        for page, btn in enumerate(self._panel_tabs):
+            btn.toggled.connect(lambda checked, p=page: self._on_panel_tab_toggled(p, checked))
 
         right_vl = QVBoxLayout()
         right_vl.setContentsMargins(0, 0, 0, 0)
@@ -470,6 +472,7 @@ class NowPlayingView(QWidget):
         player.queue_changed.connect(self._refresh_queue)
         player.position_changed.connect(self._on_position)
         self._lyrics_ready.connect(self._on_lyrics_ready)
+        self._artist_ready.connect(self._on_artist_ready)
         self._refresh_queue()
         # Sync immediately if a track is already playing when this view is created.
         self._on_track(player.current())
@@ -503,6 +506,16 @@ class NowPlayingView(QWidget):
         self._bg_cache = None  # force rebuild on next paint
         self.update()
 
+    def _on_panel_tab_toggled(self, page: int, checked: bool) -> None:
+        if checked:
+            for idx, button in enumerate(self._panel_tabs):
+                if idx != page:
+                    button.setChecked(False)
+            self._panel_stack.setCurrentIndex(page)
+            return
+        if not any(button.isChecked() for button in self._panel_tabs):
+            self._panel_tabs[page].setChecked(True)
+
     # ---- Track change --------------------------------------------------
 
     def _on_track(self, track: Track | None) -> None:
@@ -517,6 +530,8 @@ class NowPlayingView(QWidget):
             self._rating_widget.set_rating(0)
             self._lyrics_panel.clear()
             self._info_panel.set_track(None, self._library)
+            self._artist_task_key = ""
+            self._artist_panel.set_empty("No artist selected.")
             self._update_background(None)
         else:
             self.title.setText(track.title or "Untitled")
@@ -531,6 +546,7 @@ class NowPlayingView(QWidget):
             else:
                 self._lyrics_panel.clear()
             self._info_panel.set_track(track, self._library)
+            self._load_artist_info(track)
         self._refresh_queue()
 
     def _on_position(self, pos_ms: int, dur_ms: int) -> None:
@@ -612,6 +628,43 @@ class NowPlayingView(QWidget):
                 self._lyrics_panel.set_lyrics(parsed)
                 return
         self._lyrics_panel.set_lyrics([], plain or None)
+
+    # ---- Artist info ---------------------------------------------------
+
+    def _load_artist_info(self, track: Track) -> None:
+        artist = (track.display_artist or track.artist or "").strip()
+        key = artist.casefold()
+        self._artist_task_key = ""
+        if not artist or key == "unknown artist":
+            self._artist_panel.set_empty()
+            return
+        cached = self._artist_cache.get(key)
+        if cached is not None:
+            info, image_bytes = cached
+            self._artist_panel.set_artist(info, image_bytes)
+            return
+        if self._settings is None or not self._settings.auto_lookup_metadata:
+            self._artist_panel.set_empty()
+            return
+        self._artist_task_key = key
+        self._artist_panel.set_loading(artist)
+
+        def _worker() -> None:
+            info = metadata.lookup_artist_info(artist)
+            image_bytes = metadata.fetch_artist_image(info) if info and info.image_url else None
+            self._artist_ready.emit(key, info, image_bytes)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_artist_ready(self, key: str, info: object, image_bytes: object) -> None:
+        image = image_bytes if isinstance(image_bytes, bytes) else None
+        self._artist_cache[key] = (info, image)
+        if len(self._artist_cache) > self._LYRICS_CACHE_MAX:
+            for cache_key in list(self._artist_cache.keys())[:-self._LYRICS_CACHE_MAX]:
+                del self._artist_cache[cache_key]
+        if key != self._artist_task_key:
+            return
+        self._artist_panel.set_artist(info, image)
 
     # ---- Rating --------------------------------------------------------
 

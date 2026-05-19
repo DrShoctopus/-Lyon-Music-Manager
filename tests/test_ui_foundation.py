@@ -61,6 +61,7 @@ def test_ui_modules_import(app):
         "lyon.ui.equalizer_dialog",
         "lyon.ui.first_run_dialog",
         "lyon.ui.icons",
+        "lyon.ui.artist_panel",
         "lyon.ui.library_view",
         "lyon.ui.now_playing",
         "lyon.ui.queue_dialog",
