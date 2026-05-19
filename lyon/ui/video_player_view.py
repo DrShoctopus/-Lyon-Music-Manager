@@ -960,7 +960,7 @@ class VideoPlayerView(QWidget):
         )
         path, _ = QFileDialog.getOpenFileName(self, "Open Video File", "", ext_filter)
         if path:
-            self._load_path(path)
+            self.load_path(path)
 
     def _open_url(self) -> None:
         recent_urls = list(getattr(self._settings, "recent_stream_urls", []))
@@ -984,8 +984,12 @@ class VideoPlayerView(QWidget):
             return
         self.load_location(url, label=url)
 
-    def _load_path(self, path: str) -> None:
+    def load_path(self, path: str) -> None:
+        """Play a local video file path in the embedded VLC video player."""
         self._load_media_source(path, label=Path(path).name)
+
+    def _load_path(self, path: str) -> None:
+        self.load_path(path)
 
     def load_location(
         self,

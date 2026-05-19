@@ -369,6 +369,7 @@ class _ArtLoader(QRunnable):
 class LibraryView(QWidget):
     play_tracks = Signal(list, int)        # (tracks, start_index)
     enqueue_tracks = Signal(list)
+    play_video = Signal(Track)
     status_message = Signal(str)
     request_add_folder = Signal()
     request_youtube_search = Signal(str)
@@ -1089,7 +1090,7 @@ class LibraryView(QWidget):
         if not isinstance(track, Track):
             return
         if track.is_video:
-            QDesktopServices.openUrl(QUrl.fromLocalFile(track.path))
+            self.play_video.emit(track)
             return
         self.play_tracks.emit(self._sv_current_tracks, index.row())
 
@@ -1120,7 +1121,14 @@ class LibraryView(QWidget):
             return
         selected = self._sv_selected_tracks()
         if selected:
+            if len(selected) == 1 and selected[0].is_video:
+                self.play_video.emit(selected[0])
+                return
             self.play_tracks.emit(selected, 0)
+            return
+        current = self._sv_track_at_row(self._sv_tracks.currentIndex().row())
+        if current is not None and current.is_video:
+            self.play_video.emit(current)
             return
         self.play_tracks.emit(self._sv_current_tracks, 0)
 
@@ -1711,7 +1719,14 @@ class LibraryView(QWidget):
             return
         selected = self._selected_tracks()
         if selected:
+            if len(selected) == 1 and selected[0].is_video:
+                self.play_video.emit(selected[0])
+                return
             self.play_tracks.emit(selected, 0)
+            return
+        current = self._track_at_row(self.tracks.currentIndex().row())
+        if current is not None and current.is_video:
+            self.play_video.emit(current)
             return
         self.play_tracks.emit(displayed, 0)
 
@@ -1729,7 +1744,7 @@ class LibraryView(QWidget):
         if track is None:
             return
         if track.is_video:
-            QDesktopServices.openUrl(QUrl.fromLocalFile(track.path))
+            self.play_video.emit(track)
             return
         self.play_tracks.emit(self._displayed_tracks(), index.row())
 

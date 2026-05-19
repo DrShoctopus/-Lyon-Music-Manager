@@ -176,6 +176,39 @@ def test_grid_albums_respect_show_videos_toggle(app):
     ] == ["Audio Album\nAudio Artist", "Video Album\nVideo Artist"]
 
 
+def test_video_double_click_emits_embedded_video_request(app):
+    video = _track(12, "Clip", "Video Artist", "Video Album", media_type="video")
+    library = FakeLibrary({"Video Artist": {"Video Album": [video]}})
+    view = LibraryView(library)
+    emitted: list[Track] = []
+    view.play_video.connect(emitted.append)
+
+    view._show_videos_cb.setChecked(True)
+    view.artists.setCurrentIndex(view.artists_model.index(0, 0))
+    view.albums.setCurrentIndex(view.albums_model.index(0, 0))
+
+    view._on_track_double(view.tracks_model.index(0, 0))
+
+    assert emitted == [video]
+
+
+def test_video_play_selected_emits_embedded_video_request(app):
+    video = _track(12, "Clip", "Video Artist", "Video Album", media_type="video")
+    library = FakeLibrary({"Video Artist": {"Video Album": [video]}})
+    view = LibraryView(library)
+    emitted: list[Track] = []
+    view.play_video.connect(emitted.append)
+
+    view._show_videos_cb.setChecked(True)
+    view.artists.setCurrentIndex(view.artists_model.index(0, 0))
+    view.albums.setCurrentIndex(view.albums_model.index(0, 0))
+    view.tracks.setCurrentIndex(view.tracks_model.index(0, 0))
+
+    view._play_selected()
+
+    assert emitted == [video]
+
+
 def test_single_album_artist_skips_pseudo_entry(view):
     # Beta Crew has only one album → no "All Albums" entry
     view.artists.setCurrentIndex(view.artists_model.index(1, 0))

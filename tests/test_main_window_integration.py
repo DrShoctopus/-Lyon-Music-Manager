@@ -127,6 +127,40 @@ def test_video_disc_handoff_uses_video_player_after_switching_tabs(main_window, 
     assert calls == [("dvd:///D:/", {"label": "DVD"}, main_window.video_player_view)]
 
 
+def test_library_video_handoff_uses_video_tab(main_window, monkeypatch, qapp):
+    from lyon.core.library import Track
+
+    calls = []
+    monkeypatch.setattr(main_window.video_player_view, "playback_available", lambda: True)
+    monkeypatch.setattr(
+        main_window.video_player_view,
+        "load_path",
+        lambda path: calls.append((path, main_window.stack.currentWidget())),
+    )
+    track = Track(
+        id=42,
+        path="/videos/clip.mp4",
+        title="Clip",
+        artist="Video Artist",
+        album_artist="Video Artist",
+        album="Video Album",
+        track_no=1,
+        disc_no=1,
+        year=2026,
+        genre="",
+        duration=120.0,
+        media_type="video",
+    )
+    main_window.tab_bar.setCurrentIndex(main_window._tab_index["Library"])
+
+    main_window._play_library_video(track)
+
+    assert calls == []
+    assert main_window.stack.currentWidget() is main_window.video_player_view
+    qapp.processEvents(QtCore.QEventLoop.AllEvents, 50)
+    assert calls == [("/videos/clip.mp4", main_window.video_player_view)]
+
+
 def test_radio_play_request_uses_audio_player(main_window, monkeypatch):
     calls = []
     monkeypatch.setattr(main_window.video_player_view, "pause_playback", lambda: calls.append(("pause_video",)))

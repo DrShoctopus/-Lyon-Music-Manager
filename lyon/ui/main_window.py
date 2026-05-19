@@ -17,7 +17,7 @@ from .. import __app_name__, __version__
 from ..core import metadata
 from ..core.cd_detect import close_dll_handles as close_cd_dll_handles
 from ..core.dlna_server import DlnaServer
-from ..core.library import Library, ScanSummary
+from ..core.library import Library, ScanSummary, Track
 from ..core.library_watcher import (
     LibraryFolderWatcher,
     LibraryIndexThread,
@@ -256,6 +256,7 @@ class MainWindow(QMainWindow):
 
         # Wire library actions
         self.library_view.play_tracks.connect(self.player.set_queue)
+        self.library_view.play_video.connect(self._play_library_video)
         self.library_view.enqueue_tracks.connect(self._enqueue_tracks)
         self.library_view.status_message.connect(
             lambda m: self.show_toast(m, level="warning"))
@@ -830,6 +831,21 @@ class MainWindow(QMainWindow):
     def _enqueue_disc_audio_tracks(self, tracks: list) -> None:
         self.player.enqueue(tracks)
         self.show_toast(f"Enqueued {len(tracks)} disc track(s).", level="success")
+
+    def _play_library_video(self, track: Track) -> None:
+        if not self.video_player_view.playback_available():
+            reason = self.video_player_view.unavailable_reason() or "VLC video playback is unavailable."
+            self.show_toast(
+                "Video playback requires VLC/libVLC. Run diagnostics for setup details.",
+                level="error",
+                duration_ms=6000,
+                action=("Diagnostics", self.show_diagnostics),
+            )
+            self.statusBar().showMessage(reason, 6000)
+            return
+        self.player.stop()
+        self.tab_bar.setCurrentIndex(self._tab_index["Video"])
+        QTimer.singleShot(0, lambda: self.video_player_view.load_path(track.path))
 
     def _play_video_disc(self, source) -> None:
         if not self.video_player_view.playback_available():
