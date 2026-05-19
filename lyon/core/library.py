@@ -891,6 +891,14 @@ class Library:
             if len(rows) < _PAGE_SIZE:
                 break
 
+    def track_by_id(self, track_id: int) -> Track | None:
+        """Return one track by database id, or None when it is not indexed."""
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT * FROM tracks WHERE id = ?", (int(track_id),)
+            ).fetchone()
+        return _row_to_track(row) if row is not None else None
+
     def has_disc(self, disc_id: str, min_tracks: int = 1) -> bool:
         """Return True if at least *min_tracks* library tracks carry this disc ID."""
         if not disc_id:

@@ -1,0 +1,657 @@
+"""Minimal DLNA / UPnP MediaServer for the local library."""
+from __future__ import annotations
+
+import logging
+import mimetypes
+import platform
+import socket
+import threading
+import time
+import uuid
+from dataclasses import dataclass
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import BinaryIO
+from urllib.parse import quote, unquote, urlparse
+from xml.sax.saxutils import escape
+
+from defusedxml.ElementTree import fromstring
+
+from .. import __app_name__, __version__
+from .library import Library, Track
+from .settings import Settings
+
+LOG = logging.getLogger(__name__)
+
+_SSDP_ADDR = ("239.255.255.250", 1900)
+_CHUNK_SIZE = 256 * 1024
+
+_MIME_BY_EXT = {
+    ".flac": "audio/flac",
+    ".mp3": "audio/mpeg",
+    ".m4a": "audio/mp4",
+    ".aac": "audio/aac",
+    ".ogg": "audio/ogg",
+    ".opus": "audio/ogg",
+    ".wav": "audio/wav",
+    ".aiff": "audio/aiff",
+    ".aif": "audio/aiff",
+    ".wma": "audio/x-ms-wma",
+    ".mp4": "video/mp4",
+    ".mkv": "video/x-matroska",
+    ".webm": "video/webm",
+    ".avi": "video/x-msvideo",
+    ".mov": "video/quicktime",
+}
+
+
+@dataclass(frozen=True)
+class _BrowseItem:
+    xml: str
+
+
+class DlnaServer:
+    """Expose library tracks as a UPnP ContentDirectory + HTTP media server."""
+
+    def __init__(self, library: Library, settings: Settings):
+        self.library = library
+        self.settings = settings
+        seed = f"sea-lyon:{Path(settings.music_root).expanduser()}"
+        self.uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, seed))
+        self._httpd: "_DlnaHTTPServer | None" = None
+        self._thread: threading.Thread | None = None
+        self._ssdp: _SsdpResponder | None = None
+        self._base_url = ""
+
+    @property
+    def running(self) -> bool:
+        return self._httpd is not None and self._thread is not None and self._thread.is_alive()
+
+    @property
+    def base_url(self) -> str:
+        return self._base_url
+
+    def start(self) -> None:
+        if self.running:
+            return
+        host = "0.0.0.0"
+        port = int(self.settings.dlna_port)
+        httpd = _DlnaHTTPServer((host, port), _DlnaRequestHandler)
+        httpd.dlna = self
+        actual_port = int(httpd.server_address[1])
+        self._base_url = f"http://{_local_ip()}:{actual_port}"
+        self._httpd = httpd
+        self._thread = threading.Thread(
+            target=httpd.serve_forever,
+            name="LyonDLNAServer",
+            daemon=True,
+        )
+        self._thread.start()
+        self._ssdp = _SsdpResponder(self)
+        self._ssdp.start()
+        LOG.info("DLNA server listening at %s", self._base_url)
+
+    def stop(self) -> None:
+        if self._ssdp is not None:
+            self._ssdp.stop()
+            self._ssdp = None
+        if self._httpd is not None:
+            self._httpd.shutdown()
+            self._httpd.server_close()
+            self._httpd = None
+        if self._thread is not None:
+            self._thread.join(timeout=2.0)
+            self._thread = None
+        self._base_url = ""
+
+    def description_xml(self) -> bytes:
+        udn = f"uuid:{self.uuid}"
+        friendly = escape(self.settings.dlna_friendly_name)
+        return f"""<?xml version="1.0" encoding="utf-8"?>
+<root xmlns="urn:schemas-upnp-org:device-1-0">
+  <specVersion><major>1</major><minor>0</minor></specVersion>
+  <device>
+    <deviceType>urn:schemas-upnp-org:device:MediaServer:1</deviceType>
+    <friendlyName>{friendly}</friendlyName>
+    <manufacturer>Sea Lyon</manufacturer>
+    <modelName>{escape(__app_name__)}</modelName>
+    <modelNumber>{escape(__version__)}</modelNumber>
+    <UDN>{udn}</UDN>
+    <serviceList>
+      <service>
+        <serviceType>urn:schemas-upnp-org:service:ContentDirectory:1</serviceType>
+        <serviceId>urn:upnp-org:serviceId:ContentDirectory</serviceId>
+        <SCPDURL>/ContentDirectory/scpd.xml</SCPDURL>
+        <controlURL>/ContentDirectory/control</controlURL>
+        <eventSubURL>/ContentDirectory/event</eventSubURL>
+      </service>
+      <service>
+        <serviceType>urn:schemas-upnp-org:service:ConnectionManager:1</serviceType>
+        <serviceId>urn:upnp-org:serviceId:ConnectionManager</serviceId>
+        <SCPDURL>/ConnectionManager/scpd.xml</SCPDURL>
+        <controlURL>/ConnectionManager/control</controlURL>
+        <eventSubURL>/ConnectionManager/event</eventSubURL>
+      </service>
+    </serviceList>
+  </device>
+</root>
+""".encode("utf-8")
+
+    def content_directory_scpd(self) -> bytes:
+        return _CONTENT_DIRECTORY_SCPD
+
+    def connection_manager_scpd(self) -> bytes:
+        return _CONNECTION_MANAGER_SCPD
+
+    def handle_content_directory(self, body: bytes) -> bytes:
+        root = fromstring(body)
+        action = _soap_action(root)
+        if action == "Search":
+            return self._search_response(root)
+        return self._browse_response(root)
+
+    def handle_connection_manager(self, _body: bytes) -> bytes:
+        protocols = ",".join(
+            f"http-get:*:{mime}:*" for mime in sorted(set(_MIME_BY_EXT.values()))
+        )
+        return _soap_envelope(
+            "GetProtocolInfoResponse",
+            "urn:schemas-upnp-org:service:ConnectionManager:1",
+            f"<Source>{escape(protocols)}</Source><Sink></Sink>",
+        )
+
+    def serve_media(self, handler: BaseHTTPRequestHandler, track_id: int, *, send_body: bool) -> None:
+        track = self.library.track_by_id(track_id)
+        if track is None:
+            _send_error(handler, HTTPStatus.NOT_FOUND, "Track not found")
+            return
+        path = _track_file_path(track)
+        if path is None or not path.exists() or not path.is_file():
+            _send_error(handler, HTTPStatus.NOT_FOUND, "Media file not found")
+            return
+        mime = _mime_type(path)
+        size = path.stat().st_size
+        byte_range = _parse_range(handler.headers.get("Range"), size)
+        if byte_range is None:
+            start, end = 0, max(0, size - 1)
+            status = HTTPStatus.OK
+        elif byte_range == (-1, -1):
+            _send_error(handler, HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE, "Invalid byte range")
+            return
+        else:
+            start, end = byte_range
+            status = HTTPStatus.PARTIAL_CONTENT
+
+        length = max(0, end - start + 1)
+        handler.send_response(status)
+        handler.send_header("Content-Type", mime)
+        handler.send_header("Accept-Ranges", "bytes")
+        handler.send_header("Content-Length", str(length))
+        if status == HTTPStatus.PARTIAL_CONTENT:
+            handler.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        handler.end_headers()
+        if not send_body:
+            return
+        with path.open("rb") as fh:
+            fh.seek(start)
+            _copy_limited(fh, handler.wfile, length)
+
+    def _browse_response(self, root) -> bytes:
+        object_id = _xml_text(root, "ObjectID", "0")
+        flag = _xml_text(root, "BrowseFlag", "BrowseDirectChildren")
+        start = _xml_int(root, "StartingIndex", 0)
+        count = _xml_int(root, "RequestedCount", 0)
+        items = self._browse_items(object_id, flag)
+        visible = items[start:] if count <= 0 else items[start:start + count]
+        didl = _didl_xml(visible)
+        payload = (
+            f"<Result>{escape(didl)}</Result>"
+            f"<NumberReturned>{len(visible)}</NumberReturned>"
+            f"<TotalMatches>{len(items)}</TotalMatches>"
+            "<UpdateID>1</UpdateID>"
+        )
+        return _soap_envelope(
+            "BrowseResponse",
+            "urn:schemas-upnp-org:service:ContentDirectory:1",
+            payload,
+        )
+
+    def _search_response(self, _root) -> bytes:
+        items = self._track_items()
+        didl = _didl_xml(items)
+        payload = (
+            f"<Result>{escape(didl)}</Result>"
+            f"<NumberReturned>{len(items)}</NumberReturned>"
+            f"<TotalMatches>{len(items)}</TotalMatches>"
+            "<UpdateID>1</UpdateID>"
+        )
+        return _soap_envelope(
+            "SearchResponse",
+            "urn:schemas-upnp-org:service:ContentDirectory:1",
+            payload,
+        )
+
+    def _browse_items(self, object_id: str, flag: str) -> list[_BrowseItem]:
+        if flag == "BrowseMetadata":
+            if object_id == "0":
+                return [_container("0", "-1", self.settings.dlna_friendly_name, 2)]
+            if object_id == "audio":
+                return [_container("audio", "0", "Music", len(self._tracks("audio")))]
+            if object_id == "video":
+                return [_container("video", "0", "Videos", len(self._tracks("video")))]
+            if object_id.startswith("track:"):
+                track = _track_from_object_id(self.library, object_id)
+                return [self._track_item(track)] if track else []
+            return []
+        if object_id == "0":
+            return [
+                _container("audio", "0", "Music", len(self._tracks("audio"))),
+                _container("video", "0", "Videos", len(self._tracks("video"))),
+            ]
+        if object_id == "audio":
+            return self._track_items("audio")
+        if object_id == "video":
+            return self._track_items("video")
+        return []
+
+    def _track_items(self, media_type: str | None = None) -> list[_BrowseItem]:
+        return [self._track_item(track) for track in self._tracks(media_type)]
+
+    def _tracks(self, media_type: str | None = None) -> list[Track]:
+        tracks: list[Track] = []
+        for track in self.library.all_tracks():
+            if track.media_type not in {"audio", "video"}:
+                continue
+            if media_type is not None and track.media_type != media_type:
+                continue
+            path = _track_file_path(track)
+            if path is None or not path.exists() or not path.is_file():
+                continue
+            tracks.append(track)
+        return tracks
+
+    def _track_item(self, track: Track) -> _BrowseItem:
+        path = _track_file_path(track)
+        assert path is not None
+        mime = _mime_type(path)
+        parent = "video" if track.media_type == "video" else "audio"
+        upnp_class = "object.item.videoItem" if track.media_type == "video" else "object.item.audioItem.musicTrack"
+        url = f"{self.base_url}/media/{track.id}/{quote(path.name)}"
+        stat = path.stat()
+        attrs = f'protocolInfo="http-get:*:{escape(mime)}:*" size="{stat.st_size}"'
+        if track.duration > 0:
+            attrs += f' duration="{_duration_text(track.duration)}"'
+        title = escape(track.title or path.stem)
+        artist = escape(track.display_artist)
+        album = escape(track.album or "")
+        xml = (
+            f'<item id="track:{track.id}" parentID="{parent}" restricted="1">'
+            f"<dc:title>{title}</dc:title>"
+            f"<dc:creator>{artist}</dc:creator>"
+            f"<upnp:artist>{artist}</upnp:artist>"
+            f"<upnp:album>{album}</upnp:album>"
+            f"<upnp:class>{upnp_class}</upnp:class>"
+            f"<res {attrs}>{escape(url)}</res>"
+            "</item>"
+        )
+        return _BrowseItem(xml)
+
+
+class _DlnaHTTPServer(ThreadingHTTPServer):
+    dlna: DlnaServer
+    allow_reuse_address = True
+    daemon_threads = True
+
+
+class _DlnaRequestHandler(BaseHTTPRequestHandler):
+    server: _DlnaHTTPServer
+
+    def log_message(self, fmt: str, *args) -> None:  # pragma: no cover - noisy server hook
+        LOG.debug("DLNA HTTP: " + fmt, *args)
+
+    def do_GET(self) -> None:
+        self._route(send_body=True)
+
+    def do_HEAD(self) -> None:
+        self._route(send_body=False)
+
+    def do_POST(self) -> None:
+        parsed = urlparse(self.path)
+        length = int(self.headers.get("Content-Length", "0") or 0)
+        body = self.rfile.read(length)
+        try:
+            if parsed.path == "/ContentDirectory/control":
+                _send_xml(self, self.server.dlna.handle_content_directory(body))
+            elif parsed.path == "/ConnectionManager/control":
+                _send_xml(self, self.server.dlna.handle_connection_manager(body))
+            else:
+                _send_error(self, HTTPStatus.NOT_FOUND, "Unknown DLNA control endpoint")
+        except Exception as exc:  # pragma: no cover - defensive protocol boundary
+            LOG.warning("DLNA control request failed: %s", exc)
+            _send_error(self, HTTPStatus.INTERNAL_SERVER_ERROR, "DLNA control request failed")
+
+    def _route(self, *, send_body: bool) -> None:
+        parsed = urlparse(self.path)
+        path = parsed.path
+        if path == "/" or path == "/description.xml":
+            _send_xml(self, self.server.dlna.description_xml(), send_body=send_body)
+            return
+        if path == "/ContentDirectory/scpd.xml":
+            _send_xml(self, self.server.dlna.content_directory_scpd(), send_body=send_body)
+            return
+        if path == "/ConnectionManager/scpd.xml":
+            _send_xml(self, self.server.dlna.connection_manager_scpd(), send_body=send_body)
+            return
+        if path.startswith("/media/"):
+            parts = [unquote(part) for part in path.split("/") if part]
+            if len(parts) >= 2 and parts[0] == "media":
+                try:
+                    track_id = int(parts[1])
+                except ValueError:
+                    track_id = -1
+                self.server.dlna.serve_media(self, track_id, send_body=send_body)
+                return
+        _send_error(self, HTTPStatus.NOT_FOUND, "Not found")
+
+
+class _SsdpResponder:
+    def __init__(self, server: DlnaServer):
+        self.server = server
+        self._stop = threading.Event()
+        self._socket: socket.socket | None = None
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.settimeout(1.0)
+            try:
+                sock.bind(("", 1900))
+            except OSError:
+                sock.bind(("", 0))
+            self._socket = sock
+        except OSError as exc:
+            LOG.info("DLNA SSDP unavailable: %s", exc)
+            return
+        self._notify("ssdp:alive")
+        self._thread = threading.Thread(target=self._run, name="LyonSSDPResponder", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._notify("ssdp:byebye")
+        if self._socket is not None:
+            self._socket.close()
+            self._socket = None
+        if self._thread is not None:
+            self._thread.join(timeout=1.0)
+            self._thread = None
+
+    def _run(self) -> None:
+        last_notify = time.monotonic()
+        while not self._stop.is_set():
+            if time.monotonic() - last_notify > 300:
+                self._notify("ssdp:alive")
+                last_notify = time.monotonic()
+            sock = self._socket
+            if sock is None:
+                return
+            try:
+                data, addr = sock.recvfrom(2048)
+            except TimeoutError:
+                continue
+            except OSError:
+                return
+            text = data.decode("utf-8", "ignore")
+            if "M-SEARCH" in text.upper() and _ssdp_search_matches(text):
+                self._respond(addr)
+
+    def _respond(self, addr: tuple[str, int]) -> None:
+        sock = self._socket
+        if sock is None:
+            return
+        for st, usn in self._targets():
+            msg = (
+                "HTTP/1.1 200 OK\r\n"
+                "CACHE-CONTROL: max-age=1800\r\n"
+                f"DATE: {time.strftime('%a, %d %b %Y %H:%M:%S GMT', time.gmtime())}\r\n"
+                "EXT:\r\n"
+                f"LOCATION: {self.server.base_url}/description.xml\r\n"
+                f"SERVER: {_server_header()}\r\n"
+                f"ST: {st}\r\n"
+                f"USN: {usn}\r\n"
+                "\r\n"
+            )
+            try:
+                sock.sendto(msg.encode("utf-8"), addr)
+            except OSError:
+                return
+
+    def _notify(self, nts: str) -> None:
+        sock = self._socket
+        if sock is None:
+            return
+        for nt, usn in self._targets():
+            msg = (
+                "NOTIFY * HTTP/1.1\r\n"
+                "HOST: 239.255.255.250:1900\r\n"
+                "CACHE-CONTROL: max-age=1800\r\n"
+                f"LOCATION: {self.server.base_url}/description.xml\r\n"
+                f"NT: {nt}\r\n"
+                f"NTS: {nts}\r\n"
+                f"SERVER: {_server_header()}\r\n"
+                f"USN: {usn}\r\n"
+                "\r\n"
+            )
+            try:
+                sock.sendto(msg.encode("utf-8"), _SSDP_ADDR)
+            except OSError:
+                return
+
+    def _targets(self) -> list[tuple[str, str]]:
+        udn = f"uuid:{self.server.uuid}"
+        return [
+            ("upnp:rootdevice", f"{udn}::upnp:rootdevice"),
+            (udn, udn),
+            ("urn:schemas-upnp-org:device:MediaServer:1", f"{udn}::urn:schemas-upnp-org:device:MediaServer:1"),
+            ("urn:schemas-upnp-org:service:ContentDirectory:1", f"{udn}::urn:schemas-upnp-org:service:ContentDirectory:1"),
+            ("urn:schemas-upnp-org:service:ConnectionManager:1", f"{udn}::urn:schemas-upnp-org:service:ConnectionManager:1"),
+        ]
+
+
+def _container(object_id: str, parent_id: str, title: str, child_count: int) -> _BrowseItem:
+    xml = (
+        f'<container id="{escape(object_id)}" parentID="{escape(parent_id)}" '
+        f'restricted="1" childCount="{child_count}">'
+        f"<dc:title>{escape(title)}</dc:title>"
+        "<upnp:class>object.container.storageFolder</upnp:class>"
+        "</container>"
+    )
+    return _BrowseItem(xml)
+
+
+def _didl_xml(items: list[_BrowseItem]) -> str:
+    body = "".join(item.xml for item in items)
+    return (
+        '<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" '
+        'xmlns:dc="http://purl.org/dc/elements/1.1/" '
+        'xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/">'
+        f"{body}</DIDL-Lite>"
+    )
+
+
+def _soap_envelope(action: str, namespace: str, payload: str) -> bytes:
+    return f"""<?xml version="1.0" encoding="utf-8"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"
+            s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
+  <s:Body>
+    <u:{action} xmlns:u="{namespace}">
+      {payload}
+    </u:{action}>
+  </s:Body>
+</s:Envelope>
+""".encode("utf-8")
+
+
+def _track_from_object_id(library: Library, object_id: str) -> Track | None:
+    try:
+        track_id = int(object_id.split(":", 1)[1])
+    except (IndexError, ValueError):
+        return None
+    return library.track_by_id(track_id)
+
+
+def _track_file_path(track: Track) -> Path | None:
+    path = Path(track.playback_uri or track.path)
+    return path if not track.playback_is_location else None
+
+
+def _mime_type(path: Path) -> str:
+    return _MIME_BY_EXT.get(path.suffix.lower()) or mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+
+
+def _duration_text(seconds: float) -> str:
+    total_ms = max(0, int(seconds * 1000))
+    hours, rem = divmod(total_ms, 3_600_000)
+    minutes, rem = divmod(rem, 60_000)
+    secs, millis = divmod(rem, 1000)
+    return f"{hours}:{minutes:02d}:{secs:02d}.{millis:03d}"
+
+
+def _xml_text(root, local_name: str, default: str = "") -> str:
+    for elem in root.iter():
+        if elem.tag.rsplit("}", 1)[-1] == local_name:
+            return (elem.text or "").strip()
+    return default
+
+
+def _xml_int(root, local_name: str, default: int) -> int:
+    try:
+        return int(_xml_text(root, local_name, str(default)))
+    except ValueError:
+        return default
+
+
+def _soap_action(root) -> str:
+    body_seen = False
+    for elem in root.iter():
+        local = elem.tag.rsplit("}", 1)[-1]
+        if local == "Body":
+            body_seen = True
+            continue
+        if body_seen:
+            return local
+    return ""
+
+
+def _parse_range(header: str | None, size: int) -> tuple[int, int] | None:
+    if not header:
+        return None
+    if not header.startswith("bytes=") or size <= 0:
+        return (-1, -1)
+    spec = header.removeprefix("bytes=").split(",", 1)[0].strip()
+    if "-" not in spec:
+        return (-1, -1)
+    start_text, end_text = spec.split("-", 1)
+    try:
+        if start_text == "":
+            suffix = int(end_text)
+            if suffix <= 0:
+                return (-1, -1)
+            start = max(0, size - suffix)
+            end = size - 1
+        else:
+            start = int(start_text)
+            end = int(end_text) if end_text else size - 1
+    except ValueError:
+        return (-1, -1)
+    if start < 0 or end < start or start >= size:
+        return (-1, -1)
+    return (start, min(end, size - 1))
+
+
+def _copy_limited(src: BinaryIO, dst: BinaryIO, length: int) -> None:
+    remaining = length
+    while remaining > 0:
+        chunk = src.read(min(_CHUNK_SIZE, remaining))
+        if not chunk:
+            return
+        dst.write(chunk)
+        remaining -= len(chunk)
+
+
+def _send_xml(handler: BaseHTTPRequestHandler, data: bytes, *, send_body: bool = True) -> None:
+    handler.send_response(HTTPStatus.OK)
+    handler.send_header("Content-Type", 'text/xml; charset="utf-8"')
+    handler.send_header("Content-Length", str(len(data)))
+    handler.end_headers()
+    if send_body:
+        handler.wfile.write(data)
+
+
+def _send_error(handler: BaseHTTPRequestHandler, status: HTTPStatus, message: str) -> None:
+    data = message.encode("utf-8")
+    handler.send_response(status)
+    handler.send_header("Content-Type", "text/plain; charset=utf-8")
+    handler.send_header("Content-Length", str(len(data)))
+    handler.end_headers()
+    handler.wfile.write(data)
+
+
+def _local_ip() -> str:
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect(("8.8.8.8", 80))
+            return sock.getsockname()[0]
+    except OSError:
+        return "127.0.0.1"
+
+
+def _server_header() -> str:
+    return f"{platform.system()}/{platform.release()} UPnP/1.0 SeaLyon/{__version__}"
+
+
+def _ssdp_search_matches(text: str) -> bool:
+    lowered = text.casefold()
+    return (
+        "ssdp:all" in lowered
+        or "upnp:rootdevice" in lowered
+        or "mediaserver" in lowered
+        or "contentdirectory" in lowered
+    )
+
+
+_CONTENT_DIRECTORY_SCPD = b"""<?xml version="1.0" encoding="utf-8"?>
+<scpd xmlns="urn:schemas-upnp-org:service-1-0">
+  <specVersion><major>1</major><minor>0</minor></specVersion>
+  <actionList>
+    <action><name>Browse</name></action>
+    <action><name>Search</name></action>
+  </actionList>
+  <serviceStateTable>
+    <stateVariable sendEvents="yes"><name>SystemUpdateID</name><dataType>ui4</dataType></stateVariable>
+    <stateVariable sendEvents="no"><name>A_ARG_TYPE_ObjectID</name><dataType>string</dataType></stateVariable>
+    <stateVariable sendEvents="no"><name>A_ARG_TYPE_Result</name><dataType>string</dataType></stateVariable>
+    <stateVariable sendEvents="no"><name>A_ARG_TYPE_BrowseFlag</name><dataType>string</dataType></stateVariable>
+    <stateVariable sendEvents="no"><name>A_ARG_TYPE_Filter</name><dataType>string</dataType></stateVariable>
+    <stateVariable sendEvents="no"><name>A_ARG_TYPE_Index</name><dataType>ui4</dataType></stateVariable>
+    <stateVariable sendEvents="no"><name>A_ARG_TYPE_Count</name><dataType>ui4</dataType></stateVariable>
+    <stateVariable sendEvents="no"><name>A_ARG_TYPE_SortCriteria</name><dataType>string</dataType></stateVariable>
+  </serviceStateTable>
+</scpd>
+"""
+
+_CONNECTION_MANAGER_SCPD = b"""<?xml version="1.0" encoding="utf-8"?>
+<scpd xmlns="urn:schemas-upnp-org:service-1-0">
+  <specVersion><major>1</major><minor>0</minor></specVersion>
+  <actionList>
+    <action><name>GetProtocolInfo</name></action>
+  </actionList>
+  <serviceStateTable>
+    <stateVariable sendEvents="no"><name>SourceProtocolInfo</name><dataType>string</dataType></stateVariable>
+    <stateVariable sendEvents="no"><name>SinkProtocolInfo</name><dataType>string</dataType></stateVariable>
+  </serviceStateTable>
+</scpd>
+"""

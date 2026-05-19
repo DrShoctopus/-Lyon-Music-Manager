@@ -93,6 +93,26 @@ def test_settings_dialog_persists_crossfade_seconds(app):
     assert dialog.result_settings.crossfade_seconds == 7
 
 
+def test_settings_dialog_persists_dlna_options(app):
+    dialog = SettingsDialog(
+        Settings(
+            dlna_enabled=False,
+            dlna_port=8200,
+            dlna_friendly_name="Sea Lyon Media Manager",
+        ),
+        None,
+    )
+
+    dialog.dlna_enabled.setChecked(True)
+    dialog.dlna_port.setValue(0)
+    dialog.dlna_name.setText("Living Room Library")
+    dialog._accept()
+
+    assert dialog.result_settings.dlna_enabled is True
+    assert dialog.result_settings.dlna_port == 0
+    assert dialog.result_settings.dlna_friendly_name == "Living Room Library"
+
+
 def test_settings_dialog_about_tab_mentions_copyright_and_third_parties(app):
     dialog = SettingsDialog(Settings(), None)
     about_text = "\n".join(label.text() for label in dialog.findChildren(QtWidgets.QLabel))

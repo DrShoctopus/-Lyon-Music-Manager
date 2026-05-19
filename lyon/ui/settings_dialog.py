@@ -67,6 +67,7 @@ class SettingsDialog(QDialog):
         tabs.addTab(self._build_metadata_tab(settings), "Metadata")
         tabs.addTab(self._build_youtube_tab(settings), "YouTube")
         tabs.addTab(self._build_scrobbling_tab(settings), "Scrobbling")
+        tabs.addTab(self._build_dlna_tab(settings), "DLNA")
         tabs.addTab(self._build_about_tab(), "About")
 
         layout = QVBoxLayout(self)
@@ -453,6 +454,36 @@ class SettingsDialog(QDialog):
         layout.addStretch(1)
         return w
 
+    def _build_dlna_tab(self, settings: Settings) -> QWidget:
+        w = QWidget()
+        form = QFormLayout(w)
+        form.setContentsMargins(12, 12, 12, 12)
+        form.setVerticalSpacing(8)
+
+        self.dlna_enabled = QCheckBox("Share library over DLNA / UPnP")
+        self.dlna_enabled.setChecked(settings.dlna_enabled)
+        form.addRow("", self.dlna_enabled)
+
+        self.dlna_name = QLineEdit(settings.dlna_friendly_name)
+        self.dlna_name.setPlaceholderText("Sea Lyon Media Manager")
+        form.addRow("Server name:", self.dlna_name)
+
+        self.dlna_port = QSpinBox()
+        self.dlna_port.setRange(0, 65535)
+        self.dlna_port.setSpecialValueText("Auto")
+        self.dlna_port.setValue(settings.dlna_port)
+        self.dlna_port.setToolTip("Use 0 to let the operating system choose an available port.")
+        form.addRow("Port:", self.dlna_port)
+
+        note = QLabel(
+            "DLNA shares indexed audio and video files on your local network while Sea Lyon is running."
+        )
+        note.setWordWrap(True)
+        note.setObjectName("mutedText")
+        form.addRow("", note)
+
+        return w
+
     @staticmethod
     def _lastfm_status_text(settings: Settings) -> str:
         if not settings.lastfm_session_key:
@@ -680,6 +711,11 @@ class SettingsDialog(QDialog):
         self.result_settings.lastfm_scrobbling_enabled = self.lastfm_enabled.isChecked()
         self.result_settings.listenbrainz_scrobbling_enabled = self.lbz_enabled.isChecked()
         self.result_settings.listenbrainz_token = self.lbz_token.text().strip()
+        self.result_settings.dlna_enabled = self.dlna_enabled.isChecked()
+        self.result_settings.dlna_port = self.dlna_port.value()
+        self.result_settings.dlna_friendly_name = (
+            self.dlna_name.text().strip() or "Sea Lyon Media Manager"
+        )
         # lastfm_session_key and lastfm_username are updated live by the auth flow;
         # preserve whatever's there.
         self.accept()

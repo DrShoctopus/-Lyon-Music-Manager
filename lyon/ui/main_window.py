@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 from .. import __app_name__, __version__
 from ..core import metadata
 from ..core.cd_detect import close_dll_handles as close_cd_dll_handles
+from ..core.dlna_server import DlnaServer
 from ..core.library import Library, ScanSummary
 from ..core.library_watcher import (
     LibraryFolderWatcher,
@@ -108,6 +109,7 @@ class MainWindow(QMainWindow):
         )
         self.player.set_gapless(self.settings.gapless_playback)
         self.scrobbler = ScrobblerService(self.player, self.settings, self)
+        self.dlna_server = DlnaServer(self.library, self.settings)
         self._scan_thread: _LibraryScanThread | None = None
         self._rg_scanner: ReplayGainScanner | None = None
         self._watch_index_thread: LibraryIndexThread | None = None
@@ -294,6 +296,7 @@ class MainWindow(QMainWindow):
         # Menu + keyboard shortcuts
         self._build_menu()
         self._restart_library_watcher()
+        self._restart_dlna_server(show_toast=False)
 
         # Ensure transport visibility matches initial tab (Library, index 0).
         self._on_view_changed(0)
@@ -862,6 +865,11 @@ class MainWindow(QMainWindow):
         from .settings_dialog import SettingsDialog
         old_paths = list(self.settings.library_paths)
         old_watch = self.settings.watch_library_folders
+        old_dlna = (
+            self.settings.dlna_enabled,
+            self.settings.dlna_port,
+            self.settings.dlna_friendly_name,
+        )
         audio_outputs = self.player.list_audio_outputs()
         audio_devices_map: dict[str, list[tuple[str, str]]] = {}
         for out_id, _desc in audio_outputs:
@@ -902,6 +910,13 @@ class MainWindow(QMainWindow):
             )
             self.player.set_gapless(self.settings.gapless_playback)
             self.scrobbler.update_settings(self.settings)
+            new_dlna = (
+                self.settings.dlna_enabled,
+                self.settings.dlna_port,
+                self.settings.dlna_friendly_name,
+            )
+            if new_dlna != old_dlna:
+                self._restart_dlna_server(show_toast=True)
             self.video_player_view.apply_equalizer(
                 self.settings.equalizer_enabled,
                 self.settings.equalizer_bands,
@@ -932,6 +947,7 @@ class MainWindow(QMainWindow):
             self.now_playing._settings = self.settings
             self.video_player_view.apply_settings(self.settings)
             self.radio_view.apply_settings(self.settings)
+            self._restart_dlna_server(show_toast=False)
             if self.settings.library_paths:
                 self._start_scan(self.settings.library_paths, "Scanned")
             self._restart_library_watcher()
@@ -943,6 +959,23 @@ class MainWindow(QMainWindow):
             dlg.exec()
         finally:
             dlg.deleteLater()
+
+    def _restart_dlna_server(self, *, show_toast: bool) -> None:
+        self.dlna_server.stop()
+        self.dlna_server = DlnaServer(self.library, self.settings)
+        if not self.settings.dlna_enabled:
+            if show_toast:
+                self.show_toast("DLNA sharing stopped.", level="info")
+            return
+        try:
+            self.dlna_server.start()
+        except OSError as exc:
+            self.statusBar().showMessage(f"DLNA server failed to start: {exc}", 6000)
+            if show_toast:
+                self.show_toast("DLNA sharing could not start.", level="warning")
+            return
+        if show_toast:
+            self.show_toast("DLNA sharing is running.", level="success")
 
     def open_queue(self) -> None:
         if self._queue_dialog is None:
@@ -1144,6 +1177,7 @@ class MainWindow(QMainWindow):
                 scanner.deleteLater()
                 self._rg_scanner = None
         self.player.stop()
+        self.dlna_server.stop()
         self.youtube_view.shutdown()
         self.disc_view.shutdown()
         self.ripper_view.shutdown()
