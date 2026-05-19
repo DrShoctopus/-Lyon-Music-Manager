@@ -20,14 +20,22 @@ class FakeBackend(QObject):
         super().__init__()
         self.equalizer_calls: list[tuple[bool, list[int]]] = []
         self.sources: list[str] = []
+        self.source_calls: list[tuple[str, bool, tuple[str, ...]]] = []
         self.play_count = 0
         self._position = 0
         self._volume = 80
         self._muted = False
         self._playing = False
 
-    def set_source(self, path: str) -> None:
+    def set_source(
+        self,
+        path: str,
+        *,
+        is_location: bool = False,
+        options: tuple[str, ...] = (),
+    ) -> None:
         self.sources.append(path)
+        self.source_calls.append((path, is_location, options))
 
     def play(self) -> None:
         self.play_count += 1
@@ -106,6 +114,31 @@ def test_equalizer_is_reapplied_on_track_load():
     assert backend.sources == ["C:/Music/test.flac"]
     assert backend.play_count == 1
     assert backend.equalizer_calls[-1] == (True, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 3)
+
+
+def test_disc_track_uses_location_source_options_and_skips_library_play_count():
+    class Library:
+        def __init__(self):
+            self.incremented: list[int] = []
+
+        def increment_play_count(self, track_id: int) -> None:
+            self.incremented.append(track_id)
+
+    backend = FakeBackend()
+    library = Library()
+    player = Player(backend=backend, library=library)
+    track = _track("cdda:///D:/#01")
+    track.id = 0
+    track.playback_uri = "cdda:///D:/"
+    track.playback_is_location = True
+    track.playback_options = (":cdda-track=1",)
+    track.is_library_item = False
+
+    player.set_queue([track])
+    backend.end_reached.emit()
+
+    assert backend.source_calls[0] == ("cdda:///D:/", True, (":cdda-track=1",))
+    assert library.incremented == []
 
 
 def test_queue_items_can_move_and_remove_without_losing_current_track():
@@ -202,6 +235,78 @@ def test_unavailable_backend_preserves_volume_mute_and_equalizer_state():
     assert player.equalizer() == (True, [1, 2, 3, 0, 0, 0, 0, 0, 0, 0], 4)
 
 
+def test_player_volume_clamps_invalid_values_before_backend_call():
+    backend = FakeBackend()
+    player = Player(backend=backend)
+
+    player.set_volume(150)
+    assert player.volume() == 100
+    assert backend.volume() == 100
+
+    player.set_volume("bad")
+    assert player.volume() == 80
+    assert backend.volume() == 80
+
+
+def test_audio_device_methods_tolerate_minimal_backend():
+    backend = FakeBackend()
+    player = Player(backend=backend)
+
+    player.set_audio_device("wasapi", "device-id")
+
+    assert player.list_audio_outputs() == []
+    assert player.list_audio_devices("wasapi") == []
+
+
+def test_default_backend_factory_accepts_legacy_one_arg_stub(monkeypatch):
+    from lyon.core import player as player_mod
+
+    backend = FakeBackend()
+
+    def factory(parent=None):
+        return backend
+
+    monkeypatch.setattr(player_mod, "create_playback_backend", factory)
+
+    player = player_mod.Player()
+
+    assert player._backend is backend
+    assert backend.parent() is player
+
+
+def test_gapless_prebuffer_does_not_advance_next_track_before_promotion():
+    backends: list[FakeBackend] = []
+
+    def factory(parent=None):
+        backend = FakeBackend()
+        backends.append(backend)
+        return backend
+
+    player = Player(backend_factory=factory)
+    player.set_gapless(True)
+    player.set_queue([
+        _track("C:/Music/one.flac"),
+        _track("C:/Music/two.flac"),
+    ])
+
+    backends[0].position_changed.emit(118_000, 120_000)
+
+    assert len(backends) == 2
+    assert backends[1].sources == ["C:/Music/two.flac"]
+    assert backends[1].play_count == 1
+    assert not backends[1].is_playing()
+    assert backends[1].position() == 0
+    assert backends[1].is_muted()
+
+    backends[0].end_reached.emit()
+
+    assert player.current_index() == 1
+    assert backends[1].play_count == 2
+    assert backends[1].is_playing()
+    assert not backends[1].is_muted()
+    assert backends[0].parent() is None
+
+
 def test_crossfade_starts_next_backend_before_stopping_current():
     backends: list[FakeBackend] = []
 
@@ -228,3 +333,99 @@ def test_crossfade_starts_next_backend_before_stopping_current():
     assert backends[1].is_playing()
     assert backends[1].sources == ["C:/Music/two.flac"]
     assert backends[1].volume() == 0
+
+
+def test_crossfade_preserves_muted_state_on_next_backend():
+    backends: list[FakeBackend] = []
+
+    def factory(parent=None):
+        backend = FakeBackend()
+        backends.append(backend)
+        return backend
+
+    player = Player(backend_factory=factory)
+    player.set_crossfade(5)
+    player.set_queue([
+        _track("C:/Music/one.flac"),
+        _track("C:/Music/two.flac"),
+    ])
+    player.set_muted(True)
+
+    backends[0].position_changed.emit(115_000, 120_000)
+
+    assert len(backends) == 2
+    assert backends[0].is_muted()
+    assert backends[1].is_muted()
+    assert player.is_muted()
+
+
+def test_crossfade_finish_releases_retired_backend_parent():
+    backends: list[FakeBackend] = []
+
+    def factory(parent=None):
+        backend = FakeBackend()
+        backends.append(backend)
+        return backend
+
+    player = Player(backend_factory=factory)
+    player.set_crossfade(5)
+    player.set_queue([
+        _track("C:/Music/one.flac"),
+        _track("C:/Music/two.flac"),
+    ])
+
+    backends[0].position_changed.emit(115_000, 120_000)
+    assert backends[0].parent() is player
+
+    player._finish_crossfade()
+
+    assert player._fade_timer is None
+    assert player._fade_out_backend is None
+    assert backends[0].parent() is None
+    assert backends[1].parent() is player
+
+
+def test_new_crossfade_cancels_previous_retired_backend():
+    backends: list[FakeBackend] = []
+
+    def factory(parent=None):
+        backend = FakeBackend()
+        backends.append(backend)
+        return backend
+
+    player = Player(backend_factory=factory)
+    player.set_crossfade(5)
+    player.set_queue([
+        _track("C:/Music/one.flac"),
+        _track("C:/Music/two.flac"),
+        _track("C:/Music/three.flac"),
+    ])
+
+    backends[0].position_changed.emit(115_000, 120_000)
+    player.play_index(2)
+
+    assert len(backends) == 3
+    assert backends[0].parent() is None
+    assert player._fade_out_backend is backends[1]
+    assert backends[1].parent() is player
+    assert backends[2].parent() is player
+
+
+def test_album_replaygain_uses_zero_album_gain_without_track_fallback(tmp_path, monkeypatch):
+    from lyon.core import replaygain
+
+    path = tmp_path / "song.flac"
+    path.write_bytes(b"")
+    backend = FakeBackend()
+    player = Player(backend=backend)
+    monkeypatch.setattr(replaygain, "read_album_gain", lambda _path: 0.0)
+
+    def fail_track_fallback(_path):
+        raise AssertionError("track gain should not be read when album gain is present")
+
+    monkeypatch.setattr(replaygain, "read_track_gain", fail_track_fallback)
+
+    player.set_replaygain("album", prevent_clipping=False)
+    player.set_queue([_track(str(path))])
+
+    assert backend.volume() == 80

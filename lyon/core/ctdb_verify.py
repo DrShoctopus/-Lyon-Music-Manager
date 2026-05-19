@@ -205,6 +205,7 @@ def fetch_ctdb_crcs(
     if not ctdb_toc:
         return None
 
+    owns_session = session is None
     http = session or requests.Session()
     try:
         resp = http.get(
@@ -222,6 +223,12 @@ def fetch_ctdb_crcs(
             return None
     except requests.RequestException:
         return None
+    finally:
+        if owns_session:
+            try:
+                http.close()
+            except Exception:
+                pass
 
     try:
         root = ET.fromstring(resp.content)

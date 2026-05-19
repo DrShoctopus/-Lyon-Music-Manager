@@ -19,6 +19,9 @@ from .equalizer import (
 )
 
 LOG = logging.getLogger(__name__)
+_RIP_FORMATS = {"flac", "mp3", "aac", "opus", "ogg", "alac", "wav", "aiff", "wma"}
+_YT_AUDIO_FORMATS = {"flac", "mp3"}
+_YT_VIDEO_FORMATS = {"mp4", "mkv", "webm"}
 
 
 def _default_music_root() -> Path:
@@ -57,6 +60,35 @@ def _is_custom_curve_name(name: str) -> bool:
     return bool(name) and name not in RESERVED_EQ_CURVE_NAMES
 
 
+def _clamp_int(value: object, default: int, minimum: int, maximum: int) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        number = default
+    return max(minimum, min(maximum, number))
+
+
+def _nonnegative_int(value: object, default: int = 0) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        number = default
+    return max(0, number)
+
+
+def _bool_value(value: object, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    text = str(value).strip().casefold()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
 def normalize_library_paths(paths: object) -> list[str]:
     """Return non-empty library paths without exact duplicates, preserving order."""
     if not isinstance(paths, list | tuple):
@@ -92,6 +124,7 @@ class Settings:
     ctdb_verify_rips: bool = True
     last_volume: int = 80
     library_paths: list[str] = field(default_factory=list)
+    watch_library_folders: bool = True
     equalizer_enabled: bool = False
     equalizer_preamp: int = DEFAULT_EQ_PREAMP_DB
     equalizer_bands: list[int] = field(default_factory=flat_equalizer_bands)
@@ -106,9 +139,41 @@ class Settings:
     queue_current_index: int = 0
     crossfade_seconds: int = 0          # 0 = disabled; >0 = overlap duration on track change
     fetch_lyrics_online: bool = True    # query lrclib.net when no local .lrc / embedded lyrics
+    replaygain_mode: str = "off"        # "off" | "track" | "album"
+    replaygain_preamp_db: float = 0.0   # additional offset applied after gain, -6.0 to +6.0
+    replaygain_prevent_clipping: bool = True
+    audio_output: str = ""              # VLC audio output module ID (e.g. "wasapi", "directsound")
+    audio_output_device: str = ""       # VLC device ID string; "" = VLC default
+    gapless_playback: bool = False      # pre-buffer next track to minimize inter-track gap; no-op when crossfade > 0
 
     def __post_init__(self) -> None:
+        self.rip_format = str(self.rip_format or "flac").lower()
+        if self.rip_format not in _RIP_FORMATS:
+            self.rip_format = "flac"
+        self.flac_compression = _clamp_int(self.flac_compression, 4, 0, 8)
+        self.rip_audio_bitrate = _clamp_int(self.rip_audio_bitrate, 320, 32, 1411)
+        self.last_volume = _clamp_int(self.last_volume, 80, 0, 100)
+        self.queue_current_index = _nonnegative_int(self.queue_current_index, 0)
+        self.crossfade_seconds = _nonnegative_int(self.crossfade_seconds, 0)
+        self.replaygain_mode = str(self.replaygain_mode or "off").lower()
+        if self.replaygain_mode not in {"off", "track", "album"}:
+            self.replaygain_mode = "off"
+        try:
+            self.replaygain_preamp_db = max(-6.0, min(6.0, float(self.replaygain_preamp_db)))
+        except (TypeError, ValueError):
+            self.replaygain_preamp_db = 0.0
+        self.replaygain_prevent_clipping = _bool_value(self.replaygain_prevent_clipping, True)
+        self.audio_output = str(self.audio_output or "").strip()
+        self.audio_output_device = str(self.audio_output_device or "").strip()
+        self.gapless_playback = _bool_value(self.gapless_playback, False)
+        self.yt_audio_format = str(self.yt_audio_format or "flac").lower()
+        if self.yt_audio_format not in _YT_AUDIO_FORMATS:
+            self.yt_audio_format = "flac"
+        self.yt_video_format = str(self.yt_video_format or "mp4").lower()
+        if self.yt_video_format not in _YT_VIDEO_FORMATS:
+            self.yt_video_format = "mp4"
         self.library_paths = normalize_library_paths(self.library_paths)
+        self.watch_library_folders = _bool_value(self.watch_library_folders, True)
         self.equalizer_preamp = clamp_preamp(self.equalizer_preamp)
         self.equalizer_bands = normalize_equalizer_bands(self.equalizer_bands)
         custom_curves = self.equalizer_custom_curves if isinstance(self.equalizer_custom_curves, dict) else {}

@@ -29,7 +29,7 @@ class _FakeBackend(QtCore.QObject):
         self._muted = False
         self._playing = False
 
-    def set_source(self, path: str) -> None: pass
+    def set_source(self, path: str, *, is_location=False, options=()) -> None: pass
     def play(self) -> None: self._playing = True
     def pause(self) -> None: self._playing = False
     def stop(self) -> None: self._playing = False
@@ -229,3 +229,50 @@ def test_fetch_lyrics_online_enabled_spawns_thread(player):
         view._load_lyrics(track)
     mock_thread.assert_called_once()
     assert view._lyrics_task_id == 2
+
+
+def test_now_playing_side_panel_and_tabs_are_wide(player):
+    view = NowPlayingView(player, settings=Settings())
+    side_panel = view.findChild(QtWidgets.QWidget, "nowPlayingSidePanel")
+    assert side_panel is not None
+    assert side_panel.minimumWidth() == 440
+    assert side_panel.maximumWidth() == 720
+    assert (
+        side_panel.sizePolicy().horizontalPolicy()
+        == QtWidgets.QSizePolicy.Policy.Expanding
+    )
+
+    tabs = [
+        btn for btn in view.findChildren(QtWidgets.QPushButton)
+        if btn.objectName() == "panelTab"
+    ]
+    assert len(tabs) == 3
+    assert all(
+        tab.sizePolicy().horizontalPolicy() == QtWidgets.QSizePolicy.Policy.Expanding
+        for tab in tabs
+    )
+
+
+def test_synced_lyrics_scrolls_current_line_to_center(player, app):
+    view = NowPlayingView(player, settings=Settings())
+    view.resize(1100, 720)
+    view._panel_stack.setCurrentIndex(1)
+    view.show()
+    app.processEvents()
+
+    panel = view._lyrics_panel
+    lines = [(i * 1000, f"Line {i}") for i in range(60)]
+    panel.set_lyrics(lines)
+    app.processEvents()
+
+    panel.update_position(30_000)
+    panel._recenter_current_line()
+    app.processEvents()
+
+    bar = panel._scroll.verticalScrollBar()
+    line_center = panel._labels[30].geometry().center().y()
+    viewport_center = bar.value() + (panel._scroll.viewport().height() / 2)
+    assert abs(line_center - viewport_center) <= 2
+
+    view.close()
+    view.deleteLater()

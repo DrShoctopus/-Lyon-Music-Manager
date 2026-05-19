@@ -104,7 +104,11 @@ class FirstRunDialog(QDialog):
         return any(self.library_paths.item(row).text() == folder for row in range(self.library_paths.count()))
 
     def _show_diagnostics(self) -> None:
-        DiagnosticsDialog(self._checks, self).exec()
+        dlg = DiagnosticsDialog(self._checks, self)
+        try:
+            dlg.exec()
+        finally:
+            dlg.deleteLater()
 
     def _skip_setup(self) -> None:
         self.skipped = True

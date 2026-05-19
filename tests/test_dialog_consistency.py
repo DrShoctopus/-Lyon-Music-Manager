@@ -39,7 +39,7 @@ class _FakeBackend(QtCore.QObject):
         super().__init__()
         self._v, self._m, self._p = 80, False, False
 
-    def set_source(self, _): pass
+    def set_source(self, _, *, is_location=False, options=()): pass
     def play(self): self._p = True
     def pause(self): self._p = False
     def stop(self): self._p = False
@@ -127,3 +127,65 @@ def test_yt_download_dialog_log_is_monospace(app):
     src = Path(mod.__file__).read_text()
     assert 'setObjectName("monoLog")' in src
     assert 'setObjectName("sectionHeading")' in src
+
+
+def test_yt_video_success_emits_completion_signal(app, tmp_path):
+    from lyon.core.library import Library
+    from lyon.ui.yt_download_dialog import YtDownloadDialog
+
+    library = Library(tmp_path / "library.db")
+    dlg = YtDownloadDialog(
+        "https://www.youtube.com/watch?v=example",
+        Settings(music_root=str(tmp_path / "Music")),
+        library,
+    )
+    emitted = []
+    dlg.video_download_finished.connect(lambda: emitted.append(True))
+
+    try:
+        dlg._active_mode = "audio"
+        dlg._on_finished(1, 0)
+        dlg._active_mode = "video"
+        dlg._on_finished(0, 1)
+        dlg._on_finished(1, 0)
+
+        assert emitted == [True]
+    finally:
+        library.close()
+        dlg.deleteLater()
+
+
+def test_yt_track_ready_refreshes_existing_video_artwork(app, tmp_path):
+    from lyon.core.library import Library
+    from lyon.ui.yt_download_dialog import YtDownloadDialog
+
+    library = Library(tmp_path / "library.db")
+    media_dir = tmp_path / "Music" / "YouTube" / "Uploader"
+    media_dir.mkdir(parents=True)
+    video = media_dir / "Example Video.mp4"
+    video.write_bytes(b"not a real mp4")
+
+    assert library.add_file(video)
+    library.commit()
+    assert next(library.all_tracks(media_type="video")).artwork_path is None
+
+    thumbnail = media_dir / "Example Video.jpg"
+    thumbnail.write_bytes(b"thumbnail")
+
+    dlg = YtDownloadDialog(
+        "https://www.youtube.com/watch?v=example",
+        Settings(music_root=str(tmp_path / "Music")),
+        library,
+    )
+    emitted = []
+    dlg.library_updated.connect(lambda: emitted.append(True))
+
+    try:
+        dlg._on_track_ready(str(video))
+
+        track = next(library.all_tracks(media_type="video"))
+        assert track.artwork_path == str(thumbnail)
+        assert emitted == [True]
+    finally:
+        library.close()
+        dlg.deleteLater()

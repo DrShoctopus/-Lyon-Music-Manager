@@ -69,3 +69,42 @@ def test_library_paths_are_normalized_without_duplicates():
     settings = Settings(library_paths=["/music/a", "/music/a", " /music/b "])
 
     assert settings.library_paths == ["/music/a", "/music/b"]
+
+
+def test_watch_library_folders_setting_normalizes_string_values():
+    assert Settings(watch_library_folders="false").watch_library_folders is False
+    assert Settings(watch_library_folders="yes").watch_library_folders is True
+
+
+def test_settings_clamps_user_editable_numeric_and_format_fields():
+    settings = Settings(
+        rip_format="invalid",
+        flac_compression="loud",
+        rip_audio_bitrate="huge",
+        last_volume="very",
+        queue_current_index=-4,
+        crossfade_seconds="soon",
+        yt_audio_format="wav",
+        yt_video_format="avi",
+    )
+
+    assert settings.rip_format == "flac"
+    assert settings.flac_compression == 4
+    assert settings.rip_audio_bitrate == 320
+    assert settings.last_volume == 80
+    assert settings.queue_current_index == 0
+    assert settings.crossfade_seconds == 0
+    assert settings.yt_audio_format == "flac"
+    assert settings.yt_video_format == "mp4"
+
+
+def test_settings_clamps_volume_and_encoder_ranges():
+    settings = Settings(
+        flac_compression=99,
+        rip_audio_bitrate=9999,
+        last_volume=150,
+    )
+
+    assert settings.flac_compression == 8
+    assert settings.rip_audio_bitrate == 1411
+    assert settings.last_volume == 100

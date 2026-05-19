@@ -31,15 +31,14 @@ def test_webm_video_postprocessors_skip_unsupported_thumbnail_embedding():
     }
 
 
-def test_progress_finished_emits_track_ready_without_postprocessors(tmp_path):
+def test_post_hook_emits_final_track_ready_path(tmp_path):
     video = tmp_path / "fallback.mp4"
     video.write_bytes(b"video")
     worker = YtDownloadWorker("https://example.invalid/video", "video", "mp4", str(tmp_path))
     emitted: list[str] = []
     worker.track_ready.connect(emitted.append)
 
-    worker._uses_postprocessors = False
-    worker._on_progress({"status": "finished", "filename": str(video)})
+    worker._on_post_hook(str(video))
 
     assert emitted == [str(video)]
 

@@ -72,6 +72,7 @@ class AlbumInfo:
     genre: str = ""
     artwork_url: str = ""
     metadata_source: str = "musicbrainz"
+    grouping: str = ""
 
     @property
     def year(self) -> int:
@@ -1042,10 +1043,6 @@ def _has_track_metadata(info: AlbumInfo | None) -> bool:
 def _user_agent() -> str:
     s = _current_settings()
     return f"{s.musicbrainz_app}/{s.musicbrainz_version} ({s.musicbrainz_contact})"
-
-
-def _metadata_headers() -> dict[str, str]:
-    return {"User-Agent": _user_agent()}
 
 
 def _normalize(value: str) -> str:

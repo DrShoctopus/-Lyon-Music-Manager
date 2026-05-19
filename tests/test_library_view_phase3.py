@@ -10,7 +10,14 @@ QtCore = pytest.importorskip("PySide6.QtCore", exc_type=ImportError)
 QtWidgets = pytest.importorskip("PySide6.QtWidgets", exc_type=ImportError)
 
 from lyon.core.library import Track
-from lyon.ui.library_view import LibraryView, _ALL_ALBUMS_KEY, _PLAYING_GLYPH
+from lyon.ui import library_view as library_view_module
+from lyon.ui.library_view import (
+    LibraryView,
+    _ALL_ALBUMS_KEY,
+    _COL_TITLE,
+    _NUM_COLS,
+    _PLAYING_GLYPH,
+)
 
 
 def _track(id_: int, title: str, artist: str, album: str,
@@ -26,6 +33,7 @@ def _track(id_: int, title: str, artist: str, album: str,
 class FakeLibrary:
     def __init__(self, artists_map: dict[str, dict[str, list[Track]]]):
         self._map = artists_map
+        self.updated_tracks: list[tuple[int, dict]] = []
 
     def all_artists(self, _media=None) -> list[str]:
         return list(self._map.keys())
@@ -52,6 +60,9 @@ class FakeLibrary:
                     if q_lower in t.title.lower():
                         out.append(t)
         return out
+
+    def update_track(self, track_id: int, fields: dict) -> None:
+        self.updated_tracks.append((track_id, dict(fields)))
 
 
 @pytest.fixture(scope="module")
@@ -113,6 +124,14 @@ def test_tracks_table_is_sortable_by_title(view):
     assert view.tracks_model.item(0, 1).text() == "Zebra"
 
 
+def test_track_columns_are_resizable_and_title_gets_priority_width(view):
+    header = view.tracks.horizontalHeader()
+
+    for col in range(_NUM_COLS):
+        assert header.sectionResizeMode(col) == QtWidgets.QHeaderView.Interactive
+    assert view.tracks.columnWidth(_COL_TITLE) >= 300
+
+
 def test_tracks_sort_by_time_is_numeric(view):
     view.artists.setCurrentIndex(view.artists_model.index(0, 0))
     view.albums.setCurrentIndex(view.albums_model.index(1, 0))  # First Album
@@ -158,3 +177,54 @@ def test_empty_search_renders_no_results_footer(view):
     view._do_search()
     assert view.tracks_model.rowCount() == 0
     assert 'No tracks match "nonexistent-xyz"' in view._footer_label.text()
+
+
+def test_single_metadata_edit_reports_file_tag_write_failure(app, monkeypatch, tmp_path):
+    path = tmp_path / "song.flac"
+    path.write_bytes(b"not real flac")
+    track = _track(1, "Song", "Artist", "Album")
+    track.path = str(path)
+    library = FakeLibrary({"Artist": {"Album": [track]}})
+    view = LibraryView(library)
+    messages: list[str] = []
+    view.status_message.connect(messages.append)
+
+    def accept_dialog(dialog):
+        dialog.deleteLater()
+        return QtWidgets.QDialog.Accepted
+
+    monkeypatch.setattr(library_view_module, "_exec_dialog", accept_dialog)
+    monkeypatch.setattr(library_view_module, "write_partial_tags", lambda *_args: False)
+
+    view._show_edit_metadata_dialog(track)
+
+    assert library.updated_tracks
+    assert "file tags could not be written to disk" in messages[-1]
+
+
+def test_fetch_album_metadata_reports_track_lookup_failure(view):
+    messages: list[str] = []
+    view.status_message.connect(messages.append)
+
+    def fail_tracks_for_album(*_args):
+        raise RuntimeError("database unavailable")
+
+    view.library.tracks_for_album = fail_tracks_for_album
+
+    view._fetch_album_metadata("Alpha Band", "First Album")
+
+    assert messages[-1] == "Could not load tracks for metadata fetch."
+
+
+def test_fetch_album_metadata_reports_dialog_start_failure(view, monkeypatch):
+    messages: list[str] = []
+    view.status_message.connect(messages.append)
+
+    def fail_dialog(*_args, **_kwargs):
+        raise RuntimeError("dialog failed")
+
+    monkeypatch.setattr(library_view_module, "MetadataFetchDialog", fail_dialog)
+
+    view._fetch_album_metadata("Alpha Band", "First Album")
+
+    assert messages[-1] == "Metadata fetch could not be started."

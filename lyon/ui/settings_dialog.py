@@ -6,13 +6,14 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
-    QHBoxLayout, QLabel, QLineEdit, QListWidget, QMessageBox, QPushButton,
-    QSpinBox, QTabWidget, QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFileDialog,
+    QFormLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QMessageBox,
+    QPushButton, QSpinBox, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from .. import __app_name__, __version__
 from ..core.settings import Settings, normalize_library_paths
+from .about import COPYRIGHT_NOTICE, THIRD_PARTY_NOTICE
 from .branding import app_icon
 
 # (display label, settings key) pairs — order matches the combo box
@@ -32,17 +33,27 @@ _FLAC_FORMAT = "flac"
 
 
 class SettingsDialog(QDialog):
-    def __init__(self, settings: Settings, parent: QWidget | None = None):
+    def __init__(
+        self,
+        settings: Settings,
+        parent: QWidget | None = None,
+        *,
+        audio_outputs: list[tuple[str, str]] | None = None,
+        audio_devices_map: dict[str, list[tuple[str, str]]] | None = None,
+    ):
         super().__init__(parent)
         self.setWindowTitle("Settings")
-        self.resize(540, 420)
+        self.resize(540, 460)
         self.result_settings = replace(settings)
         self.result_settings.library_paths = normalize_library_paths(settings.library_paths)
         self._initial_music_root = settings.music_root.strip()
         self._initial_library_paths = set(self.result_settings.library_paths)
+        self._audio_outputs: list[tuple[str, str]] = audio_outputs or [("", "Default")]
+        self._audio_devices_map: dict[str, list[tuple[str, str]]] = audio_devices_map or {}
 
         tabs = QTabWidget()
         tabs.addTab(self._build_library_tab(settings), "Library")
+        tabs.addTab(self._build_playback_tab(settings), "Playback")
         tabs.addTab(self._build_ripping_tab(settings), "CD Ripping")
         tabs.addTab(self._build_metadata_tab(settings), "Metadata")
         tabs.addTab(self._build_youtube_tab(settings), "YouTube")
@@ -96,7 +107,132 @@ class SettingsDialog(QDialog):
         folders_w = QWidget(); folders_w.setLayout(folders_box)
         form.addRow("Library folders:", folders_w)
 
+        self.watch_library_folders = QCheckBox("Watch library folders for changes")
+        self.watch_library_folders.setChecked(settings.watch_library_folders)
+        self.watch_library_folders.setToolTip(
+            "Automatically add, refresh, and remove library records when files change "
+            "inside saved library folders."
+        )
+        form.addRow("", self.watch_library_folders)
+
         return w
+
+    def _build_playback_tab(self, settings: Settings) -> QWidget:
+        w = QWidget()
+        form = QFormLayout(w)
+        form.setContentsMargins(12, 12, 12, 12)
+        form.setVerticalSpacing(8)
+
+        # ---- Audio Output section
+        ao_label = QLabel("Audio Output")
+        ao_label.setObjectName("sectionHeader")
+        form.addRow(ao_label)
+
+        self.audio_output_combo = QComboBox()
+        for out_id, out_desc in self._audio_outputs:
+            self.audio_output_combo.addItem(out_desc, out_id)
+        current_output = settings.audio_output
+        for i in range(self.audio_output_combo.count()):
+            if self.audio_output_combo.itemData(i) == current_output:
+                self.audio_output_combo.setCurrentIndex(i)
+                break
+        form.addRow("Output module:", self.audio_output_combo)
+
+        self.audio_device_combo = QComboBox()
+        self._repopulate_device_combo(settings.audio_output, settings.audio_output_device)
+        form.addRow("Output device:", self.audio_device_combo)
+
+        self.audio_output_combo.currentIndexChanged.connect(self._on_audio_output_changed)
+
+        note = QLabel("Changes take effect on the next track.")
+        note.setObjectName("mutedText")
+        form.addRow("", note)
+
+        # ---- ReplayGain section
+        rg_label = QLabel("ReplayGain")
+        rg_label.setObjectName("sectionHeader")
+        form.addRow(rg_label)
+
+        self.rg_mode = QComboBox()
+        self.rg_mode.addItem("Off", "off")
+        self.rg_mode.addItem("Track Gain", "track")
+        self.rg_mode.addItem("Album Gain", "album")
+        for i in range(self.rg_mode.count()):
+            if self.rg_mode.itemData(i) == settings.replaygain_mode:
+                self.rg_mode.setCurrentIndex(i)
+                break
+        form.addRow("Normalization mode:", self.rg_mode)
+
+        self.rg_preamp = QDoubleSpinBox()
+        self.rg_preamp.setRange(-6.0, 6.0)
+        self.rg_preamp.setSingleStep(0.5)
+        self.rg_preamp.setDecimals(1)
+        self.rg_preamp.setSuffix(" dB")
+        self.rg_preamp.setValue(settings.replaygain_preamp_db)
+        self.rg_preamp.setToolTip(
+            "Additional offset applied after the ReplayGain adjustment. "
+            "Use a negative value to add headroom."
+        )
+        form.addRow("Pre-amp:", self.rg_preamp)
+
+        self.rg_prevent_clipping = QCheckBox("Prevent clipping (never boost above original volume)")
+        self.rg_prevent_clipping.setChecked(settings.replaygain_prevent_clipping)
+        form.addRow("", self.rg_prevent_clipping)
+
+        # ---- Crossfade section
+        cf_label = QLabel("Crossfade")
+        cf_label.setObjectName("sectionHeader")
+        form.addRow(cf_label)
+
+        self.crossfade_seconds = QSpinBox()
+        self.crossfade_seconds.setRange(0, 60)
+        self.crossfade_seconds.setSingleStep(1)
+        self.crossfade_seconds.setSpecialValueText("Off")
+        self.crossfade_seconds.setSuffix(" seconds")
+        self.crossfade_seconds.setValue(settings.crossfade_seconds)
+        self.crossfade_seconds.setToolTip(
+            "Overlap the end of the current track with the start of the next track. "
+            "Set to 0 to disable crossfade."
+        )
+        form.addRow("Duration:", self.crossfade_seconds)
+
+        # ---- Gapless section
+        gl_label = QLabel("Gapless Playback")
+        gl_label.setObjectName("sectionHeader")
+        form.addRow(gl_label)
+
+        self.gapless_playback = QCheckBox("Enable gapless playback")
+        self.gapless_playback.setChecked(settings.gapless_playback)
+        self.gapless_playback.setToolTip(
+            "Pre-buffers the next track to minimize the gap between songs. "
+            "Has no effect when crossfade is enabled."
+        )
+        form.addRow("", self.gapless_playback)
+
+        gl_note = QLabel("Works only when crossfade is set to 0 seconds.")
+        gl_note.setObjectName("mutedText")
+        form.addRow("", gl_note)
+
+        return w
+
+    def _repopulate_device_combo(self, audio_output: str, current_device: str) -> None:
+        self.audio_device_combo.blockSignals(True)
+        self.audio_device_combo.clear()
+        devices = self._audio_devices_map.get(audio_output, [("", "Default")])
+        if not devices:
+            devices = [("", "Default")]
+        for dev_id, dev_desc in devices:
+            self.audio_device_combo.addItem(dev_desc, dev_id)
+        # Select current device
+        for i in range(self.audio_device_combo.count()):
+            if self.audio_device_combo.itemData(i) == current_device:
+                self.audio_device_combo.setCurrentIndex(i)
+                break
+        self.audio_device_combo.blockSignals(False)
+
+    def _on_audio_output_changed(self) -> None:
+        selected_output = self.audio_output_combo.currentData() or ""
+        self._repopulate_device_combo(selected_output, "")
 
     def _build_ripping_tab(self, settings: Settings) -> QWidget:
         w = QWidget()
@@ -263,17 +399,32 @@ class SettingsDialog(QDialog):
         layout.addSpacing(12)
 
         desc = QLabel(
-            "Sea Lyon is a music library manager, CD ripper, and player\n"
-            "for Windows, macOS, and Linux."
+            "Sea Lyon is a music library manager, CD ripper, and audio/video player\n"
+            "for Windows,Coming Soon to macOS"
         )
         desc.setWordWrap(True)
         layout.addWidget(desc)
 
         layout.addSpacing(12)
 
+        copyright_label = QLabel(COPYRIGHT_NOTICE)
+        copyright_label.setObjectName("mutedText")
+        layout.addWidget(copyright_label)
+
         license_label = QLabel("Released under the MIT License.")
         license_label.setObjectName("mutedText")
         layout.addWidget(license_label)
+
+        layout.addSpacing(12)
+
+        credits_label = QLabel("Third-Party Acknowledgements")
+        credits_label.setObjectName("sectionHeader")
+        layout.addWidget(credits_label)
+
+        third_party = QLabel(THIRD_PARTY_NOTICE)
+        third_party.setObjectName("mutedText")
+        third_party.setWordWrap(True)
+        layout.addWidget(third_party)
 
         layout.addStretch(1)
         return w
@@ -352,6 +503,13 @@ class SettingsDialog(QDialog):
             if answer != QMessageBox.Yes:
                 return
 
+        self.result_settings.audio_output = self.audio_output_combo.currentData() or ""
+        self.result_settings.audio_output_device = self.audio_device_combo.currentData() or ""
+        self.result_settings.replaygain_mode = self.rg_mode.currentData() or "off"
+        self.result_settings.replaygain_preamp_db = self.rg_preamp.value()
+        self.result_settings.replaygain_prevent_clipping = self.rg_prevent_clipping.isChecked()
+        self.result_settings.crossfade_seconds = self.crossfade_seconds.value()
+        self.result_settings.gapless_playback = self.gapless_playback.isChecked()
         self.result_settings.music_root = self.root_edit.text().strip() or self.result_settings.music_root
         self.result_settings.rip_format = self.rip_fmt.currentData() or "flac"
         self.result_settings.flac_compression = self.compression.value()
@@ -361,6 +519,7 @@ class SettingsDialog(QDialog):
             self.result_settings.rip_audio_bitrate = 320
         self.result_settings.cd_drive = self.drive.text().strip()
         self.result_settings.library_paths = library_paths
+        self.result_settings.watch_library_folders = self.watch_library_folders.isChecked()
         self.result_settings.eject_after_rip = self.eject.isChecked()
         self.result_settings.auto_lookup_metadata = self.lookup.isChecked()
         self.result_settings.cuetools_db_metadata_enabled = self.cuetools_db.isChecked()

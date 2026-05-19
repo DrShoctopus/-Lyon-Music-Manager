@@ -8,7 +8,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable, Iterator
+from typing import Callable, Iterable, Iterator, Literal
 
 from mutagen import File as MutagenFile
 
@@ -16,7 +16,18 @@ from .settings import app_data_dir
 
 LOG = logging.getLogger(__name__)
 
-SUPPORTED_AUDIO_EXTS = {".flac", ".mp3", ".m4a", ".aac", ".ogg", ".opus", ".wav", ".wma"}
+SUPPORTED_AUDIO_EXTS = {
+    ".flac",
+    ".mp3",
+    ".m4a",
+    ".aac",
+    ".ogg",
+    ".opus",
+    ".wav",
+    ".aiff",
+    ".aif",
+    ".wma",
+}
 SUPPORTED_VIDEO_EXTS = {".mp4", ".mkv", ".webm", ".avi", ".mov"}
 SUPPORTED_EXTS = SUPPORTED_AUDIO_EXTS | SUPPORTED_VIDEO_EXTS
 
@@ -72,6 +83,16 @@ _MIGRATIONS: list[tuple[int, str]] = [
     # v5 — user-liked flag (heart toggle)
     (5, "ALTER TABLE tracks ADD COLUMN liked INTEGER NOT NULL DEFAULT 0"),
     (5, "CREATE INDEX IF NOT EXISTS idx_tracks_liked ON tracks(liked)"),
+    # v6 — filesystem state for incremental indexing / watched folders
+    (6, "ALTER TABLE tracks ADD COLUMN file_size INTEGER NOT NULL DEFAULT 0"),
+    (6, "ALTER TABLE tracks ADD COLUMN file_mtime_ns INTEGER NOT NULL DEFAULT 0"),
+    (6, "ALTER TABLE tracks ADD COLUMN last_scanned_at REAL"),
+    (6, "ALTER TABLE tracks ADD COLUMN scan_error TEXT"),
+    # v7 — user-defined grouping tag (set per-rip on the Rip tab, surfaced as
+    # the Group column in the Track panel; mapped to ID3 TIT1 / Vorbis
+    # GROUPING / MP4 ©grp / ASF WM/ContentGroupDescription on disk)
+    (7, "ALTER TABLE tracks ADD COLUMN grouping TEXT NOT NULL DEFAULT ''"),
+    (7, "CREATE INDEX IF NOT EXISTS idx_tracks_grouping ON tracks(grouping)"),
 ]
 
 _PAGE_SIZE = 500  # rows per page in streaming queries
@@ -99,6 +120,15 @@ class Track:
     last_played: float | None = None
     liked: bool = False
     disc_id: str | None = None
+    file_size: int = 0
+    file_mtime_ns: int = 0
+    last_scanned_at: float | None = None
+    scan_error: str | None = None
+    grouping: str = ""
+    playback_uri: str | None = None
+    playback_is_location: bool = False
+    playback_options: tuple[str, ...] = ()
+    is_library_item: bool = True
 
     @property
     def display_artist(self) -> str:
@@ -119,6 +149,49 @@ class Playlist:
     @property
     def is_smart(self) -> bool:
         return self.rules is not None
+
+
+@dataclass(frozen=True)
+class IndexResult:
+    """Outcome of indexing one filesystem path."""
+
+    status: Literal["added", "updated", "unchanged", "removed", "failed", "skipped"]
+    path: str
+    error: str = ""
+
+
+@dataclass
+class ScanSummary:
+    """Aggregate outcome for an incremental library scan."""
+
+    added: int = 0
+    updated: int = 0
+    unchanged: int = 0
+    skipped: int = 0
+    removed: int = 0
+    failed: int = 0
+
+    def add_result(self, result: IndexResult) -> None:
+        if result.status == "added":
+            self.added += 1
+        elif result.status == "updated":
+            self.updated += 1
+        elif result.status == "unchanged":
+            self.unchanged += 1
+        elif result.status == "removed":
+            self.removed += 1
+        elif result.status == "failed":
+            self.failed += 1
+        else:
+            self.skipped += 1
+
+    def merge(self, other: "ScanSummary") -> None:
+        self.added += other.added
+        self.updated += other.updated
+        self.unchanged += other.unchanged
+        self.skipped += other.skipped
+        self.removed += other.removed
+        self.failed += other.failed
 
 
 class Library:
@@ -179,7 +252,23 @@ class Library:
         returns early. This lets callers (typically a worker QThread) get
         out cleanly when the user closes the app mid-scan.
         """
-        added = 0
+        return self.scan_paths_summary(roots, should_cancel=should_cancel).added
+
+    def scan_paths_summary(
+        self,
+        roots: Iterable[str | os.PathLike],
+        should_cancel: "Callable[[], bool] | None" = None,
+        *,
+        force: bool = False,
+    ) -> ScanSummary:
+        """Incrementally index supported media under *roots*.
+
+        Existing rows are refreshed only when the on-disk size or mtime has
+        changed, which keeps startup reconciliation cheap for large libraries.
+        Missing roots are ignored rather than pruned; explicit remove/delete
+        flows own library cleanup so disconnected drives are safe.
+        """
+        summary = ScanSummary()
         for root in roots:
             root = Path(root)
             if not root.exists():
@@ -188,32 +277,51 @@ class Library:
                 if should_cancel is not None and should_cancel():
                     with self._lock:
                         self.conn.commit()
-                    return added
+                    return summary
                 for name in files:
                     ext = os.path.splitext(name)[1].lower()
                     if ext not in SUPPORTED_EXTS:
                         continue
                     full = os.path.join(dirpath, name)
-                    if self.add_file(full):
-                        added += 1
+                    summary.add_result(self.index_file(full, force=force))
         with self._lock:
             self.conn.commit()
-        return added
+        return summary
 
     def add_file(self, path: str | os.PathLike, disc_id: str | None = None) -> bool:
+        return self.index_file(path, disc_id=disc_id).status == "added"
+
+    def index_file(
+        self,
+        path: str | os.PathLike,
+        disc_id: str | None = None,
+        *,
+        force: bool = False,
+    ) -> IndexResult:
+        """Add or refresh one supported media file.
+
+        Ratings, liked state, play counts, playlist membership, and other user
+        data live outside the updated metadata columns, so they survive tag
+        refreshes and watched-folder updates.
+        """
         path = str(path)
         ext = Path(path).suffix.lower()
+        if ext not in SUPPORTED_EXTS:
+            return IndexResult("skipped", path)
         media_type = "video" if ext in SUPPORTED_VIDEO_EXTS else "audio"
 
-        with self._lock:
-            if self.conn.execute("SELECT 1 FROM tracks WHERE path = ?", (path,)).fetchone():
-                if disc_id:
-                    self.conn.execute(
-                        "UPDATE tracks SET disc_id = ?"
-                        " WHERE path = ? AND (disc_id IS NULL OR disc_id = '')",
-                        (disc_id, path),
-                    )
-                return False
+        row = self._track_row_for_path(path)
+        stat = _safe_stat(path)
+        if stat is None:
+            if row is not None and disc_id:
+                self._backfill_disc_id(path, disc_id)
+            return IndexResult("skipped", path, "File does not exist")
+
+        if row is not None and not force and _row_matches_stat(row, stat):
+            if disc_id:
+                self._backfill_disc_id(path, disc_id)
+            return IndexResult("unchanged", path)
+
         meta = _read_tags(path)
         if meta is None:
             if media_type == "video":
@@ -221,10 +329,17 @@ class Library:
                     "title": Path(path).stem,
                     "artist": "", "album_artist": "", "album": "",
                     "track_no": 0, "disc_no": 1, "year": 0, "genre": "",
+                    "grouping": "",
                     "duration": 0.0, "bitrate": 0, "samplerate": 0,
                 }
             else:
-                return False
+                self._record_scan_error(
+                    path,
+                    stat,
+                    "Unsupported or unreadable audio metadata",
+                    existing=row is not None,
+                )
+                return IndexResult("failed" if row is not None else "skipped", path)
 
         # Videos without artist metadata (e.g. yt-dlp downloads where mutagen
         # parses the container but no tags are present) fall back to the parent
@@ -244,41 +359,219 @@ class Library:
         file_path = Path(path)
         art = _find_video_artwork(file_path) if media_type == "video" else None
         art = art or _find_local_artwork(file_path.parent)
+        now = time.time()
+        with self._lock:
+            values = (
+                meta["title"],
+                meta["artist"],
+                meta["album_artist"],
+                meta["album"],
+                meta["track_no"],
+                meta["disc_no"],
+                meta["year"],
+                meta["genre"],
+                meta.get("grouping", "") or "",
+                meta["duration"],
+                meta["bitrate"],
+                meta["samplerate"],
+                str(art) if art else None,
+                media_type,
+                disc_id or (row["disc_id"] if row is not None and "disc_id" in row.keys() else None),
+                int(stat.st_size),
+                int(stat.st_mtime_ns),
+                now,
+                None,
+            )
+            if row is None:
+                cur = self.conn.execute(
+                    """INSERT OR IGNORE INTO tracks
+                       (title, artist, album_artist, album, track_no, disc_no,
+                        year, genre, grouping, duration, bitrate, samplerate,
+                        artwork_path, media_type, disc_id, file_size,
+                        file_mtime_ns, last_scanned_at, scan_error, path)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (*values, path),
+                )
+                if cur.rowcount > 0:
+                    return IndexResult("added", path)
+                # Concurrent insert from another thread; fall through to UPDATE.
+
+            self.conn.execute(
+                """UPDATE tracks
+                   SET title = ?, artist = ?, album_artist = ?, album = ?,
+                       track_no = ?, disc_no = ?, year = ?, genre = ?,
+                       grouping = ?, duration = ?, bitrate = ?, samplerate = ?,
+                       artwork_path = ?, media_type = ?, disc_id = ?,
+                       file_size = ?, file_mtime_ns = ?, last_scanned_at = ?,
+                       scan_error = ?
+                   WHERE path = ?""",
+                (*values, path),
+            )
+            return IndexResult("updated", path)
+
+    def _track_row_for_path(self, path: str) -> sqlite3.Row | None:
+        with self._lock:
+            return self.conn.execute(
+                "SELECT * FROM tracks WHERE path = ?", (path,)
+            ).fetchone()
+
+    def _backfill_disc_id(self, path: str, disc_id: str) -> None:
+        with self._lock:
+            self.conn.execute(
+                "UPDATE tracks SET disc_id = ?"
+                " WHERE path = ? AND (disc_id IS NULL OR disc_id = '')",
+                (disc_id, path),
+            )
+
+    def _record_scan_error(
+        self,
+        path: str,
+        stat: os.stat_result,
+        error: str,
+        *,
+        existing: bool,
+    ) -> None:
+        if not existing:
+            return
+        with self._lock:
+            self.conn.execute(
+                """UPDATE tracks
+                   SET file_size = ?, file_mtime_ns = ?, last_scanned_at = ?,
+                       scan_error = ?
+                   WHERE path = ?""",
+                (int(stat.st_size), int(stat.st_mtime_ns), time.time(), error, path),
+            )
+
+    def remove_path(self, path: str | os.PathLike, *, commit: bool = True) -> int:
+        """Remove a library record for *path* without touching the filesystem."""
+        with self._lock:
+            cur = self.conn.execute("DELETE FROM tracks WHERE path = ?", (str(path),))
+            if commit:
+                self.conn.commit()
+            return cur.rowcount
+
+    def remove_paths_under(self, folder: str | os.PathLike, *, commit: bool = True) -> int:
+        """Remove library records under a deleted watched folder."""
+        folder_text = str(folder).rstrip("/\\")
         with self._lock:
             cur = self.conn.execute(
-                """INSERT OR IGNORE INTO tracks
-                   (path, title, artist, album_artist, album, track_no, disc_no,
-                    year, genre, duration, bitrate, samplerate, artwork_path, media_type,
-                    disc_id)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (
-                    path,
-                    meta["title"],
-                    meta["artist"],
-                    meta["album_artist"],
-                    meta["album"],
-                    meta["track_no"],
-                    meta["disc_no"],
-                    meta["year"],
-                    meta["genre"],
-                    meta["duration"],
-                    meta["bitrate"],
-                    meta["samplerate"],
-                    str(art) if art else None,
-                    media_type,
-                    disc_id or None,
-                ),
+                "DELETE FROM tracks WHERE path = ? OR path LIKE ?",
+                (folder_text, folder_text + os.sep + "%"),
             )
-            inserted = cur.rowcount > 0
-            if not inserted and disc_id:
-                # Row already existed (scanned earlier, or pre-feature rip).
-                # Backfill disc_id so duplicate-CD detection works next time.
+            if commit:
+                self.conn.commit()
+            return cur.rowcount
+
+    def move_path(
+        self,
+        old_path: str | os.PathLike,
+        new_path: str | os.PathLike,
+        *,
+        commit: bool = True,
+    ) -> IndexResult:
+        """Move a library record to *new_path*, preserving user metadata."""
+        old_text = str(old_path)
+        new_text = str(new_path)
+        if old_text == new_text:
+            return IndexResult("unchanged", new_text)
+        with self._lock:
+            old_row = self.conn.execute(
+                "SELECT id FROM tracks WHERE path = ?", (old_text,)
+            ).fetchone()
+            if old_row is None:
+                old_missing = True
+            else:
+                old_missing = False
+        if old_missing:
+            return self.index_file(new_text)
+        with self._lock:
+            existing_dest = self.conn.execute(
+                "SELECT id FROM tracks WHERE path = ?", (new_text,)
+            ).fetchone()
+            if existing_dest is not None and existing_dest["id"] != old_row["id"]:
+                self.conn.execute("DELETE FROM tracks WHERE id = ?", (old_row["id"],))
+                if commit:
+                    self.conn.commit()
+                return IndexResult("removed", old_text)
+            self.conn.execute(
+                "UPDATE tracks SET path = ?, file_size = 0, file_mtime_ns = 0 WHERE id = ?",
+                (new_text, old_row["id"]),
+            )
+        result = self.index_file(new_text)
+        if commit:
+            self.commit()
+        return result
+
+    def move_paths_under(
+        self,
+        old_folder: str | os.PathLike,
+        new_folder: str | os.PathLike,
+        *,
+        commit: bool = True,
+        should_cancel: "Callable[[], bool] | None" = None,
+    ) -> ScanSummary:
+        """Move all library records under one folder to another folder.
+
+        This preserves track IDs and dependent user data such as playlist rows,
+        ratings, play counts, and liked state across album/folder renames.
+        """
+        old_root = Path(old_folder)
+        new_root = Path(new_folder)
+        old_text = str(old_root).rstrip("/\\")
+        new_text = str(new_root).rstrip("/\\")
+        summary = ScanSummary()
+        refresh_paths: list[Path] = []
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT id, path FROM tracks WHERE path = ? OR path LIKE ?",
+                (old_text, old_text + os.sep + "%"),
+            ).fetchall()
+            for row in rows:
+                old_path = Path(row["path"])
+                try:
+                    rel = old_path.relative_to(old_root)
+                except ValueError:
+                    rel = Path(old_path.name)
+                new_path = str(new_root / rel)
+                existing_dest = self.conn.execute(
+                    "SELECT id FROM tracks WHERE path = ?", (new_path,)
+                ).fetchone()
+                if existing_dest is not None and existing_dest["id"] != row["id"]:
+                    self.conn.execute("DELETE FROM tracks WHERE id = ?", (row["id"],))
+                    summary.removed += 1
+                    continue
                 self.conn.execute(
-                    "UPDATE tracks SET disc_id = ?"
-                    " WHERE path = ? AND (disc_id IS NULL OR disc_id = '')",
-                    (disc_id, path),
+                    "UPDATE tracks SET path = ?, file_size = 0, file_mtime_ns = 0 WHERE id = ?",
+                    (new_path, row["id"]),
                 )
-            return inserted
+                refresh_paths.append(Path(new_path))
+
+        for new_path in refresh_paths:
+            if should_cancel is not None and should_cancel():
+                break
+            if new_path.exists():
+                result = self.index_file(new_path)
+                if result.status == "updated":
+                    summary.updated += 1
+                elif result.status == "added":
+                    # Should be rare because the row was rewritten above, but
+                    # count it accurately if an older DB inconsistency appears.
+                    summary.added += 1
+                elif result.status == "unchanged":
+                    summary.unchanged += 1
+                elif result.status == "failed":
+                    summary.failed += 1
+                else:
+                    summary.skipped += 1
+            else:
+                summary.removed += self.remove_path(new_path, commit=False)
+        if new_root.exists() and (should_cancel is None or not should_cancel()):
+            summary.merge(
+                self.scan_paths_summary([new_root], should_cancel=should_cancel)
+            )
+        if commit:
+            self.commit()
+        return summary
 
     # ------------------------------------------------------------------ queries
     def all_artists(self, media_type: str | None = None, genre: str | None = None) -> list[str]:
@@ -424,7 +717,7 @@ class Library:
         return (row["a"], row["b"]) if row else None
 
     def update_track(self, track_id: int, fields: dict) -> None:
-        allowed = {"title", "artist", "album_artist", "album", "track_no", "disc_no", "year", "genre", "artwork_path"}
+        allowed = {"title", "artist", "album_artist", "album", "track_no", "disc_no", "year", "genre", "grouping", "artwork_path"}
         safe = {k: v for k, v in fields.items() if k in allowed}
         if not safe:
             return
@@ -707,6 +1000,43 @@ class Library:
             self.conn.commit()
         return len(missing_ids)
 
+    def remove_missing_under_existing_roots(self, roots: Iterable[str | os.PathLike]) -> int:
+        """Remove missing rows only for library roots that are currently reachable."""
+        existing_roots: list[str] = []
+        for root in roots:
+            try:
+                root_path = Path(root)
+                if root_path.exists():
+                    existing_roots.append(os.path.normcase(os.path.abspath(root_path)))
+            except OSError:
+                continue
+        if not existing_roots:
+            return 0
+
+        with self._lock:
+            rows = self.conn.execute("SELECT id, path FROM tracks").fetchall()
+
+        missing_ids: list[int] = []
+        for row in rows:
+            path = row["path"]
+            if Path(path).exists():
+                continue
+            try:
+                path_norm = os.path.normcase(os.path.abspath(path))
+                if any(os.path.commonpath([root, path_norm]) == root for root in existing_roots):
+                    missing_ids.append(row["id"])
+            except (OSError, ValueError):
+                continue
+
+        if not missing_ids:
+            return 0
+        with self._lock:
+            self.conn.executemany(
+                "DELETE FROM tracks WHERE id = ?", [(id_,) for id_ in missing_ids]
+            )
+            self.conn.commit()
+        return len(missing_ids)
+
 
 def _row_to_track(r: sqlite3.Row) -> Track:
     keys = r.keys()
@@ -731,6 +1061,11 @@ def _row_to_track(r: sqlite3.Row) -> Track:
         last_played=r["last_played"] if "last_played" in keys else None,
         liked=bool(r["liked"]) if "liked" in keys else False,
         disc_id=r["disc_id"] if "disc_id" in keys else None,
+        file_size=int(r["file_size"] or 0) if "file_size" in keys else 0,
+        file_mtime_ns=int(r["file_mtime_ns"] or 0) if "file_mtime_ns" in keys else 0,
+        last_scanned_at=r["last_scanned_at"] if "last_scanned_at" in keys else None,
+        scan_error=r["scan_error"] if "scan_error" in keys else None,
+        grouping=(r["grouping"] or "") if "grouping" in keys else "",
     )
 
 
@@ -738,6 +1073,24 @@ def _is_safe_migration_skip(exc: sqlite3.OperationalError) -> bool:
     """Return True for idempotent migration reruns after a partial previous run."""
     msg = str(exc).lower()
     return "duplicate column name" in msg or "already exists" in msg
+
+
+def _safe_stat(path: str) -> os.stat_result | None:
+    try:
+        return os.stat(path)
+    except OSError:
+        return None
+
+
+def _row_matches_stat(row: sqlite3.Row, stat: os.stat_result) -> bool:
+    keys = row.keys()
+    if "file_size" not in keys or "file_mtime_ns" not in keys:
+        return False
+    return (
+        int(row["file_size"] or 0) == int(stat.st_size)
+        and int(row["file_mtime_ns"] or 0) == int(stat.st_mtime_ns)
+        and not (row["scan_error"] if "scan_error" in keys else None)
+    )
 
 
 def _read_tags(path: str) -> dict | None:
@@ -774,6 +1127,7 @@ def _read_tags(path: str) -> dict | None:
         "disc_no": to_int(first("discnumber")) or 1,
         "year": to_int(first("date") or first("year")),
         "genre": first("genre"),
+        "grouping": first("grouping"),
         "duration": float(getattr(info, "length", 0.0) or 0.0),
         "bitrate": int(getattr(info, "bitrate", 0) or 0),
         "samplerate": int(getattr(info, "sample_rate", 0) or 0),

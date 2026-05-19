@@ -33,6 +33,14 @@ def _prepend_path(path: Path) -> None:
         os.environ["PATH"] = path_text + (os.pathsep + current if current else "")
 
 
+def _decode_vlc_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
+
+
 def _configure_vlc_runtime_path() -> None:
     """Expose a bundled VLC runtime to python-vlc when one is present.
 
@@ -76,7 +84,24 @@ class PlaybackBackend(QObject):
     position_changed = Signal(int, int)
     end_reached = Signal()
 
-    def set_source(self, path: str) -> None:
+    def list_audio_outputs(self) -> list[tuple[str, str]]:
+        """Return [(id, description), …] for available audio output modules."""
+        return []
+
+    def list_audio_devices(self, audio_output: str = "") -> list[tuple[str, str]]:
+        """Return [(device_id, description), …] for the given output module."""
+        return []
+
+    def set_audio_device(self, audio_output: str, device_id: str) -> None:
+        """Switch audio output module and/or device. Takes effect on next play()."""
+
+    def set_source(
+        self,
+        path: str,
+        *,
+        is_location: bool = False,
+        options: tuple[str, ...] = (),
+    ) -> None:
         raise NotImplementedError
 
     def play(self) -> None:
@@ -136,7 +161,13 @@ class UnavailablePlaybackBackend(PlaybackBackend):
         self._source = ""
         self._warned = False
 
-    def set_source(self, path: str) -> None:
+    def set_source(
+        self,
+        path: str,
+        *,
+        is_location: bool = False,
+        options: tuple[str, ...] = (),
+    ) -> None:
         self._source = path
 
     def play(self) -> None:
@@ -190,13 +221,31 @@ class UnavailablePlaybackBackend(PlaybackBackend):
 class VlcPlaybackBackend(PlaybackBackend):
     """libVLC playback backend with real equalizer support."""
 
-    def __init__(self, vlc_module: Any, parent: Optional[QObject] = None):
+    def __init__(
+        self,
+        vlc_module: Any,
+        parent: Optional[QObject] = None,
+        *,
+        audio_output: str = "",
+        audio_device: str = "",
+        vlc_instance_options: tuple[str, ...] = (),
+    ):
         super().__init__(parent)
         from PySide6.QtCore import QTimer
 
         self._vlc = vlc_module
-        self._instance = vlc_module.Instance()
+        self._instance = vlc_module.Instance(*vlc_instance_options)
         self._player = self._instance.media_player_new()
+        if audio_output:
+            try:
+                self._player.audio_output_set(audio_output)
+            except Exception as exc:
+                LOG.debug("Could not set audio output %r: %s", audio_output, exc)
+        if audio_device or audio_output:
+            try:
+                self._player.audio_output_device_set(audio_output or None, audio_device or None)
+            except Exception as exc:
+                LOG.debug("Could not set audio device %r: %s", audio_device, exc)
         self._volume = 80
         self._muted = False
         self._last_state = "stopped"
@@ -217,8 +266,23 @@ class VlcPlaybackBackend(PlaybackBackend):
         self._timer.setInterval(200)
         self._timer.timeout.connect(self._poll)
 
-    def set_source(self, path: str) -> None:
-        media = self._instance.media_new_path(str(Path(path)))
+    def set_source(
+        self,
+        path: str,
+        *,
+        is_location: bool = False,
+        options: tuple[str, ...] = (),
+    ) -> None:
+        media = (
+            self._instance.media_new_location(path)
+            if is_location
+            else self._instance.media_new_path(str(Path(path)))
+        )
+        for option in options:
+            try:
+                media.add_option(option)
+            except Exception as exc:
+                LOG.debug("Could not add VLC media option %s: %s", option, exc)
         self._player.set_media(media)
         media.release()  # drop our reference; VLC holds its own via set_media
         self._ended = False
@@ -269,6 +333,64 @@ class VlcPlaybackBackend(PlaybackBackend):
 
     def is_playing(self) -> bool:
         return bool(self._player.is_playing())
+
+    def list_audio_outputs(self) -> list[tuple[str, str]]:
+        result: list[tuple[str, str]] = [("", "Default")]
+        head: Any = None
+        try:
+            head = self._instance.audio_output_list_get()
+            out = head
+            while out:
+                item = getattr(out, "contents", out)
+                name = _decode_vlc_text(getattr(item, "name", None))
+                desc = _decode_vlc_text(getattr(item, "description", None)) or name
+                if name:
+                    result.append((name, desc))
+                out = getattr(item, "next", None)
+        except Exception as exc:
+            LOG.debug("Could not list audio outputs: %s", exc)
+        finally:
+            if head:
+                release = getattr(self._vlc, "libvlc_audio_output_list_release", None)
+                if callable(release):
+                    try:
+                        release(head)
+                    except Exception as exc:
+                        LOG.debug("Could not release audio output list: %s", exc)
+        return result
+
+    def list_audio_devices(self, audio_output: str = "") -> list[tuple[str, str]]:
+        result: list[tuple[str, str]] = [("", "Default")]
+        head: Any = None
+        try:
+            head = self._instance.audio_output_device_list_get(audio_output)
+            dev = head
+            while dev:
+                item = getattr(dev, "contents", dev)
+                device_id = _decode_vlc_text(getattr(item, "device", None))
+                desc = _decode_vlc_text(getattr(item, "description", None)) or device_id
+                if device_id:
+                    result.append((device_id, desc))
+                dev = getattr(item, "next", None)
+        except Exception as exc:
+            LOG.debug("Could not list audio devices for %r: %s", audio_output, exc)
+        finally:
+            if head:
+                release = getattr(self._vlc, "libvlc_audio_output_device_list_release", None)
+                if callable(release):
+                    try:
+                        release(head)
+                    except Exception as exc:
+                        LOG.debug("Could not release audio device list: %s", exc)
+        return result
+
+    def set_audio_device(self, audio_output: str, device_id: str) -> None:
+        try:
+            if audio_output:
+                self._player.audio_output_set(audio_output)
+            self._player.audio_output_device_set(audio_output or None, device_id or None)
+        except Exception as exc:
+            LOG.debug("Could not set audio device %r/%r: %s", audio_output, device_id, exc)
 
     def apply_equalizer(self, enabled: bool, bands: list[int], preamp: int = 0) -> None:
         self._eq_fade_timer.stop()
@@ -325,7 +447,13 @@ class VlcPlaybackBackend(PlaybackBackend):
             self.position_changed.emit(*current)
 
 
-def create_playback_backend(parent: Optional[QObject] = None) -> PlaybackBackend:
+def create_playback_backend(
+    parent: Optional[QObject] = None,
+    *,
+    audio_output: str = "",
+    audio_device: str = "",
+    vlc_instance_options: tuple[str, ...] = (),
+) -> PlaybackBackend:
     """Create the required VLC backend, preserving app startup if it is unavailable."""
     _configure_vlc_runtime_path()
     try:
@@ -336,7 +464,13 @@ def create_playback_backend(parent: Optional[QObject] = None) -> PlaybackBackend
         return UnavailablePlaybackBackend(reason, parent)
 
     try:
-        return VlcPlaybackBackend(vlc_module, parent)
+        return VlcPlaybackBackend(
+            vlc_module,
+            parent,
+            audio_output=audio_output,
+            audio_device=audio_device,
+            vlc_instance_options=vlc_instance_options,
+        )
     except Exception as exc:
         reason = f"libVLC runtime could not be initialized: {exc}"
         LOG.warning("VLC playback backend unavailable: %s", reason)
