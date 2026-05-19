@@ -34,6 +34,7 @@ _STREAM_URL_SCHEMES = {
     "icy",
 }
 _MAX_RECENT_STREAM_URLS = 25
+_MAX_RADIO_STATIONS = 200
 
 
 def _default_music_root() -> Path:
@@ -145,6 +146,37 @@ def _is_network_stream_url(url: str) -> bool:
     return parsed.scheme.casefold() in _STREAM_URL_SCHEMES and bool(parsed.netloc)
 
 
+def normalize_radio_stations(stations: object, *, limit: int = _MAX_RADIO_STATIONS) -> list[dict[str, object]]:
+    """Return saved radio stations with valid stream URLs and stable keys."""
+    if not isinstance(stations, list | tuple):
+        return []
+
+    normalized: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for value in stations:
+        if not isinstance(value, dict):
+            continue
+        url = str(value.get("url") or "").strip()
+        if not _is_network_stream_url(url):
+            continue
+        key = url.casefold()
+        if key in seen:
+            continue
+        name = str(value.get("name") or "").strip() or url
+        genre = str(value.get("genre") or "").strip()
+        bitrate = _nonnegative_int(value.get("bitrate"), 0)
+        normalized.append({
+            "name": name,
+            "url": url,
+            "genre": genre,
+            "bitrate": bitrate,
+        })
+        seen.add(key)
+        if len(normalized) >= limit:
+            break
+    return normalized
+
+
 @dataclass
 class Settings:
     music_root: str = field(default_factory=lambda: str(_default_music_root()))
@@ -194,6 +226,7 @@ class Settings:
     dlna_enabled: bool = False
     dlna_port: int = 8200
     dlna_friendly_name: str = "Sea Lyon Media Manager"
+    radio_stations: list[dict[str, object]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.rip_format = str(self.rip_format or "flac").lower()
@@ -224,6 +257,7 @@ class Settings:
         self.dlna_enabled = _bool_value(self.dlna_enabled, False)
         self.dlna_port = _clamp_int(self.dlna_port, 8200, 0, 65535)
         self.dlna_friendly_name = str(self.dlna_friendly_name or "").strip() or "Sea Lyon Media Manager"
+        self.radio_stations = normalize_radio_stations(self.radio_stations)
         self.yt_audio_format = str(self.yt_audio_format or "flac").lower()
         if self.yt_audio_format not in _YT_AUDIO_FORMATS:
             self.yt_audio_format = "flac"
@@ -251,6 +285,16 @@ class Settings:
     def remember_stream_url(self, url: str) -> None:
         """Move a valid stream URL to the front of the recents list."""
         self.recent_stream_urls = normalize_stream_urls([url, *self.recent_stream_urls])
+
+    def add_radio_stations(self, stations: list[dict[str, object]]) -> None:
+        """Append or update saved radio stations by URL."""
+        merged: dict[str, dict[str, object]] = {
+            str(station["url"]).casefold(): dict(station)
+            for station in normalize_radio_stations(self.radio_stations)
+        }
+        for station in normalize_radio_stations(stations):
+            merged[str(station["url"]).casefold()] = station
+        self.radio_stations = normalize_radio_stations(list(merged.values()))
 
     @classmethod
     def load(cls) -> "Settings":

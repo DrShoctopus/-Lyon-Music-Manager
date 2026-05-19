@@ -57,7 +57,7 @@ def main_window(qapp, fake_backend, monkeypatch, tmp_path):
 
 
 def test_tab_bar_renders_documented_order(main_window):
-    expected = ("Library", "Now Playing", "Video", "Disc", "Rip", "YouTube")
+    expected = ("Library", "Now Playing", "Radio", "Video", "Disc", "Rip", "YouTube")
     actual = tuple(
         main_window.tab_bar.tabText(i)
         for i in range(main_window.tab_bar.count())
@@ -81,6 +81,8 @@ def test_transport_visible_on_library_hidden_on_rip(main_window):
     assert main_window.transport.isHidden()
     main_window.tab_bar.setCurrentIndex(main_window._tab_index["Video"])
     assert main_window.transport.isHidden()
+    main_window.tab_bar.setCurrentIndex(main_window._tab_index["Radio"])
+    assert not main_window.transport.isHidden()
     main_window.tab_bar.setCurrentIndex(main_window._tab_index["Disc"])
     assert not main_window.transport.isHidden()
     main_window.tab_bar.setCurrentIndex(main_window._tab_index["Now Playing"])
@@ -123,6 +125,23 @@ def test_video_disc_handoff_uses_video_player_after_switching_tabs(main_window, 
     assert main_window.stack.currentWidget() is main_window.video_player_view
     qapp.processEvents(QtCore.QEventLoop.AllEvents, 50)
     assert calls == [("dvd:///D:/", {"label": "DVD"}, main_window.video_player_view)]
+
+
+def test_radio_play_request_uses_audio_player(main_window, monkeypatch):
+    calls = []
+    monkeypatch.setattr(main_window.video_player_view, "pause_playback", lambda: calls.append(("pause_video",)))
+    monkeypatch.setattr(
+        main_window.player,
+        "play_url",
+        lambda url, title=None: calls.append(("play_url", url, title)),
+    )
+
+    main_window._play_radio_station("https://radio.example.test/live", "Sea Radio")
+
+    assert calls == [
+        ("pause_video",),
+        ("play_url", "https://radio.example.test/live", "Sea Radio"),
+    ]
 
 
 def test_video_disc_handoff_reports_unavailable_video_player(main_window, monkeypatch):
@@ -243,10 +262,11 @@ def test_ctrl_number_shortcuts_wired(main_window):
     expected = {
         "Library":     "Ctrl+1",
         "Now Playing": "Ctrl+2",
-        "Video":       "Ctrl+3",
-        "Disc":        "Ctrl+4",
-        "Rip":         "Ctrl+5",
-        "YouTube":     "Ctrl+6",
+        "Radio":       "Ctrl+3",
+        "Video":       "Ctrl+4",
+        "Disc":        "Ctrl+5",
+        "Rip":         "Ctrl+6",
+        "YouTube":     "Ctrl+7",
     }
     # Walk the menubar actions to find the View menu.
     view_menu = None

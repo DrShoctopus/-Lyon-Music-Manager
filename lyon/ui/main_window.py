@@ -39,6 +39,7 @@ from .first_run_dialog import FirstRunDialog
 from .library_view import LibraryView
 from .now_playing import NowPlayingView, TransportBar
 from .queue_dialog import QueueDialog
+from .radio_view import RadioView
 from .ripper_view import RipperView
 from .styles import apply_app_styles
 from .toast import Toast
@@ -86,7 +87,7 @@ class _LibraryScanThread(QThread):
 
 class MainWindow(QMainWindow):
     # Tab display order — index matches the QStackedWidget page index.
-    _TAB_ORDER = ("Library", "Now Playing", "Video", "Disc", "Rip", "YouTube")
+    _TAB_ORDER = ("Library", "Now Playing", "Radio", "Video", "Disc", "Rip", "YouTube")
 
     def __init__(self):
         super().__init__()
@@ -201,6 +202,7 @@ class MainWindow(QMainWindow):
         )
         self.video_player_view.apply_equalizer(self.settings.equalizer_enabled, self.settings.equalizer_bands, self.settings.equalizer_preamp)
         self._library_refresh_timer.timeout.connect(self.video_player_view.refresh_catalog)
+        self.radio_view = RadioView(self.settings)
         self.disc_view = DiscView(self.settings)
         self.ripper_view = RipperView(self.settings, self.library)
         self.youtube_view = YouTubeView()
@@ -209,6 +211,7 @@ class MainWindow(QMainWindow):
         _tab_views = (
             self.library_view,
             self.now_playing,
+            self.radio_view,
             self.video_player_view,
             self.disc_view,
             self.ripper_view,
@@ -262,6 +265,8 @@ class MainWindow(QMainWindow):
         self.library_view.request_diagnostics.connect(self.show_diagnostics)
         self.library_view.request_scan_replaygain.connect(self._on_scan_replaygain)
         self.now_playing.request_edit_metadata.connect(self.library_view.edit_track_metadata)
+        self.radio_view.play_requested.connect(self._play_radio_station)
+        self.radio_view.status_message.connect(lambda m: self.show_toast(m, level="success"))
         self.video_player_view.request_diagnostics.connect(self.show_diagnostics)
         self.disc_view.play_audio_tracks.connect(self._play_disc_audio_tracks)
         self.disc_view.enqueue_audio_tracks.connect(self._enqueue_disc_audio_tracks)
@@ -549,6 +554,11 @@ class MainWindow(QMainWindow):
             self.show_toast("YouTube search already in progress.", level="warning")
         else:
             self.show_toast("YouTube search is unavailable.", level="error")
+
+    def _play_radio_station(self, url: str, title: str) -> None:
+        self.video_player_view.pause_playback()
+        self.player.play_url(url, title=title)
+        self.show_toast(f"Playing radio: {title}", level="info")
 
     def _enqueue_tracks(self, tracks: list) -> None:
         self.player.enqueue(tracks)
@@ -863,6 +873,7 @@ class MainWindow(QMainWindow):
             self.ripper_view.apply_settings(self.settings)
             self.now_playing._settings = self.settings
             self.video_player_view.apply_settings(self.settings)
+            self.radio_view.apply_settings(self.settings)
             self.player.set_equalizer(
                 self.settings.equalizer_enabled,
                 self.settings.equalizer_bands,
@@ -909,6 +920,7 @@ class MainWindow(QMainWindow):
             self.ripper_view.apply_settings(self.settings)
             self.now_playing._settings = self.settings
             self.video_player_view.apply_settings(self.settings)
+            self.radio_view.apply_settings(self.settings)
             if self.settings.library_paths:
                 self._start_scan(self.settings.library_paths, "Scanned")
             self._restart_library_watcher()

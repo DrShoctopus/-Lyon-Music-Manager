@@ -64,6 +64,7 @@ def test_ui_modules_import(app):
         "lyon.ui.library_view",
         "lyon.ui.now_playing",
         "lyon.ui.queue_dialog",
+        "lyon.ui.radio_view",
         "lyon.ui.ripper_view",
         "lyon.ui.settings_dialog",
         "lyon.ui.styles",
