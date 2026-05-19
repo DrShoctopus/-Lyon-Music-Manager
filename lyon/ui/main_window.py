@@ -268,6 +268,7 @@ class MainWindow(QMainWindow):
         self.radio_view.play_requested.connect(self._play_radio_station)
         self.radio_view.status_message.connect(lambda m: self.show_toast(m, level="success"))
         self.video_player_view.request_diagnostics.connect(self.show_diagnostics)
+        self.video_player_view.resume_available.connect(self._on_video_resume_available)
         self.disc_view.play_audio_tracks.connect(self._play_disc_audio_tracks)
         self.disc_view.enqueue_audio_tracks.connect(self._enqueue_disc_audio_tracks)
         self.disc_view.play_video_disc.connect(self._play_video_disc)
@@ -559,6 +560,16 @@ class MainWindow(QMainWindow):
         self.video_player_view.pause_playback()
         self.player.play_url(url, title=title)
         self.show_toast(f"Playing radio: {title}", level="info")
+
+    def _on_video_resume_available(self, message: str, callback: object) -> None:
+        if not callable(callback):
+            return
+        self.show_toast(
+            message,
+            level="info",
+            duration_ms=7000,
+            action=("Resume", callback),
+        )
 
     def _enqueue_tracks(self, tracks: list) -> None:
         self.player.enqueue(tracks)

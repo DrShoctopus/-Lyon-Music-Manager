@@ -103,6 +103,8 @@ _MIGRATIONS: list[tuple[int, str]] = [
     # v9 — AcoustID fingerprint result UUID for acoustic duplicate detection
     (9, "ALTER TABLE tracks ADD COLUMN acoustid_id TEXT"),
     (9, "CREATE INDEX IF NOT EXISTS idx_tracks_acoustid_id ON tracks(acoustid_id)"),
+    # v10 — per-video resume position in milliseconds
+    (10, "ALTER TABLE tracks ADD COLUMN resume_position INTEGER NOT NULL DEFAULT 0"),
 ]
 
 _PAGE_SIZE = 500  # rows per page in streaming queries
@@ -139,6 +141,7 @@ class Track:
     playback_is_location: bool = False
     playback_options: tuple[str, ...] = ()
     is_library_item: bool = True
+    resume_position: int = 0
 
     @property
     def display_artist(self) -> str:
@@ -946,6 +949,16 @@ class Library:
             )
             self.conn.commit()
 
+    def update_resume_position(self, track_id: int, position_ms: int) -> None:
+        """Store the last playback position for a video track."""
+        position_ms = max(0, int(position_ms or 0))
+        with self._lock:
+            self.conn.execute(
+                "UPDATE tracks SET resume_position = ? WHERE id = ? AND media_type = 'video'",
+                (position_ms, track_id),
+            )
+            self.conn.commit()
+
     # ------------------------------------------------------------------ genre queries
     def all_genres(self, media_type: str | None = None) -> list[str]:
         filter_sql = "" if media_type is None else "AND media_type = ?"
@@ -1362,6 +1375,7 @@ def _row_to_track(r: sqlite3.Row) -> Track:
         grouping=(r["grouping"] or "") if "grouping" in keys else "",
         playback_uri=playback_uri,
         playback_options=playback_options,
+        resume_position=int(r["resume_position"] or 0) if "resume_position" in keys else 0,
     )
 
 

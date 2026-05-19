@@ -90,6 +90,30 @@ def test_track_rows_include_audio_details(tmp_path):
     assert track.samplerate == 48000
 
 
+def test_video_resume_position_round_trips(tmp_path):
+    library = Library(tmp_path / "library.db")
+    video = tmp_path / "clip.mp4"
+    video.write_bytes(b"video")
+    assert library.add_file(video)
+    track = next(library.all_tracks(media_type="video"))
+
+    library.update_resume_position(track.id, 45_000)
+    updated = next(library.all_tracks(media_type="video"))
+
+    assert updated.resume_position == 45_000
+
+
+def test_resume_position_update_ignores_audio_tracks(tmp_path):
+    library = Library(tmp_path / "library.db")
+    add_track(library, "/music/song.flac", artist="Artist", album="Album")
+    track = next(library.all_tracks())
+
+    library.update_resume_position(track.id, 45_000)
+    updated = next(library.all_tracks())
+
+    assert updated.resume_position == 0
+
+
 def test_tracks_for_artist_returns_all_albums_without_extra_view_queries(tmp_path):
     library = Library(tmp_path / "library.db")
     add_track(library, "/music/a_first.flac", artist="Artist", album="First")
