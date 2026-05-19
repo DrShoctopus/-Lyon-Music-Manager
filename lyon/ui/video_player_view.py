@@ -23,12 +23,13 @@ from typing import Any
 from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
-    QApplication, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
-    QPushButton, QScrollArea, QSizePolicy, QSlider, QStackedWidget,
-    QVBoxLayout, QWidget,
+    QApplication, QComboBox, QFileDialog, QFrame, QHBoxLayout, QInputDialog,
+    QLabel, QLineEdit, QMessageBox, QPushButton, QScrollArea, QSizePolicy,
+    QSlider, QStackedWidget, QVBoxLayout, QWidget,
 )
 
 from ..core.playback_backend import _configure_vlc_runtime_path
+from ..core.settings import Settings, normalize_stream_urls
 from ..core.vlc_equalizer import EQ_FADE_INTERVAL_MS, VlcEqualizerController
 from .osd import OSDOverlay
 from .transport import PlayPauseSideButton, StopButton, VolumeButton
@@ -318,10 +319,16 @@ class VideoPlayerView(QWidget):
 
     request_diagnostics = Signal()
 
-    def __init__(self, library: Any = None, parent: QWidget | None = None,
-                 initial_volume: int = 80):
+    def __init__(
+        self,
+        library: Any = None,
+        parent: QWidget | None = None,
+        initial_volume: int = 80,
+        settings: Settings | None = None,
+    ):
         super().__init__(parent)
         self._library = library
+        self._settings = settings
         self._initial_volume = max(0, min(100, int(initial_volume)))
         _configure_vlc_runtime_path()
 
@@ -416,6 +423,10 @@ class VideoPlayerView(QWidget):
         self._open_btn.setObjectName("accent")
         self._open_btn.clicked.connect(self._open_file)
 
+        self._open_url_btn = QPushButton("Open URL...")
+        self._open_url_btn.setToolTip("Open a network video stream")
+        self._open_url_btn.clicked.connect(self._open_url)
+
         self._info_lbl = QLabel("No file loaded")
         self._info_lbl.setObjectName("mutedText")
         self._info_lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
@@ -438,6 +449,7 @@ class VideoPlayerView(QWidget):
         self._sidebar_btn.clicked.connect(self._toggle_sidebar)
 
         toolbar.addWidget(self._open_btn)
+        toolbar.addWidget(self._open_url_btn)
         toolbar.addWidget(self._info_lbl, 1)
         toolbar.addWidget(self._screenshot_btn)
         toolbar.addWidget(self._fullscreen_btn)
@@ -924,6 +936,28 @@ class VideoPlayerView(QWidget):
         if path:
             self._load_path(path)
 
+    def _open_url(self) -> None:
+        recent_urls = list(getattr(self._settings, "recent_stream_urls", []))
+        url, accepted = QInputDialog.getItem(
+            self,
+            "Open Network Stream",
+            "Stream URL:",
+            recent_urls,
+            0,
+            True,
+        )
+        if not accepted:
+            return
+        url = url.strip()
+        if not normalize_stream_urls([url]):
+            QMessageBox.warning(
+                self,
+                "Open Network Stream",
+                "Enter a valid network stream URL.",
+            )
+            return
+        self.load_location(url, label=url)
+
     def _load_path(self, path: str) -> None:
         self._load_media_source(path, label=Path(path).name)
 
@@ -978,6 +1012,7 @@ class VideoPlayerView(QWidget):
         if self._eq_controller is not None:
             self._eq_controller.attach_to_player()
         self._info_lbl.setText(label or source)
+        self._remember_stream_source(source, is_location)
         self._set_controls_enabled(True)
         self._player.play()
         self._play_btn.set_playing(True)
@@ -985,6 +1020,17 @@ class VideoPlayerView(QWidget):
         # Track lists and resolution are only available after the media parses
         QTimer.singleShot(600, self._populate_tracks)
         QTimer.singleShot(900, self._update_video_info)
+
+    def _remember_stream_source(self, source: str, is_location: bool) -> None:
+        if not is_location or self._settings is None:
+            return
+        if not normalize_stream_urls([source]):
+            return
+        self._settings.remember_stream_url(source)
+        try:
+            self._settings.save()
+        except OSError as exc:
+            LOG.warning("Could not save recent stream URL: %s", exc)
 
     # ---------------------------------------------------------------- transport
 
@@ -1040,6 +1086,9 @@ class VideoPlayerView(QWidget):
     def _eq_fade_step(self) -> None:
         if self._eq_controller is None or not self._eq_controller.fade_step():
             self._eq_fade_timer.stop()
+
+    def apply_settings(self, settings: Settings) -> None:
+        self._settings = settings
 
     def _on_rate_changed(self, index: int) -> None:
         _, rate = _RATE_OPTIONS[index]

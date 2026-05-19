@@ -197,6 +197,7 @@ class MainWindow(QMainWindow):
         self.video_player_view = VideoPlayerView(
             library=self.library,
             initial_volume=self.settings.last_volume,
+            settings=self.settings,
         )
         self.video_player_view.apply_equalizer(self.settings.equalizer_enabled, self.settings.equalizer_bands, self.settings.equalizer_preamp)
         self._library_refresh_timer.timeout.connect(self.video_player_view.refresh_catalog)
@@ -861,6 +862,7 @@ class MainWindow(QMainWindow):
             metadata.reset_musicbrainz_useragent()
             self.ripper_view.apply_settings(self.settings)
             self.now_playing._settings = self.settings
+            self.video_player_view.apply_settings(self.settings)
             self.player.set_equalizer(
                 self.settings.equalizer_enabled,
                 self.settings.equalizer_bands,
@@ -906,6 +908,7 @@ class MainWindow(QMainWindow):
             metadata.reset_musicbrainz_useragent()
             self.ripper_view.apply_settings(self.settings)
             self.now_playing._settings = self.settings
+            self.video_player_view.apply_settings(self.settings)
             if self.settings.library_paths:
                 self._start_scan(self.settings.library_paths, "Scanned")
             self._restart_library_watcher()

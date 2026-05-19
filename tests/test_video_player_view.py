@@ -11,6 +11,8 @@ QtCore = pytest.importorskip("PySide6.QtCore", exc_type=ImportError)
 QtGui = pytest.importorskip("PySide6.QtGui", exc_type=ImportError)
 QtWidgets = pytest.importorskip("PySide6.QtWidgets", exc_type=ImportError)
 
+from lyon.core.settings import Settings
+
 
 class _FakeMedia:
     def __init__(self) -> None:
@@ -237,6 +239,81 @@ def test_video_view_can_load_disc_location(qapp, monkeypatch):
         assert fake_vlc._instance.location_calls == ["dvd:///D:/"]
         assert "set_media" in player.operations
         assert "play" in player.operations
+    finally:
+        view.cleanup()
+        view.deleteLater()
+
+
+def test_video_view_can_load_network_stream_and_remember_url(qapp, monkeypatch):
+    from lyon.ui import video_player_view as video_mod
+
+    player = _FakeVlcPlayer()
+    settings = Settings(recent_stream_urls=["https://old.example.test/live"])
+    save_calls: list[bool] = []
+    monkeypatch.setattr(settings, "save", lambda: save_calls.append(True))
+    _install_fake_vlc(monkeypatch, player)
+    monkeypatch.setattr(video_mod, "_configure_vlc_runtime_path", lambda: None)
+
+    view = video_mod.VideoPlayerView(settings=settings)
+    try:
+        view.load_location("https://video.example.test/channel.m3u8", label="Network")
+
+        fake_vlc = sys.modules["vlc"]
+        assert fake_vlc._instance.location_calls == ["https://video.example.test/channel.m3u8"]
+        assert settings.recent_stream_urls == [
+            "https://video.example.test/channel.m3u8",
+            "https://old.example.test/live",
+        ]
+        assert save_calls == [True]
+        assert "set_media" in player.operations
+        assert "play" in player.operations
+    finally:
+        view.cleanup()
+        view.deleteLater()
+
+
+def test_video_view_does_not_remember_disc_location(qapp, monkeypatch):
+    from lyon.ui import video_player_view as video_mod
+
+    player = _FakeVlcPlayer()
+    settings = Settings(recent_stream_urls=["https://old.example.test/live"])
+    save_calls: list[bool] = []
+    monkeypatch.setattr(settings, "save", lambda: save_calls.append(True))
+    _install_fake_vlc(monkeypatch, player)
+    monkeypatch.setattr(video_mod, "_configure_vlc_runtime_path", lambda: None)
+
+    view = video_mod.VideoPlayerView(settings=settings)
+    try:
+        view.load_location("dvd:///D:/", label="DVD")
+
+        assert settings.recent_stream_urls == ["https://old.example.test/live"]
+        assert save_calls == []
+    finally:
+        view.cleanup()
+        view.deleteLater()
+
+
+def test_video_view_open_url_dialog_loads_stream(qapp, monkeypatch):
+    from lyon.ui import video_player_view as video_mod
+
+    player = _FakeVlcPlayer()
+    settings = Settings(recent_stream_urls=["https://old.example.test/live"])
+    monkeypatch.setattr(settings, "save", lambda: None)
+    _install_fake_vlc(monkeypatch, player)
+    monkeypatch.setattr(video_mod, "_configure_vlc_runtime_path", lambda: None)
+    monkeypatch.setattr(
+        video_mod.QInputDialog,
+        "getItem",
+        lambda *_args, **_kwargs: ("https://new.example.test/stream", True),
+    )
+
+    view = video_mod.VideoPlayerView(settings=settings)
+    try:
+        view._open_url()
+
+        fake_vlc = sys.modules["vlc"]
+        assert fake_vlc._instance.location_calls == ["https://new.example.test/stream"]
+        assert settings.recent_stream_urls[0] == "https://new.example.test/stream"
     finally:
         view.cleanup()
         view.deleteLater()
