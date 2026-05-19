@@ -1,18 +1,20 @@
 """Library browser: artists -> albums -> tracks, plus search."""
 from __future__ import annotations
 
+from collections import OrderedDict
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QModelIndex, QRect, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QEvent, QModelIndex, QObject, QRect, QRunnable, QSize, Qt, QThreadPool, QTimer, QUrl, Signal
 from PySide6.QtGui import (
-    QColor, QDesktopServices, QIcon, QKeySequence, QPainter, QPixmap, QShortcut,
+    QColor, QDesktopServices, QIcon, QImage, QKeySequence, QPainter, QPixmap, QShortcut,
     QStandardItem, QStandardItemModel,
 )
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
     QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QListView, QMenu,
     QMessageBox, QPushButton, QSpinBox, QSplitter, QStackedWidget,
-    QStyledItemDelegate, QStyleOptionViewItem, QTableView, QVBoxLayout, QWidget,
+    QStyledItemDelegate, QStyleOptionViewItem, QTableView, QTableWidget,
+    QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from ..core.library import Library, Track
@@ -257,9 +259,117 @@ class _FormatDelegate(QStyledItemDelegate):
         return QSize(60, option.rect.height())
 
 
+class _FingerprintSignals(QObject):
+    done = Signal(list)   # list[dict] candidates
+    error = Signal(str)   # error message
+
+
+class _IdentifyTrackDialog(QDialog):
+    """Shows AcoustID fingerprint candidates and lets the user apply one."""
+
+    def __init__(self, track: "Track", parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(f"Identify Track — {track.title or track.path}")
+        self.resize(680, 380)
+        self.selected_candidate: dict | None = None
+
+        layout = QVBoxLayout(self)
+
+        self._status = QLabel("Fingerprinting… (this may take a moment)")
+        self._status.setObjectName("dialogSubtitle")
+        layout.addWidget(self._status)
+
+        self._table = QTableWidget(0, 4)
+        self._table.setHorizontalHeaderLabels(["Score", "Artist", "Title", "Release"])
+        self._table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self._table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self._table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self._table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
+        self._table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self._table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self._table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self._table.setAlternatingRowColors(True)
+        self._table.itemSelectionChanged.connect(self._on_selection)
+        layout.addWidget(self._table, 1)
+
+        bb = QDialogButtonBox()
+        self._apply_btn = bb.addButton("Apply Selected", QDialogButtonBox.AcceptRole)
+        self._apply_btn.setEnabled(False)
+        bb.addButton(QDialogButtonBox.Cancel)
+        bb.accepted.connect(self._on_apply)
+        bb.rejected.connect(self.reject)
+        layout.addWidget(bb)
+
+        self._candidates: list[dict] = []
+
+    def on_candidates(self, candidates: list) -> None:
+        self._candidates = candidates
+        self._table.setRowCount(0)
+        if not candidates:
+            self._status.setText("No matches found.")
+            return
+        self._status.setText(f"Found {len(candidates)} candidate(s). Select one to apply.")
+        for c in candidates:
+            row = self._table.rowCount()
+            self._table.insertRow(row)
+            self._table.setItem(row, 0, QTableWidgetItem(f"{c['score']:.0%}"))
+            self._table.setItem(row, 1, QTableWidgetItem(c.get("artist", "")))
+            self._table.setItem(row, 2, QTableWidgetItem(c.get("title", "")))
+            self._table.setItem(row, 3, QTableWidgetItem(c.get("album", "")))
+
+    def on_error(self, message: str) -> None:
+        self._status.setText(f"Error: {message}")
+
+    def _on_selection(self) -> None:
+        self._apply_btn.setEnabled(bool(self._table.selectedItems()))
+
+    def _on_apply(self) -> None:
+        rows = {i.row() for i in self._table.selectedItems()}
+        if rows:
+            row = next(iter(rows))
+            if 0 <= row < len(self._candidates):
+                self.selected_candidate = self._candidates[row]
+        self.accept()
+
+
+_GRID_ICON_SIZE = 180
+_ART_CACHE_MAX = 200
+
+
+class _ArtSignals(QObject):
+    """Carries the result of a background artwork load back to the main thread."""
+    loaded = Signal(int, str, object)   # (generation, art_path, QImage | None)
+
+
+class _ArtLoader(QRunnable):
+    """Loads and scales an artwork image on a worker thread."""
+
+    def __init__(self, gen: int, art_path: str, signals: _ArtSignals) -> None:
+        super().__init__()
+        self.setAutoDelete(True)
+        self._gen = gen
+        self._art_path = art_path
+        self._signals = signals
+
+    def run(self) -> None:
+        try:
+            img = QImage(self._art_path)
+            if img.isNull():
+                self._signals.loaded.emit(self._gen, self._art_path, None)
+            else:
+                scaled = img.scaled(
+                    _GRID_ICON_SIZE, _GRID_ICON_SIZE,
+                    Qt.KeepAspectRatio, Qt.SmoothTransformation,
+                )
+                self._signals.loaded.emit(self._gen, self._art_path, scaled)
+        except Exception:
+            self._signals.loaded.emit(self._gen, self._art_path, None)
+
+
 class LibraryView(QWidget):
     play_tracks = Signal(list, int)        # (tracks, start_index)
     enqueue_tracks = Signal(list)
+    play_video = Signal(Track)
     status_message = Signal(str)
     request_add_folder = Signal()
     request_youtube_search = Signal(str)
@@ -274,6 +384,12 @@ class LibraryView(QWidget):
         self._currently_playing: Track | None = None
         self._show_videos: bool = False
         self._active_playlist_id: int | None = None
+        # Album art grid async loading
+        self._art_cache: OrderedDict[str, QPixmap] = OrderedDict()
+        self._grid_gen: int = 0
+        self._grid_art_map: dict[str, list[QStandardItem]] = {}
+        self._art_signals = _ArtSignals(self)
+        self._art_signals.loaded.connect(self._on_artwork_loaded)
 
         # ---- Top toolbar
         top = QHBoxLayout()
@@ -441,8 +557,8 @@ class LibraryView(QWidget):
         self._grid_albums_view.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self._grid_albums_view.setModel(self._grid_albums_model)
         self._grid_albums_view.setViewMode(QListView.IconMode)
-        self._grid_albums_view.setIconSize(QSize(160, 160))
-        self._grid_albums_view.setGridSize(QSize(190, 215))
+        self._grid_albums_view.setIconSize(QSize(_GRID_ICON_SIZE, _GRID_ICON_SIZE))
+        self._grid_albums_view.setGridSize(QSize(210, 240))
         self._grid_albums_view.setResizeMode(QListView.Adjust)
         self._grid_albums_view.setUniformItemSizes(True)
         self._grid_albums_view.setWordWrap(True)
@@ -607,6 +723,17 @@ class LibraryView(QWidget):
 
     def _library_all_genres(self, media_type: str | None = None) -> list[str]:
         fn = getattr(self.library, "all_genres", None)
+        if not callable(fn):
+            return []
+        try:
+            return list(fn(media_type))
+        except TypeError:
+            return list(fn())
+
+    def _library_all_albums(
+        self, media_type: str | None = None
+    ) -> list[tuple[str, str, str | None]]:
+        fn = getattr(self.library, "all_albums", None)
         if not callable(fn):
             return []
         try:
@@ -824,14 +951,18 @@ class LibraryView(QWidget):
         self._sv_refresh_artists()
 
     def _refresh_grid_albums(self) -> None:
-        """Populate the album art grid for the selected genre."""
+        """Populate the album art grid for the selected genre (artwork loads asynchronously)."""
+        self._grid_gen += 1
+        gen = self._grid_gen
+        self._grid_art_map = {}
         self._grid_albums_model.clear()
+
         genre_idx = self._grid_genres.currentIndex()
         genre_key = genre_idx.data(Qt.UserRole) if genre_idx.isValid() else _ALL_GENRES_KEY
         genre = None if genre_key == _ALL_GENRES_KEY else genre_key
 
         if genre is None:
-            albums = self.library.all_albums()
+            albums = self._library_all_albums(self._media_type_filter)
         else:
             tracks = self.library.tracks_for_genre(genre, self._media_type_filter)
             seen: set[tuple[str, str]] = set()
@@ -842,18 +973,38 @@ class LibraryView(QWidget):
                     seen.add(key_t)
                     albums.append((t.display_artist, t.album or "Unknown Album", t.artwork_path))
 
+        pool = QThreadPool.globalInstance()
         for artist, album, art in albums:
-            pm = QPixmap(art) if art else None
-            if pm and pm.isNull():
-                pm = None
-            icon = (
-                QIcon(pm.scaled(160, 160, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-                if pm else QIcon()
-            )
-            it = QStandardItem(icon, f"{album}\n{artist}")
+            it = QStandardItem(QIcon(), f"{album}\n{artist}")
             it.setData((artist, album), Qt.UserRole)
             it.setTextAlignment(Qt.AlignHCenter | Qt.AlignTop)
             self._grid_albums_model.appendRow(it)
+            if not art:
+                continue
+            if art in self._art_cache:
+                self._art_cache.move_to_end(art)
+                it.setIcon(QIcon(self._art_cache[art]))
+            else:
+                first = art not in self._grid_art_map
+                self._grid_art_map.setdefault(art, []).append(it)
+                if first:
+                    pool.start(_ArtLoader(gen, art, self._art_signals))
+
+    def _on_artwork_loaded(self, gen: int, art_path: str, img: object) -> None:
+        if gen != self._grid_gen:
+            return
+        pm: QPixmap | None = None
+        if img is not None:
+            pm = QPixmap.fromImage(img)
+            if pm.isNull():
+                pm = None
+        if pm is not None:
+            if len(self._art_cache) >= _ART_CACHE_MAX:
+                self._art_cache.popitem(last=False)
+            self._art_cache[art_path] = pm
+        icon = QIcon(pm) if pm else QIcon()
+        for item in self._grid_art_map.get(art_path, []):
+            item.setIcon(icon)
 
     def _on_grid_album_activated(self, index: QModelIndex) -> None:
         data = index.data(Qt.UserRole)
@@ -939,7 +1090,7 @@ class LibraryView(QWidget):
         if not isinstance(track, Track):
             return
         if track.is_video:
-            QDesktopServices.openUrl(QUrl.fromLocalFile(track.path))
+            self.play_video.emit(track)
             return
         self.play_tracks.emit(self._sv_current_tracks, index.row())
 
@@ -970,7 +1121,14 @@ class LibraryView(QWidget):
             return
         selected = self._sv_selected_tracks()
         if selected:
+            if len(selected) == 1 and selected[0].is_video:
+                self.play_video.emit(selected[0])
+                return
             self.play_tracks.emit(selected, 0)
+            return
+        current = self._sv_track_at_row(self._sv_tracks.currentIndex().row())
+        if current is not None and current.is_video:
+            self.play_video.emit(current)
             return
         self.play_tracks.emit(self._sv_current_tracks, 0)
 
@@ -1296,6 +1454,19 @@ class LibraryView(QWidget):
         menu.addSeparator()
         open_folder = menu.addAction("Open Containing Folder")
         edit_metadata = menu.addAction("Edit Metadata")
+        identify_act = None
+        if len(selected) == 1:
+            from ..core.fingerprint import (
+                is_available as _fp_available,
+                is_lookup_configured as _fp_configured,
+            )
+            identify_act = menu.addAction("Identify Track…")
+            if not _fp_available():
+                identify_act.setEnabled(False)
+                identify_act.setToolTip("Install pyacoustid and fpcalc to enable")
+            elif not _fp_configured():
+                identify_act.setEnabled(False)
+                identify_act.setToolTip("Set ACOUSTID_API_KEY to enable AcoustID lookup")
         scan_rg = menu.addAction("Scan ReplayGain…")
         youtube_search = menu.addAction("Search YouTube for Artist, Album, and Track")
         properties = menu.addAction("Properties")
@@ -1318,6 +1489,8 @@ class LibraryView(QWidget):
                 self._show_batch_metadata_dialog(selected)
             else:
                 self._show_edit_metadata_dialog(primary_track)
+        elif identify_act is not None and action == identify_act:
+            self._identify_track(primary_track)
         elif action == scan_rg:
             self.request_scan_replaygain.emit(list(selected))
         elif action == properties:
@@ -1326,6 +1499,69 @@ class LibraryView(QWidget):
             self.request_youtube_search.emit(self._youtube_query_for_track(primary_track))
         elif go_to_album is not None and action == go_to_album:
             self.reveal_track(primary_track)
+
+    # ------------------------------------------------------------------ identify track (AcoustID)
+
+    def _identify_track(self, track: Track) -> None:
+        """Launch the AcoustID lookup workflow for a single track."""
+        from ..core.fingerprint import is_available, is_lookup_configured, lookup_candidates
+
+        if not is_available():
+            QMessageBox.warning(
+                self,
+                "Fingerprinting Not Available",
+                "Install pyacoustid and fpcalc to identify tracks.",
+            )
+            return
+        if not is_lookup_configured():
+            QMessageBox.warning(
+                self,
+                "AcoustID API Key Required",
+                "Set ACOUSTID_API_KEY to enable AcoustID lookup.",
+            )
+            return
+
+        dlg = _IdentifyTrackDialog(track, self)
+        dlg.show()
+        dlg.raise_()
+
+        signals = _FingerprintSignals(self)
+        signals.done.connect(dlg.on_candidates)
+        signals.error.connect(dlg.on_error)
+
+        class _Worker(QRunnable):
+            def __init__(self, path, sigs):
+                super().__init__()
+                self.setAutoDelete(True)
+                self._path = path
+                self._sigs = sigs
+            def run(self):
+                try:
+                    candidates = lookup_candidates(self._path)
+                    self._sigs.done.emit(candidates)
+                except Exception as exc:
+                    self._sigs.error.emit(str(exc))
+
+        QThreadPool.globalInstance().start(_Worker(track.path, signals))
+
+        if dlg.exec() == QDialog.Accepted and dlg.selected_candidate:
+            c = dlg.selected_candidate
+            fields: dict = {}
+            if c.get("title"):
+                fields["title"] = c["title"]
+            if c.get("artist"):
+                fields["artist"] = c["artist"]
+            if c.get("album"):
+                fields["album"] = c["album"]
+            if fields:
+                self.library.update_track(track.id, fields)
+                track_path = Path(track.path)
+                if track_path.is_file():
+                    write_partial_tags(track_path, fields)
+            if c.get("acoustid"):
+                self.library.update_acoustid(track.id, c["acoustid"])
+            self.status_message.emit(f"Applied: {c.get('artist', '')} — {c.get('title', '')}")
+            self.refresh()
 
     def _open_containing_folder(self, track: Track) -> None:
         folder = Path(track.path).expanduser().parent
@@ -1483,7 +1719,14 @@ class LibraryView(QWidget):
             return
         selected = self._selected_tracks()
         if selected:
+            if len(selected) == 1 and selected[0].is_video:
+                self.play_video.emit(selected[0])
+                return
             self.play_tracks.emit(selected, 0)
+            return
+        current = self._track_at_row(self.tracks.currentIndex().row())
+        if current is not None and current.is_video:
+            self.play_video.emit(current)
             return
         self.play_tracks.emit(displayed, 0)
 
@@ -1501,7 +1744,7 @@ class LibraryView(QWidget):
         if track is None:
             return
         if track.is_video:
-            QDesktopServices.openUrl(QUrl.fromLocalFile(track.path))
+            self.play_video.emit(track)
             return
         self.play_tracks.emit(self._displayed_tracks(), index.row())
 
@@ -1771,6 +2014,7 @@ class LibraryView(QWidget):
         menu = QMenu(self)
         new_act = menu.addAction("New Playlist…")
         new_smart_act = menu.addAction("New Smart Playlist…")
+        import_act = menu.addAction("Import Playlist…")
         rename_act = edit_rules_act = remove_act = export_act = None
         playlist_id: int | None = None
         is_smart = False
@@ -1792,6 +2036,8 @@ class LibraryView(QWidget):
             self._new_playlist_dialog()
         elif action == new_smart_act:
             self._new_smart_playlist_dialog()
+        elif action == import_act:
+            self._import_playlist_dialog()
         elif action == rename_act and playlist_id is not None:
             self._rename_playlist_dialog(
                 playlist_id,
@@ -1933,3 +2179,42 @@ class LibraryView(QWidget):
             )
         except OSError as exc:
             self.status_message.emit(f"Export failed: {exc}")
+
+    def _import_playlist_dialog(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Import Playlist", "", "Playlists (*.m3u *.m3u8 *.pls)"
+        )
+        if not path:
+            return
+        from ..core.playlist_import import import_playlist
+        try:
+            result = import_playlist(self.library, Path(path))
+        except Exception as exc:
+            self.status_message.emit(f"Import failed: {exc}")
+            return
+        self._refresh_playlists()
+        for row in range(self.playlists_model.rowCount()):
+            if self.playlists_model.index(row, 0).data(Qt.UserRole) == result.playlist_id:
+                self.playlists_view.setCurrentIndex(self.playlists_model.index(row, 0))
+                break
+        msg = f"Imported {result.matched} track{'s' if result.matched != 1 else ''} from {Path(path).name}"
+        if result.matched == 0 and result.unmatched:
+            QMessageBox.warning(
+                self,
+                "Empty Playlist Imported",
+                f"None of the {len(result.unmatched)} path"
+                f"{'s' if len(result.unmatched) != 1 else ''} in this playlist were "
+                "found in the library. The playlist was created but is empty — "
+                "add the referenced files to your library and try again, or delete it.",
+            )
+        elif result.unmatched:
+            n = len(result.unmatched)
+            detail = "\n".join(result.unmatched[:10])
+            if n > 10:
+                detail += f"\n…and {n - 10} more"
+            QMessageBox.warning(
+                self,
+                "Unmatched Paths",
+                f"{n} path{'s' if n != 1 else ''} from the playlist were not found in the library:\n\n{detail}",
+            )
+        self.status_message.emit(msg)

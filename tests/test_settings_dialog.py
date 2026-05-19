@@ -13,6 +13,7 @@ from lyon.core.settings import Settings
 from lyon.ui.about import COPYRIGHT_NOTICE
 from lyon.ui import settings_dialog as settings_dialog_module
 from lyon.ui.settings_dialog import SettingsDialog
+from lyon.ui.styles import WMP_QSS
 
 
 @pytest.fixture(scope="module")
@@ -62,6 +63,23 @@ def test_settings_dialog_toggles_metadata_diagnostics(app, monkeypatch):
     assert dialog.result_settings.metadata_diagnostics_enabled is True
 
 
+def test_settings_dialog_opens_wide_enough_for_top_tabs(app):
+    previous_stylesheet = app.styleSheet()
+    app.setStyleSheet(WMP_QSS)
+    try:
+        dialog = SettingsDialog(Settings(), None)
+        tabs = dialog.findChild(QtWidgets.QTabWidget)
+        assert tabs is not None
+
+        margins = dialog.layout().contentsMargins()
+        needed_width = tabs.tabBar().sizeHint().width() + margins.left() + margins.right()
+
+        assert dialog.width() >= needed_width
+        assert dialog.minimumWidth() >= needed_width
+    finally:
+        app.setStyleSheet(previous_stylesheet)
+
+
 def test_settings_dialog_persists_library_paths_without_duplicates(app, monkeypatch):
     dialog = SettingsDialog(Settings(library_paths=["/music/one"]), None)
     monkeypatch.setattr(settings_dialog_module, "QMessageBox", _ConfirmMissingPathPrompt)
@@ -91,6 +109,26 @@ def test_settings_dialog_persists_crossfade_seconds(app):
     dialog._accept()
 
     assert dialog.result_settings.crossfade_seconds == 7
+
+
+def test_settings_dialog_persists_dlna_options(app):
+    dialog = SettingsDialog(
+        Settings(
+            dlna_enabled=False,
+            dlna_port=8200,
+            dlna_friendly_name="Sea Lyon Media Manager",
+        ),
+        None,
+    )
+
+    dialog.dlna_enabled.setChecked(True)
+    dialog.dlna_port.setValue(0)
+    dialog.dlna_name.setText("Living Room Library")
+    dialog._accept()
+
+    assert dialog.result_settings.dlna_enabled is True
+    assert dialog.result_settings.dlna_port == 0
+    assert dialog.result_settings.dlna_friendly_name == "Living Room Library"
 
 
 def test_settings_dialog_about_tab_mentions_copyright_and_third_parties(app):

@@ -13,6 +13,7 @@ QtCore = pytest.importorskip("PySide6.QtCore", exc_type=ImportError)
 QtWidgets = pytest.importorskip("PySide6.QtWidgets", exc_type=ImportError)
 
 from lyon.core.library import Track
+from lyon.core.metadata import ArtistInfo
 from lyon.core.player import Player
 from lyon.core.settings import Settings
 from lyon.ui.now_playing import NowPlayingView, _fetch_lrclib
@@ -198,7 +199,7 @@ def test_lyrics_cache_serves_hit_without_spawning_thread(player, tmp_path):
 
 def test_lyrics_cache_evicts_oldest_when_over_capacity(player):
     view = NowPlayingView(player, settings=Settings())
-    view._LYRICS_CACHE_MAX = 3  # shrink for the test
+    view._PANEL_CACHE_MAX = 3  # shrink for the test
     view._lyrics_task_id = 1
     for i in range(1, 6):
         view._on_lyrics_ready(i, "", f"text{i}")
@@ -246,11 +247,39 @@ def test_now_playing_side_panel_and_tabs_are_wide(player):
         btn for btn in view.findChildren(QtWidgets.QPushButton)
         if btn.objectName() == "panelTab"
     ]
-    assert len(tabs) == 3
+    assert len(tabs) == 4
     assert all(
         tab.sizePolicy().horizontalPolicy() == QtWidgets.QSizePolicy.Policy.Expanding
         for tab in tabs
     )
+
+
+def test_now_playing_artist_ready_renders_artist_panel(player):
+    view = NowPlayingView(player, settings=Settings())
+    view._artist_task_key = "artist"
+
+    view._on_artist_ready(
+        "artist",
+        ArtistInfo(name="Artist", biography="Bio text.", genre="Rock"),
+        None,
+    )
+
+    labels = [label.text() for label in view._artist_panel.findChildren(QtWidgets.QLabel)]
+    assert "Artist" in labels
+    assert "Bio text." in labels
+    assert "Rock" in labels
+
+
+def test_now_playing_artist_ready_ignores_stale_panel_update(player):
+    view = NowPlayingView(player, settings=Settings())
+    view._artist_task_key = "current"
+    view._artist_panel.set_loading("Current")
+
+    view._on_artist_ready("stale", ArtistInfo(name="Stale", biography="Wrong"), None)
+
+    labels = [label.text() for label in view._artist_panel.findChildren(QtWidgets.QLabel)]
+    assert "Current" in labels
+    assert "Wrong" not in labels
 
 
 def test_synced_lyrics_scrolls_current_line_to_center(player, app):

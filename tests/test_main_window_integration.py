@@ -57,7 +57,7 @@ def main_window(qapp, fake_backend, monkeypatch, tmp_path):
 
 
 def test_tab_bar_renders_documented_order(main_window):
-    expected = ("Library", "Now Playing", "Video", "Disc", "Rip", "YouTube")
+    expected = ("Library", "Now Playing", "Radio", "Video", "Disc", "Rip", "YouTube")
     actual = tuple(
         main_window.tab_bar.tabText(i)
         for i in range(main_window.tab_bar.count())
@@ -81,6 +81,8 @@ def test_transport_visible_on_library_hidden_on_rip(main_window):
     assert main_window.transport.isHidden()
     main_window.tab_bar.setCurrentIndex(main_window._tab_index["Video"])
     assert main_window.transport.isHidden()
+    main_window.tab_bar.setCurrentIndex(main_window._tab_index["Radio"])
+    assert not main_window.transport.isHidden()
     main_window.tab_bar.setCurrentIndex(main_window._tab_index["Disc"])
     assert not main_window.transport.isHidden()
     main_window.tab_bar.setCurrentIndex(main_window._tab_index["Now Playing"])
@@ -123,6 +125,91 @@ def test_video_disc_handoff_uses_video_player_after_switching_tabs(main_window, 
     assert main_window.stack.currentWidget() is main_window.video_player_view
     qapp.processEvents(QtCore.QEventLoop.AllEvents, 50)
     assert calls == [("dvd:///D:/", {"label": "DVD"}, main_window.video_player_view)]
+
+
+def test_audio_disc_handoff_reuses_disc_tab_read_on_rip_tab(main_window, monkeypatch):
+    from lyon.core.cd_detect import DiscToc
+    from lyon.core.metadata import AlbumInfo, TrackInfo
+
+    monkeypatch.setattr(
+        "lyon.ui.ripper_view.cd_detect.read_disc",
+        lambda *_: (_ for _ in ()).throw(AssertionError("ripper should reuse the Disc tab TOC")),
+    )
+    toc = DiscToc(
+        drive="D:",
+        discid="disc-id",
+        toc_string="toc",
+        track_count=1,
+        track_offsets=[150],
+        sectors=15150,
+    )
+    album = AlbumInfo(
+        artist="Artist",
+        album="Album",
+        tracks=[TrackInfo(1, "Song")],
+    )
+    main_window.disc_view._on_audio_read(toc, album)
+
+    main_window._rip_disc_drive("D:")
+
+    assert main_window.stack.currentWidget() is main_window.ripper_view
+    assert main_window.ripper_view._toc is toc
+    assert main_window.ripper_view.album_edit.text() == "Album"
+    assert main_window.ripper_view.artist_edit.text() == "Artist"
+    assert main_window.ripper_view.tracks_model.rowCount() == 1
+    assert main_window.ripper_view.tracks_model.item(0, 1).text() == "Song"
+    assert main_window.ripper_view.start_btn.isEnabled()
+
+
+def test_library_video_handoff_uses_video_tab(main_window, monkeypatch, qapp):
+    from lyon.core.library import Track
+
+    calls = []
+    monkeypatch.setattr(main_window.video_player_view, "playback_available", lambda: True)
+    monkeypatch.setattr(
+        main_window.video_player_view,
+        "load_path",
+        lambda path: calls.append((path, main_window.stack.currentWidget())),
+    )
+    track = Track(
+        id=42,
+        path="/videos/clip.mp4",
+        title="Clip",
+        artist="Video Artist",
+        album_artist="Video Artist",
+        album="Video Album",
+        track_no=1,
+        disc_no=1,
+        year=2026,
+        genre="",
+        duration=120.0,
+        media_type="video",
+    )
+    main_window.tab_bar.setCurrentIndex(main_window._tab_index["Library"])
+
+    main_window._play_library_video(track)
+
+    assert calls == []
+    assert main_window.stack.currentWidget() is main_window.video_player_view
+    qapp.processEvents(QtCore.QEventLoop.AllEvents, 50)
+    assert calls == [("/videos/clip.mp4", main_window.video_player_view)]
+
+
+def test_radio_play_request_uses_audio_player(main_window, monkeypatch):
+    calls = []
+    monkeypatch.setattr(main_window.video_player_view, "pause_playback", lambda: calls.append(("pause_video",)))
+    monkeypatch.setattr(
+        main_window.player,
+        "play_url",
+        lambda url, title=None: calls.append(("play_url", url, title)),
+    )
+
+    main_window._play_radio_station("https://radio.example.test/live", "Sea Radio")
+
+    assert calls == [
+        ("pause_video",),
+        ("play_url", "https://radio.example.test/live", "Sea Radio"),
+    ]
 
 
 def test_video_disc_handoff_reports_unavailable_video_player(main_window, monkeypatch):
@@ -243,10 +330,11 @@ def test_ctrl_number_shortcuts_wired(main_window):
     expected = {
         "Library":     "Ctrl+1",
         "Now Playing": "Ctrl+2",
-        "Video":       "Ctrl+3",
-        "Disc":        "Ctrl+4",
-        "Rip":         "Ctrl+5",
-        "YouTube":     "Ctrl+6",
+        "Radio":       "Ctrl+3",
+        "Video":       "Ctrl+4",
+        "Disc":        "Ctrl+5",
+        "Rip":         "Ctrl+6",
+        "YouTube":     "Ctrl+7",
     }
     # Walk the menubar actions to find the View menu.
     view_menu = None

@@ -11,6 +11,9 @@ QtCore = pytest.importorskip("PySide6.QtCore", exc_type=ImportError)
 QtGui = pytest.importorskip("PySide6.QtGui", exc_type=ImportError)
 QtWidgets = pytest.importorskip("PySide6.QtWidgets", exc_type=ImportError)
 
+from lyon.core.library import Track
+from lyon.core.settings import Settings
+
 
 class _FakeMedia:
     def __init__(self) -> None:
@@ -34,6 +37,7 @@ class _FakeVlcPlayer:
         self._muted = False
         self._audio_track = 2
         self._subtitle_track = 5
+        self._subtitle_delay = 0
 
     def get_media(self):
         return self._media
@@ -104,6 +108,10 @@ class _FakeVlcPlayer:
         self.operations.append(("video_set_spu", value))
         self._subtitle_track = value
 
+    def video_set_spu_delay(self, value: int) -> None:
+        self.operations.append(("video_set_spu_delay", value))
+        self._subtitle_delay = value
+
     def video_get_spu_description(self):
         return []
 
@@ -169,6 +177,40 @@ def _first_output_attach_index(operations: list[object]) -> int:
         for i, op in enumerate(operations)
         if isinstance(op, tuple) and op[0] in output_methods
     )
+
+
+def _video_track(path: str, *, track_id: int = 1, resume_position: int = 0) -> Track:
+    return Track(
+        id=track_id,
+        path=path,
+        title="Clip",
+        artist="Videos",
+        album_artist="Videos",
+        album="Videos",
+        track_no=0,
+        disc_no=1,
+        year=0,
+        genre="",
+        duration=120.0,
+        media_type="video",
+        resume_position=resume_position,
+    )
+
+
+class _ResumeLibrary:
+    def __init__(self, track: Track) -> None:
+        self.track = track
+        self.saved: list[tuple[int, int]] = []
+
+    def tracks_for_paths(self, paths: list[str]) -> list[Track]:
+        return [self.track] if self.track.path in paths else []
+
+    def update_resume_position(self, track_id: int, position_ms: int) -> None:
+        self.saved.append((track_id, position_ms))
+        self.track.resume_position = position_ms
+
+    def all_tracks(self, media_type: str | None = None):
+        return []
 
 
 def test_thumbnail_cache_not_stale_when_sidecar_appears(qapp, tmp_path):
@@ -237,6 +279,170 @@ def test_video_view_can_load_disc_location(qapp, monkeypatch):
         assert fake_vlc._instance.location_calls == ["dvd:///D:/"]
         assert "set_media" in player.operations
         assert "play" in player.operations
+    finally:
+        view.cleanup()
+        view.deleteLater()
+
+
+def test_video_view_can_load_network_stream_and_remember_url(qapp, monkeypatch):
+    from lyon.ui import video_player_view as video_mod
+
+    player = _FakeVlcPlayer()
+    settings = Settings(recent_stream_urls=["https://old.example.test/live"])
+    save_calls: list[bool] = []
+    monkeypatch.setattr(settings, "save", lambda: save_calls.append(True))
+    _install_fake_vlc(monkeypatch, player)
+    monkeypatch.setattr(video_mod, "_configure_vlc_runtime_path", lambda: None)
+
+    view = video_mod.VideoPlayerView(settings=settings)
+    try:
+        view.load_location("https://video.example.test/channel.m3u8", label="Network")
+
+        fake_vlc = sys.modules["vlc"]
+        assert fake_vlc._instance.location_calls == ["https://video.example.test/channel.m3u8"]
+        assert settings.recent_stream_urls == [
+            "https://video.example.test/channel.m3u8",
+            "https://old.example.test/live",
+        ]
+        assert save_calls == [True]
+        assert "set_media" in player.operations
+        assert "play" in player.operations
+    finally:
+        view.cleanup()
+        view.deleteLater()
+
+
+def test_video_view_does_not_remember_disc_location(qapp, monkeypatch):
+    from lyon.ui import video_player_view as video_mod
+
+    player = _FakeVlcPlayer()
+    settings = Settings(recent_stream_urls=["https://old.example.test/live"])
+    save_calls: list[bool] = []
+    monkeypatch.setattr(settings, "save", lambda: save_calls.append(True))
+    _install_fake_vlc(monkeypatch, player)
+    monkeypatch.setattr(video_mod, "_configure_vlc_runtime_path", lambda: None)
+
+    view = video_mod.VideoPlayerView(settings=settings)
+    try:
+        view.load_location("dvd:///D:/", label="DVD")
+
+        assert settings.recent_stream_urls == ["https://old.example.test/live"]
+        assert save_calls == []
+    finally:
+        view.cleanup()
+        view.deleteLater()
+
+
+def test_video_view_open_url_dialog_loads_stream(qapp, monkeypatch):
+    from lyon.ui import video_player_view as video_mod
+
+    player = _FakeVlcPlayer()
+    settings = Settings(recent_stream_urls=["https://old.example.test/live"])
+    monkeypatch.setattr(settings, "save", lambda: None)
+    _install_fake_vlc(monkeypatch, player)
+    monkeypatch.setattr(video_mod, "_configure_vlc_runtime_path", lambda: None)
+    monkeypatch.setattr(
+        video_mod.QInputDialog,
+        "getItem",
+        lambda *_args, **_kwargs: ("https://new.example.test/stream", True),
+    )
+
+    view = video_mod.VideoPlayerView(settings=settings)
+    try:
+        view._open_url()
+
+        fake_vlc = sys.modules["vlc"]
+        assert fake_vlc._instance.location_calls == ["https://new.example.test/stream"]
+        assert settings.recent_stream_urls[0] == "https://new.example.test/stream"
+    finally:
+        view.cleanup()
+        view.deleteLater()
+
+
+def test_video_view_saves_resume_position_for_local_video(qapp, monkeypatch):
+    from lyon.ui import video_player_view as video_mod
+
+    video = "/videos/clip.mp4"
+    player = _FakeVlcPlayer()
+    player._time = 42_000
+    player._length = 120_000
+    library = _ResumeLibrary(_video_track(video, track_id=9))
+    _install_fake_vlc(monkeypatch, player)
+    monkeypatch.setattr(video_mod, "_configure_vlc_runtime_path", lambda: None)
+
+    view = video_mod.VideoPlayerView(library=library)
+    try:
+        view.load_path(video)
+        view.pause_playback()
+
+        assert library.saved[-1] == (9, 42_000)
+    finally:
+        view.cleanup()
+        view.deleteLater()
+
+
+def test_video_view_clears_resume_near_end(qapp, monkeypatch):
+    from lyon.ui import video_player_view as video_mod
+
+    video = "/videos/clip.mp4"
+    player = _FakeVlcPlayer()
+    player._time = 116_000
+    player._length = 120_000
+    library = _ResumeLibrary(_video_track(video, track_id=9))
+    _install_fake_vlc(monkeypatch, player)
+    monkeypatch.setattr(video_mod, "_configure_vlc_runtime_path", lambda: None)
+
+    view = video_mod.VideoPlayerView(library=library)
+    try:
+        view.load_path(video)
+        view.pause_playback()
+
+        assert library.saved[-1] == (9, 0)
+    finally:
+        view.cleanup()
+        view.deleteLater()
+
+
+def test_video_view_emits_resume_prompt_and_callback_seeks(qapp, monkeypatch):
+    from lyon.ui import video_player_view as video_mod
+
+    video = "/videos/clip.mp4"
+    player = _FakeVlcPlayer()
+    library = _ResumeLibrary(_video_track(video, track_id=9, resume_position=45_000))
+    _install_fake_vlc(monkeypatch, player)
+    monkeypatch.setattr(video_mod, "_configure_vlc_runtime_path", lambda: None)
+
+    view = video_mod.VideoPlayerView(library=library)
+    prompts: list[tuple[str, object]] = []
+    view.resume_available.connect(lambda message, callback: prompts.append((message, callback)))
+    try:
+        view.load_path(video)
+        _process_events(qapp, 450)
+
+        assert prompts
+        assert prompts[0][0] == "Resume video from 0:45?"
+        prompts[0][1]()
+        assert ("set_time", 45_000) in player.operations
+    finally:
+        view.cleanup()
+        view.deleteLater()
+
+
+def test_video_view_adjusts_subtitle_delay(qapp, monkeypatch):
+    from lyon.ui import video_player_view as video_mod
+
+    player = _FakeVlcPlayer()
+    _install_fake_vlc(monkeypatch, player)
+    monkeypatch.setattr(video_mod, "_configure_vlc_runtime_path", lambda: None)
+
+    view = video_mod.VideoPlayerView()
+    try:
+        view._step_subtitle_delay(50_000)
+        view._step_subtitle_delay(-50_000)
+
+        assert ("video_set_spu_delay", 50_000) in player.operations
+        assert ("video_set_spu_delay", 0) in player.operations
+        assert view._sub_delay_label.text() == "0 ms"
     finally:
         view.cleanup()
         view.deleteLater()

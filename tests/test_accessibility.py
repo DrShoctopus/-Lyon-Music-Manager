@@ -21,7 +21,9 @@ QtWidgets = pytest.importorskip("PySide6.QtWidgets", exc_type=ImportError)
 
 _UI_MODULES_NO_INLINE_STYLES = (
     "lyon/ui/library_view.py",
+    "lyon/ui/artist_panel.py",
     "lyon/ui/now_playing.py",
+    "lyon/ui/radio_view.py",
     "lyon/ui/video_player_view.py",
     "lyon/ui/youtube_view.py",
     "lyon/ui/ripper_view.py",

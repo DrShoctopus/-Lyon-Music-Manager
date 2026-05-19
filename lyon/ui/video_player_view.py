@@ -23,12 +23,13 @@ from typing import Any
 from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
-    QApplication, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
-    QPushButton, QScrollArea, QSizePolicy, QSlider, QStackedWidget,
-    QVBoxLayout, QWidget,
+    QApplication, QComboBox, QFileDialog, QFrame, QHBoxLayout, QInputDialog,
+    QLabel, QLineEdit, QMessageBox, QPushButton, QScrollArea, QSizePolicy,
+    QSlider, QStackedWidget, QVBoxLayout, QWidget,
 )
 
 from ..core.playback_backend import _configure_vlc_runtime_path
+from ..core.settings import Settings, normalize_stream_urls
 from ..core.vlc_equalizer import EQ_FADE_INTERVAL_MS, VlcEqualizerController
 from .osd import OSDOverlay
 from .transport import PlayPauseSideButton, StopButton, VolumeButton
@@ -38,6 +39,9 @@ LOG = logging.getLogger(__name__)
 
 _VIDEO_OUTPUT_SETTLE_MS = 80
 _VIDEO_OUTPUT_SECOND_SETTLE_MS = 240
+_RESUME_PROMPT_MIN_MS = 10_000
+_RESUME_CLEAR_REMAINING_MS = 10_000
+_SUBTITLE_DELAY_STEP_US = 50_000
 
 VIDEO_EXTENSIONS = (
     ".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm",
@@ -317,11 +321,18 @@ class VideoPlayerView(QWidget):
     """Full-featured libVLC video player tab with collapsible catalog sidebar."""
 
     request_diagnostics = Signal()
+    resume_available = Signal(str, object)  # message, callback
 
-    def __init__(self, library: Any = None, parent: QWidget | None = None,
-                 initial_volume: int = 80):
+    def __init__(
+        self,
+        library: Any = None,
+        parent: QWidget | None = None,
+        initial_volume: int = 80,
+        settings: Settings | None = None,
+    ):
         super().__init__(parent)
         self._library = library
+        self._settings = settings
         self._initial_volume = max(0, min(100, int(initial_volume)))
         _configure_vlc_runtime_path()
 
@@ -342,6 +353,9 @@ class VideoPlayerView(QWidget):
         self._catalog_pending_tracks: list[Any] = []
         self._catalog_total = 0
         self._video_output_generation = 0
+        self._current_track_id: int | None = None
+        self._current_is_location = False
+        self._subtitle_delay_us = 0
 
         self._eq_fade_timer = QTimer(self)
         self._eq_fade_timer.setInterval(EQ_FADE_INTERVAL_MS)
@@ -416,6 +430,10 @@ class VideoPlayerView(QWidget):
         self._open_btn.setObjectName("accent")
         self._open_btn.clicked.connect(self._open_file)
 
+        self._open_url_btn = QPushButton("Open URL...")
+        self._open_url_btn.setToolTip("Open a network video stream")
+        self._open_url_btn.clicked.connect(self._open_url)
+
         self._info_lbl = QLabel("No file loaded")
         self._info_lbl.setObjectName("mutedText")
         self._info_lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
@@ -438,6 +456,7 @@ class VideoPlayerView(QWidget):
         self._sidebar_btn.clicked.connect(self._toggle_sidebar)
 
         toolbar.addWidget(self._open_btn)
+        toolbar.addWidget(self._open_url_btn)
         toolbar.addWidget(self._info_lbl, 1)
         toolbar.addWidget(self._screenshot_btn)
         toolbar.addWidget(self._fullscreen_btn)
@@ -542,6 +561,19 @@ class VideoPlayerView(QWidget):
         self._sub_file_btn.setToolTip("Load an external subtitle file (.srt, .ass, ...)")
         self._sub_file_btn.clicked.connect(self._load_sub_file)
 
+        self._sub_delay_minus = QPushButton("-50 ms")
+        self._sub_delay_minus.setToolTip("Move subtitles earlier")
+        self._sub_delay_minus.clicked.connect(lambda: self._step_subtitle_delay(-_SUBTITLE_DELAY_STEP_US))
+
+        self._sub_delay_label = QLabel("0 ms")
+        self._sub_delay_label.setObjectName("mutedText")
+        self._sub_delay_label.setMinimumWidth(54)
+        self._sub_delay_label.setAlignment(Qt.AlignCenter)
+
+        self._sub_delay_plus = QPushButton("+50 ms")
+        self._sub_delay_plus.setToolTip("Move subtitles later")
+        self._sub_delay_plus.clicked.connect(lambda: self._step_subtitle_delay(_SUBTITLE_DELAY_STEP_US))
+
         opts_row = QHBoxLayout()
         opts_row.setContentsMargins(0, 2, 0, 0)
         opts_row.setSpacing(6)
@@ -554,6 +586,11 @@ class VideoPlayerView(QWidget):
         opts_row.addWidget(sub_lbl)
         opts_row.addWidget(self._sub_combo)
         opts_row.addWidget(self._sub_file_btn)
+        opts_row.addSpacing(12)
+        opts_row.addWidget(self._ctrl_label("Delay:"))
+        opts_row.addWidget(self._sub_delay_minus)
+        opts_row.addWidget(self._sub_delay_label)
+        opts_row.addWidget(self._sub_delay_plus)
         opts_row.addStretch(1)
 
         cl.addLayout(seek_row)
@@ -687,7 +724,7 @@ class VideoPlayerView(QWidget):
 
         for track in batch:
             card = _VideoCard(track)
-            card.load_requested.connect(self._load_path)
+            card.load_requested.connect(self.load_path)
             # Insert before the trailing stretch
             self._catalog_layout.insertWidget(self._catalog_layout.count() - 1, card)
             self._catalog_cards.append(card)
@@ -735,6 +772,7 @@ class VideoPlayerView(QWidget):
             self._audio_combo, self._sub_combo, self._sub_file_btn,
             self._screenshot_btn, self._fullscreen_btn,
             self._seek, self._vol_slider, self._mute_btn,
+            self._sub_delay_minus, self._sub_delay_plus,
         ):
             w.setEnabled(enabled)
 
@@ -922,9 +960,32 @@ class VideoPlayerView(QWidget):
         )
         path, _ = QFileDialog.getOpenFileName(self, "Open Video File", "", ext_filter)
         if path:
-            self._load_path(path)
+            self.load_path(path)
 
-    def _load_path(self, path: str) -> None:
+    def _open_url(self) -> None:
+        recent_urls = list(getattr(self._settings, "recent_stream_urls", []))
+        url, accepted = QInputDialog.getItem(
+            self,
+            "Open Network Stream",
+            "Stream URL:",
+            recent_urls,
+            0,
+            True,
+        )
+        if not accepted:
+            return
+        url = url.strip()
+        if not normalize_stream_urls([url]):
+            QMessageBox.warning(
+                self,
+                "Open Network Stream",
+                "Enter a valid network stream URL.",
+            )
+            return
+        self.load_location(url, label=url)
+
+    def load_path(self, path: str) -> None:
+        """Play a local video file path in the embedded VLC video player."""
         self._load_media_source(path, label=Path(path).name)
 
     def load_location(
@@ -957,11 +1018,36 @@ class VideoPlayerView(QWidget):
         options: tuple[str, ...] = (),
         label: str | None = None,
     ) -> None:
+        # When the user re-activates the same source while it is still
+        # loaded, skip the reload so we don't prompt them to resume the
+        # position they're already at.
+        reloading_same_source = (
+            source == self._current_path
+            and is_location == self._current_is_location
+            and self._player is not None
+            and self._player.get_media() is not None
+        )
+        if reloading_same_source:
+            if not self._player.is_playing():
+                self._player.play()
+                self._timer.start()
+                self._play_btn.set_playing(True)
+            return
+        self._save_resume_position()
+        self._video_output_generation += 1
         self._video_stack.setCurrentIndex(1)
         if not self._surface_attached:
             self._attach_vlc_to(self._surface)
             self._surface_attached = True
+        resume_position = 0
+        local_track = self._video_track_for_path(source) if not is_location else None
+        self._current_track_id = local_track.id if local_track is not None else None
+        self._current_is_location = is_location
         self._current_path = source
+        if local_track is not None:
+            resume_position = max(0, int(getattr(local_track, "resume_position", 0) or 0))
+        self._subtitle_delay_us = 0
+        self._update_subtitle_delay_label()
         media = (
             self._instance.media_new_location(source)
             if is_location
@@ -978,6 +1064,7 @@ class VideoPlayerView(QWidget):
         if self._eq_controller is not None:
             self._eq_controller.attach_to_player()
         self._info_lbl.setText(label or source)
+        self._remember_stream_source(source, is_location)
         self._set_controls_enabled(True)
         self._player.play()
         self._play_btn.set_playing(True)
@@ -985,6 +1072,82 @@ class VideoPlayerView(QWidget):
         # Track lists and resolution are only available after the media parses
         QTimer.singleShot(600, self._populate_tracks)
         QTimer.singleShot(900, self._update_video_info)
+        if self._should_prompt_resume(resume_position):
+            generation = self._video_output_generation
+            QTimer.singleShot(
+                350,
+                lambda: self._emit_resume_prompt(generation, resume_position),
+            )
+
+    def _remember_stream_source(self, source: str, is_location: bool) -> None:
+        if not is_location or self._settings is None:
+            return
+        if not normalize_stream_urls([source]):
+            return
+        self._settings.remember_stream_url(source)
+        try:
+            self._settings.save()
+        except OSError as exc:
+            LOG.warning("Could not save recent stream URL: %s", exc)
+
+    def _video_track_for_path(self, path: str) -> Any | None:
+        if self._library is None or not path:
+            return None
+        finder = getattr(self._library, "tracks_for_paths", None)
+        if not callable(finder):
+            return None
+        try:
+            tracks = finder([path])
+        except Exception as exc:
+            LOG.debug("Could not look up video resume position for %s: %s", path, exc)
+            return None
+        for track in tracks:
+            if getattr(track, "media_type", "") == "video" and getattr(track, "path", "") == path:
+                return track
+        return None
+
+    @staticmethod
+    def _should_prompt_resume(position_ms: int) -> bool:
+        return position_ms >= _RESUME_PROMPT_MIN_MS
+
+    def _emit_resume_prompt(self, generation: int, position_ms: int) -> None:
+        if generation != self._video_output_generation or not self._current_path:
+            return
+        message = f"Resume video from {format_ms(position_ms)}?"
+        self.resume_available.emit(
+            message,
+            lambda: self._resume_to_position(generation, position_ms),
+        )
+
+    def _resume_to_position(self, generation: int, position_ms: int) -> None:
+        if generation != self._video_output_generation or self._player is None:
+            return
+        try:
+            self._player.set_time(max(0, int(position_ms)))
+            self._show_osd(f"Resumed {format_ms(position_ms)}")
+        except Exception as exc:
+            LOG.debug("Could not resume video position: %s", exc)
+
+    def _save_resume_position(self) -> None:
+        if self._library is None or self._current_track_id is None or self._current_is_location:
+            return
+        updater = getattr(self._library, "update_resume_position", None)
+        if not callable(updater) or self._player is None:
+            return
+        try:
+            position_ms = max(0, int(self._player.get_time()))
+            duration_ms = max(0, int(self._player.get_length()))
+        except Exception as exc:
+            LOG.debug("Could not read video resume position: %s", exc)
+            return
+        if position_ms < _RESUME_PROMPT_MIN_MS:
+            position_ms = 0
+        elif duration_ms > 0 and duration_ms - position_ms <= _RESUME_CLEAR_REMAINING_MS:
+            position_ms = 0
+        try:
+            updater(self._current_track_id, position_ms)
+        except Exception as exc:
+            LOG.debug("Could not save video resume position: %s", exc)
 
     # ---------------------------------------------------------------- transport
 
@@ -993,6 +1156,7 @@ class VideoPlayerView(QWidget):
             self._play_btn.set_playing(False)
             return
         if self._player.is_playing():
+            self._save_resume_position()
             self._player.pause()
             self._play_btn.set_playing(False)
         else:
@@ -1004,6 +1168,7 @@ class VideoPlayerView(QWidget):
     def _stop(self) -> None:
         if not self._available or self._player is None:
             return
+        self._save_resume_position()
         self._player.stop()
         self._timer.stop()
         self._play_btn.set_playing(False)
@@ -1012,6 +1177,7 @@ class VideoPlayerView(QWidget):
         self._seek.blockSignals(False)
         self._elapsed_lbl.setText("0:00")
         self._video_stack.setCurrentIndex(0)
+        self._current_track_id = None
 
     def _on_seek_release(self) -> None:
         if self._player.get_length() > 0:
@@ -1041,6 +1207,9 @@ class VideoPlayerView(QWidget):
         if self._eq_controller is None or not self._eq_controller.fade_step():
             self._eq_fade_timer.stop()
 
+    def apply_settings(self, settings: Settings) -> None:
+        self._settings = settings
+
     def _on_rate_changed(self, index: int) -> None:
         _, rate = _RATE_OPTIONS[index]
         try:
@@ -1063,6 +1232,30 @@ class VideoPlayerView(QWidget):
                 self._player.video_set_spu(int(tid))
             except Exception as exc:
                 LOG.debug("Could not set subtitle track: %s", exc)
+
+    def _step_subtitle_delay(self, delta_us: int) -> None:
+        self._subtitle_delay_us = max(
+            -10_000_000,
+            min(10_000_000, self._subtitle_delay_us + int(delta_us)),
+        )
+        self._apply_subtitle_delay()
+
+    def _apply_subtitle_delay(self) -> None:
+        try:
+            setter = getattr(self._player, "video_set_spu_delay")
+            setter(int(self._subtitle_delay_us))
+        except Exception as exc:
+            LOG.debug("Could not set subtitle delay: %s", exc)
+        self._update_subtitle_delay_label()
+        self._show_osd(f"Subtitle delay {self._subtitle_delay_text()}")
+
+    def _subtitle_delay_text(self) -> str:
+        delay_ms = int(round(self._subtitle_delay_us / 1000))
+        return f"{delay_ms:+d} ms" if delay_ms else "0 ms"
+
+    def _update_subtitle_delay_label(self) -> None:
+        if hasattr(self, "_sub_delay_label"):
+            self._sub_delay_label.setText(self._subtitle_delay_text())
 
     def _load_sub_file(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -1209,6 +1402,7 @@ class VideoPlayerView(QWidget):
             LOG.debug("Video poll error: %s", exc)
 
     def _on_ended(self) -> None:
+        self._clear_resume_position()
         self._timer.stop()
         self._play_btn.set_playing(False)
         self._seek.blockSignals(True)
@@ -1216,6 +1410,19 @@ class VideoPlayerView(QWidget):
         self._seek.setValue(dur)
         self._seek.blockSignals(False)
         self._video_stack.setCurrentIndex(0)
+
+    def _clear_resume_position(self) -> None:
+        """Reset the saved resume position so a fully-watched video does
+        not prompt the user to resume on next play."""
+        if self._library is None or self._current_track_id is None or self._current_is_location:
+            return
+        updater = getattr(self._library, "update_resume_position", None)
+        if not callable(updater):
+            return
+        try:
+            updater(self._current_track_id, 0)
+        except Exception as exc:
+            LOG.debug("Could not clear video resume position: %s", exc)
 
     # ---------------------------------------------------------------- shortcuts / OSD
 
@@ -1259,6 +1466,7 @@ class VideoPlayerView(QWidget):
         """Release native libVLC resources. Called from MainWindow.closeEvent."""
         if not self._available:
             return
+        self._save_resume_position()
         self._eq_fade_timer.stop()
         self._catalog_build_timer.stop()
         if hasattr(self, "_timer"):
@@ -1288,6 +1496,7 @@ class VideoPlayerView(QWidget):
     def pause_playback(self) -> None:
         """Pause video when the user navigates away from this tab."""
         if self._available and self._player and self._player.is_playing():
+            self._save_resume_position()
             self._player.pause()
             self._play_btn.set_playing(False)
 
@@ -1333,6 +1542,10 @@ class VideoPlayerView(QWidget):
             self._step_volume(-5)
         elif key == Qt.Key_M:
             self._toggle_mute()
+        elif key == Qt.Key_BracketLeft:
+            self._step_subtitle_delay(-_SUBTITLE_DELAY_STEP_US)
+        elif key == Qt.Key_BracketRight:
+            self._step_subtitle_delay(_SUBTITLE_DELAY_STEP_US)
         else:
             super().keyPressEvent(ev)
             return

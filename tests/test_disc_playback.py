@@ -93,9 +93,45 @@ def test_disc_view_populates_audio_cd_tracks(qapp):
 
         view._on_audio_read(toc, album)
 
+        cached_toc, cached_album = view.current_audio_disc()
         assert view.stack.currentWidget() is view.track_table.parentWidget()
+        assert cached_toc is toc
+        assert cached_album is album
         assert view.track_table.rowCount() == 1
         assert view.track_table.item(0, 1).text() == "Song"
+    finally:
+        view.shutdown()
+        view.deleteLater()
+
+
+def test_disc_view_eject_clears_cached_audio_disc(qapp, monkeypatch):
+    from lyon.core import cd_detect
+
+    view = DiscView(Settings())
+    try:
+        toc = DiscToc(
+            drive="D:",
+            track_count=1,
+            track_offsets=[0],
+            sectors=7500,
+        )
+        album = AlbumInfo(
+            artist="Artist",
+            album="Album",
+            tracks=[TrackInfo(1, "Song")],
+        )
+        view._on_audio_read(toc, album)
+        view.drive_combo.clear()
+        view.drive_combo.addItem("D:")
+        view.drive_combo.setCurrentText("D:")
+        monkeypatch.setattr(cd_detect, "eject", lambda _drive: None)
+
+        view._eject()
+
+        cached_toc, cached_album = view.current_audio_disc()
+        assert cached_toc is None
+        assert cached_album is None
+        assert view.stack.currentIndex() == 0
     finally:
         view.shutdown()
         view.deleteLater()
