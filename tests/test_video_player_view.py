@@ -372,7 +372,7 @@ def test_video_view_saves_resume_position_for_local_video(qapp, monkeypatch):
 
     view = video_mod.VideoPlayerView(library=library)
     try:
-        view._load_path(video)
+        view.load_path(video)
         view.pause_playback()
 
         assert library.saved[-1] == (9, 42_000)
@@ -394,7 +394,7 @@ def test_video_view_clears_resume_near_end(qapp, monkeypatch):
 
     view = video_mod.VideoPlayerView(library=library)
     try:
-        view._load_path(video)
+        view.load_path(video)
         view.pause_playback()
 
         assert library.saved[-1] == (9, 0)
@@ -416,7 +416,7 @@ def test_video_view_emits_resume_prompt_and_callback_seeks(qapp, monkeypatch):
     prompts: list[tuple[str, object]] = []
     view.resume_available.connect(lambda message, callback: prompts.append((message, callback)))
     try:
-        view._load_path(video)
+        view.load_path(video)
         _process_events(qapp, 450)
 
         assert prompts

@@ -330,6 +330,11 @@ class DiscView(QWidget):
         if drive:
             cd_detect.eject(drive)
             self.status_label.setText(f"Ejected {drive}.")
+        self._audio_tracks = []
+        self._audio_toc = None
+        self._audio_album = None
+        self._video_source = None
+        self.stack.setCurrentIndex(0)
 
     def _selected_drive(self) -> str:
         text = self.drive_combo.currentText()

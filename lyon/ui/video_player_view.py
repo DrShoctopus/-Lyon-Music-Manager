@@ -724,7 +724,7 @@ class VideoPlayerView(QWidget):
 
         for track in batch:
             card = _VideoCard(track)
-            card.load_requested.connect(self._load_path)
+            card.load_requested.connect(self.load_path)
             # Insert before the trailing stretch
             self._catalog_layout.insertWidget(self._catalog_layout.count() - 1, card)
             self._catalog_cards.append(card)
@@ -987,9 +987,6 @@ class VideoPlayerView(QWidget):
     def load_path(self, path: str) -> None:
         """Play a local video file path in the embedded VLC video player."""
         self._load_media_source(path, label=Path(path).name)
-
-    def _load_path(self, path: str) -> None:
-        self.load_path(path)
 
     def load_location(
         self,

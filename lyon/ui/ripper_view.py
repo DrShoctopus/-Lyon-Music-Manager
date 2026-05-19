@@ -477,6 +477,7 @@ class RipperView(QWidget):
         self.detect_btn.setEnabled(True)
         self.refresh_btn.setEnabled(True)
         self.settings.cd_drive = toc.drive
+        self.settings.save()
 
         if toc.discid and self.library.has_disc(toc.discid, toc.track_count):
             album_info = self.library.album_for_disc(toc.discid)
