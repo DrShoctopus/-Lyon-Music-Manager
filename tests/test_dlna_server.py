@@ -3,7 +3,7 @@ from __future__ import annotations
 from io import BytesIO
 from pathlib import Path
 
-from lyon.core.dlna_server import DlnaServer
+from lyon.core.dlna_server import DlnaServer, _is_allowed_client
 from lyon.core.library import Library
 from lyon.core.settings import Settings
 
@@ -78,7 +78,7 @@ def test_dlna_browse_returns_library_tracks(tmp_path):
 <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
   <s:Body>
     <u:Browse xmlns:u="urn:schemas-upnp-org:service:ContentDirectory:1">
-      <ObjectID>audio</ObjectID>
+      <ObjectID>audio:all</ObjectID>
       <BrowseFlag>BrowseDirectChildren</BrowseFlag>
       <Filter>*</Filter>
       <StartingIndex>0</StartingIndex>
@@ -100,6 +100,65 @@ def test_dlna_browse_returns_library_tracks(tmp_path):
     assert "NumberReturned>1<" in body
 
 
+def test_dlna_browse_exposes_music_containers(tmp_path):
+    library = Library(tmp_path / "library.db")
+    _insert_track(library, tmp_path / "song.mp3")
+    server = DlnaServer(library, Settings(music_root=str(tmp_path), dlna_port=0))
+    soap = b"""<?xml version="1.0"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
+  <s:Body>
+    <u:Browse xmlns:u="urn:schemas-upnp-org:service:ContentDirectory:1">
+      <ObjectID>audio</ObjectID>
+      <BrowseFlag>BrowseDirectChildren</BrowseFlag>
+      <Filter>*</Filter>
+      <StartingIndex>0</StartingIndex>
+      <RequestedCount>0</RequestedCount>
+      <SortCriteria></SortCriteria>
+    </u:Browse>
+    </s:Body>
+</s:Envelope>"""
+    try:
+        body = server.handle_content_directory(soap).decode()
+    finally:
+        library.close()
+
+    assert "All Music" in body
+    assert "Artists" in body
+    assert "Albums" in body
+    assert "Genres" in body
+
+
+def test_dlna_search_filters_library_tracks(tmp_path):
+    library = Library(tmp_path / "library.db")
+    _insert_track(library, tmp_path / "ocean.mp3")
+    _insert_track(library, tmp_path / "other.mp3", media_type="audio")
+    library.conn.execute("UPDATE tracks SET title = ? WHERE path = ?", ("Mountain Song", str(tmp_path / "other.mp3")))
+    library.commit()
+    server = DlnaServer(library, Settings(music_root=str(tmp_path), dlna_port=0))
+    soap = b"""<?xml version="1.0"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
+  <s:Body>
+    <u:Search xmlns:u="urn:schemas-upnp-org:service:ContentDirectory:1">
+      <ContainerID>0</ContainerID>
+      <SearchCriteria>dc:title contains "Ocean"</SearchCriteria>
+      <Filter>*</Filter>
+      <StartingIndex>0</StartingIndex>
+      <RequestedCount>0</RequestedCount>
+      <SortCriteria></SortCriteria>
+    </u:Search>
+    </s:Body>
+</s:Envelope>"""
+    try:
+        server._base_url = "http://127.0.0.1:8200"
+        body = server.handle_content_directory(soap).decode()
+    finally:
+        library.close()
+
+    assert "Ocean Song" in body
+    assert "Mountain Song" not in body
+    assert "NumberReturned>1<" in body
+
+
 def test_dlna_media_endpoint_supports_byte_ranges(tmp_path):
     library = Library(tmp_path / "library.db")
     track_id = _insert_track(library, tmp_path / "clip.mp4", media_type="video")
@@ -114,4 +173,47 @@ def test_dlna_media_endpoint_supports_byte_ranges(tmp_path):
     assert handler.status == 206
     assert handler.response_headers["Content-Range"] == "bytes 1-5/18"
     assert handler.response_headers["Content-Type"] == "video/mp4"
+    assert handler.response_headers["transferMode.dlna.org"] == "Streaming"
     assert body == b"ample"
+
+
+def test_dlna_rejects_track_outside_configured_library_roots(tmp_path):
+    library_root = tmp_path / "Music"
+    library_root.mkdir()
+    outside_root = tmp_path / "Other"
+    outside_root.mkdir()
+    library = Library(tmp_path / "library.db")
+    track_id = _insert_track(library, outside_root / "private.mp3")
+    server = DlnaServer(library, Settings(music_root=str(library_root), dlna_port=0))
+    handler = _FakeHandler()
+    try:
+        server.serve_media(handler, track_id, send_body=True)
+        assert handler.status == 404
+        assert handler.wfile.getvalue() == b"Media file not found"
+
+        soap = b"""<?xml version="1.0"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
+  <s:Body>
+    <u:Browse xmlns:u="urn:schemas-upnp-org:service:ContentDirectory:1">
+      <ObjectID>audio:artists</ObjectID>
+      <BrowseFlag>BrowseDirectChildren</BrowseFlag>
+      <Filter>*</Filter>
+      <StartingIndex>0</StartingIndex>
+      <RequestedCount>0</RequestedCount>
+      <SortCriteria></SortCriteria>
+    </u:Browse>
+    </s:Body>
+</s:Envelope>"""
+        body = server.handle_content_directory(soap).decode()
+    finally:
+        library.close()
+
+    assert "Sea Artist" not in body
+
+
+def test_dlna_allows_only_local_network_clients():
+    assert _is_allowed_client("127.0.0.1")
+    assert _is_allowed_client("192.168.1.20")
+    assert _is_allowed_client("10.4.3.2")
+    assert _is_allowed_client("169.254.10.20")
+    assert not _is_allowed_client("8.8.8.8")

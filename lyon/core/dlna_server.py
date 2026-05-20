@@ -1,6 +1,7 @@
 """Minimal DLNA / UPnP MediaServer for the local library."""
 from __future__ import annotations
 
+import base64
 import logging
 import mimetypes
 import platform
@@ -11,6 +12,7 @@ import uuid
 from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from ipaddress import ip_address
 from pathlib import Path
 from typing import BinaryIO
 from urllib.parse import quote, unquote, urlparse
@@ -26,6 +28,8 @@ LOG = logging.getLogger(__name__)
 
 _SSDP_ADDR = ("239.255.255.250", 1900)
 _CHUNK_SIZE = 256 * 1024
+_MAX_SOAP_BODY = 1024 * 1024
+_MAX_BROWSE_ITEMS = 500
 
 _MIME_BY_EXT = {
     ".flac": "audio/flac",
@@ -149,24 +153,66 @@ class DlnaServer:
         action = _soap_action(root)
         if action == "Search":
             return self._search_response(root)
-        return self._browse_response(root)
+        if action == "Browse":
+            return self._browse_response(root)
+        if action == "GetSearchCapabilities":
+            return _soap_envelope(
+                "GetSearchCapabilitiesResponse",
+                "urn:schemas-upnp-org:service:ContentDirectory:1",
+                "<SearchCaps>dc:title,dc:creator,upnp:artist,upnp:album</SearchCaps>",
+            )
+        if action == "GetSortCapabilities":
+            return _soap_envelope(
+                "GetSortCapabilitiesResponse",
+                "urn:schemas-upnp-org:service:ContentDirectory:1",
+                "<SortCaps>dc:title,dc:creator,upnp:album</SortCaps>",
+            )
+        if action == "GetSystemUpdateID":
+            return _soap_envelope(
+                "GetSystemUpdateIDResponse",
+                "urn:schemas-upnp-org:service:ContentDirectory:1",
+                "<Id>1</Id>",
+            )
+        return _soap_fault(401, "Invalid Action")
 
-    def handle_connection_manager(self, _body: bytes) -> bytes:
+    def handle_connection_manager(self, body: bytes) -> bytes:
+        root = fromstring(body)
+        action = _soap_action(root)
         protocols = ",".join(
             f"http-get:*:{mime}:*" for mime in sorted(set(_MIME_BY_EXT.values()))
         )
-        return _soap_envelope(
-            "GetProtocolInfoResponse",
-            "urn:schemas-upnp-org:service:ConnectionManager:1",
-            f"<Source>{escape(protocols)}</Source><Sink></Sink>",
-        )
+        if action == "GetProtocolInfo":
+            return _soap_envelope(
+                "GetProtocolInfoResponse",
+                "urn:schemas-upnp-org:service:ConnectionManager:1",
+                f"<Source>{escape(protocols)}</Source><Sink></Sink>",
+            )
+        if action == "GetCurrentConnectionIDs":
+            return _soap_envelope(
+                "GetCurrentConnectionIDsResponse",
+                "urn:schemas-upnp-org:service:ConnectionManager:1",
+                "<ConnectionIDs>0</ConnectionIDs>",
+            )
+        if action == "GetCurrentConnectionInfo":
+            return _soap_envelope(
+                "GetCurrentConnectionInfoResponse",
+                "urn:schemas-upnp-org:service:ConnectionManager:1",
+                (
+                    "<RcsID>-1</RcsID><AVTransportID>-1</AVTransportID>"
+                    f"<ProtocolInfo>{escape(protocols)}</ProtocolInfo>"
+                    "<PeerConnectionManager></PeerConnectionManager>"
+                    "<PeerConnectionID>-1</PeerConnectionID>"
+                    "<Direction>Output</Direction><Status>OK</Status>"
+                ),
+            )
+        return _soap_fault(401, "Invalid Action")
 
     def serve_media(self, handler: BaseHTTPRequestHandler, track_id: int, *, send_body: bool) -> None:
         track = self.library.track_by_id(track_id)
         if track is None:
             _send_error(handler, HTTPStatus.NOT_FOUND, "Track not found")
             return
-        path = _track_file_path(track)
+        path = self._track_file_path(track)
         if path is None or not path.exists() or not path.is_file():
             _send_error(handler, HTTPStatus.NOT_FOUND, "Media file not found")
             return
@@ -188,6 +234,8 @@ class DlnaServer:
         handler.send_header("Content-Type", mime)
         handler.send_header("Accept-Ranges", "bytes")
         handler.send_header("Content-Length", str(length))
+        handler.send_header("transferMode.dlna.org", "Streaming")
+        handler.send_header("contentFeatures.dlna.org", "DLNA.ORG_OP=01;DLNA.ORG_CI=0")
         if status == HTTPStatus.PARTIAL_CONTENT:
             handler.send_header("Content-Range", f"bytes {start}-{end}/{size}")
         handler.end_headers()
@@ -200,10 +248,11 @@ class DlnaServer:
     def _browse_response(self, root) -> bytes:
         object_id = _xml_text(root, "ObjectID", "0")
         flag = _xml_text(root, "BrowseFlag", "BrowseDirectChildren")
-        start = _xml_int(root, "StartingIndex", 0)
-        count = _xml_int(root, "RequestedCount", 0)
+        start = _nonnegative_xml_int(root, "StartingIndex", 0)
+        count = _nonnegative_xml_int(root, "RequestedCount", 0)
         items = self._browse_items(object_id, flag)
-        visible = items[start:] if count <= 0 else items[start:start + count]
+        limit = _MAX_BROWSE_ITEMS if count <= 0 else min(count, _MAX_BROWSE_ITEMS)
+        visible = items[start:start + limit]
         didl = _didl_xml(visible)
         payload = (
             f"<Result>{escape(didl)}</Result>"
@@ -217,12 +266,17 @@ class DlnaServer:
             payload,
         )
 
-    def _search_response(self, _root) -> bytes:
-        items = self._track_items()
-        didl = _didl_xml(items)
+    def _search_response(self, root) -> bytes:
+        start = _nonnegative_xml_int(root, "StartingIndex", 0)
+        count = _nonnegative_xml_int(root, "RequestedCount", 0)
+        query = _search_query(_xml_text(root, "SearchCriteria", ""))
+        tracks = self._tracks_matching(query) if query else self._tracks()
+        items = [self._track_item(track) for track in tracks]
+        limit = _MAX_BROWSE_ITEMS if count <= 0 else min(count, _MAX_BROWSE_ITEMS)
+        visible = items[start:start + limit]
         payload = (
-            f"<Result>{escape(didl)}</Result>"
-            f"<NumberReturned>{len(items)}</NumberReturned>"
+            f"<Result>{escape(_didl_xml(visible))}</Result>"
+            f"<NumberReturned>{len(visible)}</NumberReturned>"
             f"<TotalMatches>{len(items)}</TotalMatches>"
             "<UpdateID>1</UpdateID>"
         )
@@ -237,26 +291,111 @@ class DlnaServer:
             if object_id == "0":
                 return [_container("0", "-1", self.settings.dlna_friendly_name, 2)]
             if object_id == "audio":
-                return [_container("audio", "0", "Music", len(self._tracks("audio")))]
+                return [_container("audio", "0", "Music", 4)]
             if object_id == "video":
                 return [_container("video", "0", "Videos", len(self._tracks("video")))]
+            if object_id == "audio:all":
+                return [_container("audio:all", "audio", "All Music", len(self._tracks("audio")))]
+            if object_id == "audio:artists":
+                return [_container("audio:artists", "audio", "Artists", len(self._artists("audio")))]
+            if object_id == "audio:albums":
+                return [_container("audio:albums", "audio", "Albums", len(self._albums("audio")))]
+            if object_id == "audio:genres":
+                return [_container("audio:genres", "audio", "Genres", len(self._genres("audio")))]
+            if object_id == "video:all":
+                return [_container("video:all", "video", "All Videos", len(self._tracks("video")))]
+            if object_id.startswith("artist:"):
+                artist = _decode_object_value(object_id.removeprefix("artist:"))
+                tracks = self._tracks_for_artist(artist, "audio") if artist else []
+                return [_container(object_id, "audio:artists", artist, len(tracks))] if artist else []
+            if object_id.startswith("album:"):
+                decoded = _decode_object_value(object_id.removeprefix("album:"))
+                artist, album = _split_pair(decoded)
+                tracks = self._tracks_for_album(artist, album, "audio") if artist and album else []
+                return [_container(object_id, "audio:albums", album, len(tracks))] if artist and album else []
+            if object_id.startswith("genre:"):
+                genre = _decode_object_value(object_id.removeprefix("genre:"))
+                tracks = self._tracks_for_genre(genre, "audio") if genre else []
+                return [_container(object_id, "audio:genres", genre, len(tracks))] if genre else []
             if object_id.startswith("track:"):
                 track = _track_from_object_id(self.library, object_id)
-                return [self._track_item(track)] if track else []
+                return [self._track_item(track)] if track and self._track_file_path(track) else []
             return []
         if object_id == "0":
             return [
-                _container("audio", "0", "Music", len(self._tracks("audio"))),
+                _container("audio", "0", "Music", 4),
                 _container("video", "0", "Videos", len(self._tracks("video"))),
             ]
         if object_id == "audio":
+            return [
+                _container("audio:all", "audio", "All Music", len(self._tracks("audio"))),
+                _container("audio:artists", "audio", "Artists", len(self._artists("audio"))),
+                _container("audio:albums", "audio", "Albums", len(self._albums("audio"))),
+                _container("audio:genres", "audio", "Genres", len(self._genres("audio"))),
+            ]
+        if object_id == "audio:all":
             return self._track_items("audio")
+        if object_id == "audio:artists":
+            return [
+                _container(
+                    f"artist:{_encode_object_value(artist)}",
+                    "audio:artists",
+                    artist,
+                    len(self._tracks_for_artist(artist, "audio")),
+                )
+                for artist in self._artists("audio")
+            ]
+        if object_id.startswith("artist:"):
+            artist = _decode_object_value(object_id.removeprefix("artist:"))
+            return [self._track_item(track) for track in self._tracks_for_artist(artist, "audio")] if artist else []
+        if object_id == "audio:albums":
+            return [
+                _container(
+                    f"album:{_encode_object_value(_join_pair(artist, album))}",
+                    "audio:albums",
+                    f"{artist} - {album}",
+                    len(self._tracks_for_album(artist, album, "audio")),
+                )
+                for artist, album in self._albums("audio")
+            ]
+        if object_id.startswith("album:"):
+            decoded = _decode_object_value(object_id.removeprefix("album:"))
+            artist, album = _split_pair(decoded)
+            return [self._track_item(track) for track in self._tracks_for_album(artist, album, "audio")] if artist and album else []
+        if object_id == "audio:genres":
+            return [
+                _container(
+                    f"genre:{_encode_object_value(genre)}",
+                    "audio:genres",
+                    genre,
+                    len(self._tracks_for_genre(genre, "audio")),
+                )
+                for genre in self._genres("audio")
+            ]
+        if object_id.startswith("genre:"):
+            genre = _decode_object_value(object_id.removeprefix("genre:"))
+            return [self._track_item(track) for track in self._tracks_for_genre(genre, "audio")] if genre else []
         if object_id == "video":
+            return [_container("video:all", "video", "All Videos", len(self._tracks("video")))]
+        if object_id == "video:all":
             return self._track_items("video")
         return []
 
     def _track_items(self, media_type: str | None = None) -> list[_BrowseItem]:
         return [self._track_item(track) for track in self._tracks(media_type)]
+
+    def _artists(self, media_type: str) -> list[str]:
+        return sorted({track.display_artist for track in self._tracks(media_type)}, key=str.casefold)
+
+    def _albums(self, media_type: str) -> list[tuple[str, str]]:
+        albums = {
+            (track.display_artist, track.album or "Unknown Album")
+            for track in self._tracks(media_type)
+        }
+        return sorted(albums, key=lambda item: (item[0].casefold(), item[1].casefold()))
+
+    def _genres(self, media_type: str) -> list[str]:
+        return sorted({track.genre for track in self._tracks(media_type) if track.genre}, key=str.casefold)
 
     def _tracks(self, media_type: str | None = None) -> list[Track]:
         tracks: list[Track] = []
@@ -265,14 +404,49 @@ class DlnaServer:
                 continue
             if media_type is not None and track.media_type != media_type:
                 continue
-            path = _track_file_path(track)
+            path = self._track_file_path(track)
             if path is None or not path.exists() or not path.is_file():
                 continue
             tracks.append(track)
         return tracks
 
-    def _track_item(self, track: Track) -> _BrowseItem:
+    def _tracks_for_artist(self, artist: str, media_type: str) -> list[Track]:
+        return self._filter_tracks(self.library.tracks_for_artist(artist, media_type))
+
+    def _tracks_for_album(self, artist: str, album: str, media_type: str) -> list[Track]:
+        return self._filter_tracks(self.library.tracks_for_album(artist, album, media_type))
+
+    def _tracks_for_genre(self, genre: str, media_type: str) -> list[Track]:
+        return self._filter_tracks(self.library.tracks_for_genre(genre, media_type))
+
+    def _tracks_matching(self, query: str) -> list[Track]:
+        return self._filter_tracks(self.library.search(query))
+
+    def _filter_tracks(self, tracks: list[Track]) -> list[Track]:
+        return [
+            track
+            for track in tracks
+            if track.media_type in {"audio", "video"}
+            and (path := self._track_file_path(track)) is not None
+            and path.exists()
+            and path.is_file()
+        ]
+
+    def _track_file_path(self, track: Track) -> Path | None:
         path = _track_file_path(track)
+        if path is None:
+            return None
+        resolved = _resolved_path(path)
+        if resolved is None or not _path_is_under_roots(resolved, self._library_roots()):
+            return None
+        return resolved
+
+    def _library_roots(self) -> list[Path]:
+        roots = [Path(self.settings.music_root), *(Path(p) for p in self.settings.library_paths)]
+        return [resolved for root in roots if (resolved := _resolved_path(root)) is not None]
+
+    def _track_item(self, track: Track) -> _BrowseItem:
+        path = self._track_file_path(track)
         assert path is not None
         mime = _mime_type(path)
         parent = "video" if track.media_type == "video" else "audio"
@@ -306,19 +480,41 @@ class _DlnaHTTPServer(ThreadingHTTPServer):
 
 class _DlnaRequestHandler(BaseHTTPRequestHandler):
     server: _DlnaHTTPServer
+    server_version = f"SeaLyon/{__version__}"
+    sys_version = "UPnP/1.0"
+
+    def setup(self) -> None:
+        super().setup()
+        self.request.settimeout(10.0)
 
     def log_message(self, fmt: str, *args) -> None:  # pragma: no cover - noisy server hook
         LOG.debug("DLNA HTTP: " + fmt, *args)
 
     def do_GET(self) -> None:
+        if not self._client_allowed():
+            return
         self._route(send_body=True)
 
     def do_HEAD(self) -> None:
+        if not self._client_allowed():
+            return
         self._route(send_body=False)
 
     def do_POST(self) -> None:
+        if not self._client_allowed():
+            return
         parsed = urlparse(self.path)
-        length = int(self.headers.get("Content-Length", "0") or 0)
+        try:
+            length = int(self.headers.get("Content-Length", "0") or 0)
+        except ValueError:
+            _send_error(self, HTTPStatus.BAD_REQUEST, "Invalid Content-Length")
+            return
+        if length <= 0:
+            _send_error(self, HTTPStatus.LENGTH_REQUIRED, "Content-Length required")
+            return
+        if length > _MAX_SOAP_BODY:
+            _send_error(self, HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "DLNA control request is too large")
+            return
         body = self.rfile.read(length)
         try:
             if parsed.path == "/ContentDirectory/control":
@@ -354,6 +550,14 @@ class _DlnaRequestHandler(BaseHTTPRequestHandler):
                 return
         _send_error(self, HTTPStatus.NOT_FOUND, "Not found")
 
+    def _client_allowed(self) -> bool:
+        host = self.client_address[0]
+        if _is_allowed_client(host):
+            return True
+        LOG.warning("Rejected DLNA request from non-local client %s", host)
+        _send_error(self, HTTPStatus.FORBIDDEN, "DLNA is available to local network clients only")
+        return False
+
 
 class _SsdpResponder:
     def __init__(self, server: DlnaServer):
@@ -366,6 +570,7 @@ class _SsdpResponder:
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 2)
             sock.settimeout(1.0)
             try:
                 sock.bind(("", 1900))
@@ -405,7 +610,7 @@ class _SsdpResponder:
             except OSError:
                 return
             text = data.decode("utf-8", "ignore")
-            if "M-SEARCH" in text.upper() and _ssdp_search_matches(text):
+            if _is_allowed_client(addr[0]) and "M-SEARCH" in text.upper() and _ssdp_search_matches(text):
                 self._respond(addr)
 
     def _respond(self, addr: tuple[str, int]) -> None:
@@ -495,6 +700,25 @@ def _soap_envelope(action: str, namespace: str, payload: str) -> bytes:
 """.encode("utf-8")
 
 
+def _soap_fault(error_code: int, description: str) -> bytes:
+    return f"""<?xml version="1.0" encoding="utf-8"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
+  <s:Body>
+    <s:Fault>
+      <faultcode>s:Client</faultcode>
+      <faultstring>UPnPError</faultstring>
+      <detail>
+        <UPnPError xmlns="urn:schemas-upnp-org:control-1-0">
+          <errorCode>{error_code}</errorCode>
+          <errorDescription>{escape(description)}</errorDescription>
+        </UPnPError>
+      </detail>
+    </s:Fault>
+  </s:Body>
+</s:Envelope>
+""".encode("utf-8")
+
+
 def _track_from_object_id(library: Library, object_id: str) -> Track | None:
     try:
         track_id = int(object_id.split(":", 1)[1])
@@ -506,6 +730,23 @@ def _track_from_object_id(library: Library, object_id: str) -> Track | None:
 def _track_file_path(track: Track) -> Path | None:
     path = Path(track.playback_uri or track.path)
     return path if not track.playback_is_location else None
+
+
+def _resolved_path(path: Path) -> Path | None:
+    try:
+        return path.expanduser().resolve(strict=False)
+    except OSError:
+        return None
+
+
+def _path_is_under_roots(path: Path, roots: list[Path]) -> bool:
+    for root in roots:
+        try:
+            path.relative_to(root)
+            return True
+        except ValueError:
+            continue
+    return False
 
 
 def _mime_type(path: Path) -> str:
@@ -534,6 +775,10 @@ def _xml_int(root, local_name: str, default: int) -> int:
         return default
 
 
+def _nonnegative_xml_int(root, local_name: str, default: int) -> int:
+    return max(0, _xml_int(root, local_name, default))
+
+
 def _soap_action(root) -> str:
     body_seen = False
     for elem in root.iter():
@@ -544,6 +789,48 @@ def _soap_action(root) -> str:
         if body_seen:
             return local
     return ""
+
+
+def _encode_object_value(value: str) -> str:
+    return base64.urlsafe_b64encode(value.encode("utf-8")).decode("ascii").rstrip("=")
+
+
+def _decode_object_value(value: str) -> str:
+    try:
+        padding = "=" * (-len(value) % 4)
+        return base64.urlsafe_b64decode((value + padding).encode("ascii")).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return ""
+
+
+def _join_pair(first: str, second: str) -> str:
+    return f"{first}\0{second}"
+
+
+def _split_pair(value: str) -> tuple[str, str]:
+    first, sep, second = value.partition("\0")
+    return (first, second) if sep else ("", "")
+
+
+def _search_query(criteria: str) -> str:
+    criteria = criteria.strip()
+    if not criteria or criteria == "*":
+        return ""
+    values: list[str] = []
+    in_quote = False
+    current = []
+    for char in criteria:
+        if char == '"':
+            if in_quote:
+                values.append("".join(current).strip())
+                current = []
+            in_quote = not in_quote
+        elif in_quote:
+            current.append(char)
+    values = [value for value in values if value and value != "*"]
+    if values:
+        return max(values, key=len)[:128]
+    return criteria[:128]
 
 
 def _parse_range(header: str | None, size: int) -> tuple[int, int] | None:
@@ -600,6 +887,14 @@ def _send_error(handler: BaseHTTPRequestHandler, status: HTTPStatus, message: st
     handler.wfile.write(data)
 
 
+def _is_allowed_client(host: str) -> bool:
+    try:
+        address = ip_address(host.split("%", 1)[0])
+    except ValueError:
+        return False
+    return address.is_loopback or address.is_private or address.is_link_local
+
+
 def _local_ip() -> str:
     """Resolve a LAN-reachable IPv4 address for DLNA discovery URLs.
 
@@ -642,17 +937,67 @@ _CONTENT_DIRECTORY_SCPD = b"""<?xml version="1.0" encoding="utf-8"?>
 <scpd xmlns="urn:schemas-upnp-org:service-1-0">
   <specVersion><major>1</major><minor>0</minor></specVersion>
   <actionList>
-    <action><name>Browse</name></action>
-    <action><name>Search</name></action>
+    <action>
+      <name>Browse</name>
+      <argumentList>
+        <argument><name>ObjectID</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_ObjectID</relatedStateVariable></argument>
+        <argument><name>BrowseFlag</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_BrowseFlag</relatedStateVariable></argument>
+        <argument><name>Filter</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_Filter</relatedStateVariable></argument>
+        <argument><name>StartingIndex</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_Index</relatedStateVariable></argument>
+        <argument><name>RequestedCount</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_Count</relatedStateVariable></argument>
+        <argument><name>SortCriteria</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_SortCriteria</relatedStateVariable></argument>
+        <argument><name>Result</name><direction>out</direction><relatedStateVariable>A_ARG_TYPE_Result</relatedStateVariable></argument>
+        <argument><name>NumberReturned</name><direction>out</direction><relatedStateVariable>A_ARG_TYPE_Count</relatedStateVariable></argument>
+        <argument><name>TotalMatches</name><direction>out</direction><relatedStateVariable>A_ARG_TYPE_Count</relatedStateVariable></argument>
+        <argument><name>UpdateID</name><direction>out</direction><relatedStateVariable>A_ARG_TYPE_UpdateID</relatedStateVariable></argument>
+      </argumentList>
+    </action>
+    <action>
+      <name>Search</name>
+      <argumentList>
+        <argument><name>ContainerID</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_ObjectID</relatedStateVariable></argument>
+        <argument><name>SearchCriteria</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_SearchCriteria</relatedStateVariable></argument>
+        <argument><name>Filter</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_Filter</relatedStateVariable></argument>
+        <argument><name>StartingIndex</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_Index</relatedStateVariable></argument>
+        <argument><name>RequestedCount</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_Count</relatedStateVariable></argument>
+        <argument><name>SortCriteria</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_SortCriteria</relatedStateVariable></argument>
+        <argument><name>Result</name><direction>out</direction><relatedStateVariable>A_ARG_TYPE_Result</relatedStateVariable></argument>
+        <argument><name>NumberReturned</name><direction>out</direction><relatedStateVariable>A_ARG_TYPE_Count</relatedStateVariable></argument>
+        <argument><name>TotalMatches</name><direction>out</direction><relatedStateVariable>A_ARG_TYPE_Count</relatedStateVariable></argument>
+        <argument><name>UpdateID</name><direction>out</direction><relatedStateVariable>A_ARG_TYPE_UpdateID</relatedStateVariable></argument>
+      </argumentList>
+    </action>
+    <action>
+      <name>GetSearchCapabilities</name>
+      <argumentList>
+        <argument><name>SearchCaps</name><direction>out</direction><relatedStateVariable>SearchCapabilities</relatedStateVariable></argument>
+      </argumentList>
+    </action>
+    <action>
+      <name>GetSortCapabilities</name>
+      <argumentList>
+        <argument><name>SortCaps</name><direction>out</direction><relatedStateVariable>SortCapabilities</relatedStateVariable></argument>
+      </argumentList>
+    </action>
+    <action>
+      <name>GetSystemUpdateID</name>
+      <argumentList>
+        <argument><name>Id</name><direction>out</direction><relatedStateVariable>SystemUpdateID</relatedStateVariable></argument>
+      </argumentList>
+    </action>
   </actionList>
   <serviceStateTable>
     <stateVariable sendEvents="yes"><name>SystemUpdateID</name><dataType>ui4</dataType></stateVariable>
+    <stateVariable sendEvents="no"><name>SearchCapabilities</name><dataType>string</dataType></stateVariable>
+    <stateVariable sendEvents="no"><name>SortCapabilities</name><dataType>string</dataType></stateVariable>
     <stateVariable sendEvents="no"><name>A_ARG_TYPE_ObjectID</name><dataType>string</dataType></stateVariable>
     <stateVariable sendEvents="no"><name>A_ARG_TYPE_Result</name><dataType>string</dataType></stateVariable>
     <stateVariable sendEvents="no"><name>A_ARG_TYPE_BrowseFlag</name><dataType>string</dataType></stateVariable>
     <stateVariable sendEvents="no"><name>A_ARG_TYPE_Filter</name><dataType>string</dataType></stateVariable>
     <stateVariable sendEvents="no"><name>A_ARG_TYPE_Index</name><dataType>ui4</dataType></stateVariable>
     <stateVariable sendEvents="no"><name>A_ARG_TYPE_Count</name><dataType>ui4</dataType></stateVariable>
+    <stateVariable sendEvents="no"><name>A_ARG_TYPE_UpdateID</name><dataType>ui4</dataType></stateVariable>
+    <stateVariable sendEvents="no"><name>A_ARG_TYPE_SearchCriteria</name><dataType>string</dataType></stateVariable>
     <stateVariable sendEvents="no"><name>A_ARG_TYPE_SortCriteria</name><dataType>string</dataType></stateVariable>
   </serviceStateTable>
 </scpd>
@@ -662,11 +1007,44 @@ _CONNECTION_MANAGER_SCPD = b"""<?xml version="1.0" encoding="utf-8"?>
 <scpd xmlns="urn:schemas-upnp-org:service-1-0">
   <specVersion><major>1</major><minor>0</minor></specVersion>
   <actionList>
-    <action><name>GetProtocolInfo</name></action>
+    <action>
+      <name>GetProtocolInfo</name>
+      <argumentList>
+        <argument><name>Source</name><direction>out</direction><relatedStateVariable>SourceProtocolInfo</relatedStateVariable></argument>
+        <argument><name>Sink</name><direction>out</direction><relatedStateVariable>SinkProtocolInfo</relatedStateVariable></argument>
+      </argumentList>
+    </action>
+    <action>
+      <name>GetCurrentConnectionIDs</name>
+      <argumentList>
+        <argument><name>ConnectionIDs</name><direction>out</direction><relatedStateVariable>CurrentConnectionIDs</relatedStateVariable></argument>
+      </argumentList>
+    </action>
+    <action>
+      <name>GetCurrentConnectionInfo</name>
+      <argumentList>
+        <argument><name>ConnectionID</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_ConnectionID</relatedStateVariable></argument>
+        <argument><name>RcsID</name><direction>out</direction><relatedStateVariable>A_ARG_TYPE_RcsID</relatedStateVariable></argument>
+        <argument><name>AVTransportID</name><direction>out</direction><relatedStateVariable>A_ARG_TYPE_AVTransportID</relatedStateVariable></argument>
+        <argument><name>ProtocolInfo</name><direction>out</direction><relatedStateVariable>A_ARG_TYPE_ProtocolInfo</relatedStateVariable></argument>
+        <argument><name>PeerConnectionManager</name><direction>out</direction><relatedStateVariable>A_ARG_TYPE_ConnectionManager</relatedStateVariable></argument>
+        <argument><name>PeerConnectionID</name><direction>out</direction><relatedStateVariable>A_ARG_TYPE_ConnectionID</relatedStateVariable></argument>
+        <argument><name>Direction</name><direction>out</direction><relatedStateVariable>A_ARG_TYPE_Direction</relatedStateVariable></argument>
+        <argument><name>Status</name><direction>out</direction><relatedStateVariable>A_ARG_TYPE_ConnectionStatus</relatedStateVariable></argument>
+      </argumentList>
+    </action>
   </actionList>
   <serviceStateTable>
     <stateVariable sendEvents="no"><name>SourceProtocolInfo</name><dataType>string</dataType></stateVariable>
     <stateVariable sendEvents="no"><name>SinkProtocolInfo</name><dataType>string</dataType></stateVariable>
+    <stateVariable sendEvents="no"><name>CurrentConnectionIDs</name><dataType>string</dataType></stateVariable>
+    <stateVariable sendEvents="no"><name>A_ARG_TYPE_ConnectionStatus</name><dataType>string</dataType></stateVariable>
+    <stateVariable sendEvents="no"><name>A_ARG_TYPE_ConnectionManager</name><dataType>string</dataType></stateVariable>
+    <stateVariable sendEvents="no"><name>A_ARG_TYPE_Direction</name><dataType>string</dataType></stateVariable>
+    <stateVariable sendEvents="no"><name>A_ARG_TYPE_ProtocolInfo</name><dataType>string</dataType></stateVariable>
+    <stateVariable sendEvents="no"><name>A_ARG_TYPE_ConnectionID</name><dataType>i4</dataType></stateVariable>
+    <stateVariable sendEvents="no"><name>A_ARG_TYPE_AVTransportID</name><dataType>i4</dataType></stateVariable>
+    <stateVariable sendEvents="no"><name>A_ARG_TYPE_RcsID</name><dataType>i4</dataType></stateVariable>
   </serviceStateTable>
 </scpd>
 """
