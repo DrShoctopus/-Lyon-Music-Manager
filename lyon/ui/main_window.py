@@ -39,6 +39,7 @@ from .equalizer_dialog import EqualizerDialog
 from .first_run_dialog import FirstRunDialog
 from .library_view import LibraryView
 from .now_playing import NowPlayingView, TransportBar
+from .podcast_view import PodcastView
 from .queue_dialog import QueueDialog
 from .radio_view import RadioView
 from .ripper_view import RipperView
@@ -88,7 +89,17 @@ class _LibraryScanThread(QThread):
 
 class MainWindow(QMainWindow):
     # Tab display order — index matches the QStackedWidget page index.
-    _TAB_ORDER = ("Library", "Now Playing", "Radio", "Video", "Disc", "Rip", "YouTube")
+    _TAB_ORDER = ("Library", "Now Playing", "Podcasts", "Radio", "Video", "Disc", "Rip", "YouTube")
+    _TAB_SHORTCUTS = {
+        "Library": "Ctrl+1",
+        "Now Playing": "Ctrl+2",
+        "Radio": "Ctrl+3",
+        "Video": "Ctrl+4",
+        "Disc": "Ctrl+5",
+        "Rip": "Ctrl+6",
+        "YouTube": "Ctrl+7",
+        "Podcasts": "Ctrl+8",
+    }
 
     def __init__(self):
         super().__init__()
@@ -204,6 +215,7 @@ class MainWindow(QMainWindow):
         )
         self.video_player_view.apply_equalizer(self.settings.equalizer_enabled, self.settings.equalizer_bands, self.settings.equalizer_preamp)
         self._library_refresh_timer.timeout.connect(self.video_player_view.refresh_catalog)
+        self.podcast_view = PodcastView(self.settings)
         self.radio_view = RadioView(self.settings)
         self.disc_view = DiscView(self.settings)
         self.ripper_view = RipperView(self.settings, self.library)
@@ -213,6 +225,7 @@ class MainWindow(QMainWindow):
         _tab_views = (
             self.library_view,
             self.now_playing,
+            self.podcast_view,
             self.radio_view,
             self.video_player_view,
             self.disc_view,
@@ -268,6 +281,8 @@ class MainWindow(QMainWindow):
         self.library_view.request_diagnostics.connect(self.show_diagnostics)
         self.library_view.request_scan_replaygain.connect(self._on_scan_replaygain)
         self.now_playing.request_edit_metadata.connect(self.library_view.edit_track_metadata)
+        self.podcast_view.play_requested.connect(self._play_podcast_episode)
+        self.podcast_view.status_message.connect(lambda m: self.show_toast(m, level="info"))
         self.radio_view.play_requested.connect(self._play_radio_station)
         self.radio_view.status_message.connect(lambda m: self.show_toast(m, level="success"))
         self.video_player_view.request_diagnostics.connect(self.show_diagnostics)
@@ -365,13 +380,14 @@ class MainWindow(QMainWindow):
         jump_action.setShortcut("Ctrl+L")
         playback_menu.addAction(jump_action)
 
-        # View menu with Ctrl+1..5 tab shortcuts
+        # View menu shortcuts preserve the historical tab accelerators even if
+        # the visual tab order changes.
         view_menu = m.addMenu("&View")
-        for idx, name in enumerate(self._TAB_ORDER):
+        for name in self._TAB_ORDER:
             act = QAction(name, self)
-            act.setShortcut(f"Ctrl+{idx + 1}")
+            act.setShortcut(self._TAB_SHORTCUTS[name])
             act.triggered.connect(
-                lambda checked=False, i=idx: self.tab_bar.setCurrentIndex(i)
+                lambda checked=False, i=self._tab_index[name]: self.tab_bar.setCurrentIndex(i)
             )
             view_menu.addAction(act)
 
@@ -564,6 +580,11 @@ class MainWindow(QMainWindow):
         self.video_player_view.pause_playback()
         self.player.play_url(url, title=title)
         self.show_toast(f"Playing radio: {title}", level="info")
+
+    def _play_podcast_episode(self, url: str, title: str) -> None:
+        self.video_player_view.pause_playback()
+        self.player.play_url(url, title=title)
+        self.show_toast(f"Playing podcast: {title}", level="info")
 
     def _on_video_resume_available(self, message: str, callback: object) -> None:
         if not callable(callback):
@@ -911,6 +932,7 @@ class MainWindow(QMainWindow):
             self.ripper_view.apply_settings(self.settings)
             self.now_playing._settings = self.settings
             self.video_player_view.apply_settings(self.settings)
+            self.podcast_view.apply_settings(self.settings)
             self.radio_view.apply_settings(self.settings)
             self.player.set_equalizer(
                 self.settings.equalizer_enabled,
@@ -965,6 +987,7 @@ class MainWindow(QMainWindow):
             self.ripper_view.apply_settings(self.settings)
             self.now_playing._settings = self.settings
             self.video_player_view.apply_settings(self.settings)
+            self.podcast_view.apply_settings(self.settings)
             self.radio_view.apply_settings(self.settings)
             self._restart_dlna_server(show_toast=False)
             if self.settings.library_paths:
@@ -1195,6 +1218,14 @@ class MainWindow(QMainWindow):
             if self._rg_scanner is scanner:
                 scanner.deleteLater()
                 self._rg_scanner = None
+        if not self.podcast_view.shutdown():
+            self.show_toast(
+                "Podcast refresh is still stopping. Try closing again in a moment.",
+                level="warning",
+                duration_ms=5000,
+            )
+            ev.ignore()
+            return
         self.player.stop()
         self.dlna_server.stop()
         self.youtube_view.shutdown()

@@ -5,7 +5,7 @@
 # Sea Lyon Media Manager
 
 Sea Lyon Media Manager is a Windows focused desktop media manager for local music,
-audio CD ripping, video playback, YouTube search/download, and library
+podcasts, internet radio, audio CD ripping, video playback, YouTube search/download, and library
 organization. It is written in Python with PySide6 and uses SQLite, Mutagen,
 libVLC, ffmpeg, yt-dlp, CUETools DB, MusicBrainz, TheAudioDB, Cover Art Archive,
 LRCLIB and libdiscid.
@@ -71,6 +71,15 @@ assets.
 - macOS media-key hook when the optional platform support is available.
 - Playback-unavailable fallback so the app can still open when VLC/libVLC is
   missing.
+
+### Podcasts And Radio
+
+- First-class Podcasts tab for saved RSS/Atom podcast feeds.
+- Add individual podcast feeds or import OPML subscription lists.
+- Background podcast refresh with searchable episode catalog.
+- Podcast episode playback uses the same libVLC stream pipeline as the main
+  audio player.
+- Internet Radio tab for saved live streams and imported M3U/PLS playlists.
 
 ### Equalizer And Now Playing
 

@@ -3,13 +3,13 @@
 Constructs a real MainWindow with a stub Player backend (so no libVLC
 is needed) and asserts the cross-cutting wiring established across
 Phases 1–7 still holds together:
-- tab order matches the documented Library/Now Playing/Video/Disc/Rip/YouTube
+- tab order matches the documented Library/Now Playing/Podcasts/Radio/Video/Disc/Rip/YouTube
 - clicking a tab swaps the QStackedWidget page
 - transport bar hides on the rip + video tabs, shows elsewhere
 - entering the Video tab pauses music playback
 - show_toast creates a Toast and replaces any prior toast
 - scan progress indicator toggles visibility around _start_scan
-- Ctrl+1..5 shortcuts are wired to the View menu
+- Ctrl+1..7 preserve historical tab shortcuts, and Podcasts uses Ctrl+8
 - window icon is set from branding.app_icon()
 """
 from __future__ import annotations
@@ -57,7 +57,7 @@ def main_window(qapp, fake_backend, monkeypatch, tmp_path):
 
 
 def test_tab_bar_renders_documented_order(main_window):
-    expected = ("Library", "Now Playing", "Radio", "Video", "Disc", "Rip", "YouTube")
+    expected = ("Library", "Now Playing", "Podcasts", "Radio", "Video", "Disc", "Rip", "YouTube")
     actual = tuple(
         main_window.tab_bar.tabText(i)
         for i in range(main_window.tab_bar.count())
@@ -212,6 +212,23 @@ def test_radio_play_request_uses_audio_player(main_window, monkeypatch):
     ]
 
 
+def test_podcast_play_request_uses_audio_player(main_window, monkeypatch):
+    calls = []
+    monkeypatch.setattr(main_window.video_player_view, "pause_playback", lambda: calls.append(("pause_video",)))
+    monkeypatch.setattr(
+        main_window.player,
+        "play_url",
+        lambda url, title=None: calls.append(("play_url", url, title)),
+    )
+
+    main_window._play_podcast_episode("https://podcasts.example.test/episode.mp3", "Sea Stories - One")
+
+    assert calls == [
+        ("pause_video",),
+        ("play_url", "https://podcasts.example.test/episode.mp3", "Sea Stories - One"),
+    ]
+
+
 def test_video_disc_handoff_reports_unavailable_video_player(main_window, monkeypatch):
     from lyon.core.disc_playback import DiscKind, VideoDiscSource
 
@@ -335,6 +352,7 @@ def test_ctrl_number_shortcuts_wired(main_window):
         "Disc":        "Ctrl+5",
         "Rip":         "Ctrl+6",
         "YouTube":     "Ctrl+7",
+        "Podcasts":    "Ctrl+8",
     }
     # Walk the menubar actions to find the View menu.
     view_menu = None
@@ -391,6 +409,26 @@ def test_close_event_waits_for_replaygain_scanner_to_stop(main_window):
     assert scanner.waited_ms == 3000
     assert event.ignored
     assert "ReplayGain scan is still stopping" in main_window._current_toast.message()
+
+
+def test_close_event_waits_for_podcast_refresh_to_stop(main_window, monkeypatch):
+    calls: list[bool] = []
+    monkeypatch.setattr(main_window.podcast_view, "shutdown", lambda: calls.append(True) or False)
+
+    class CloseEvent:
+        def __init__(self):
+            self.ignored = False
+
+        def ignore(self):
+            self.ignored = True
+
+    event = CloseEvent()
+
+    main_window.closeEvent(event)
+
+    assert calls == [True]
+    assert event.ignored is True
+    assert "Podcast refresh is still stopping" in main_window._current_toast.message()
 
 
 def test_watcher_events_are_filtered_to_current_library_roots(main_window, tmp_path):

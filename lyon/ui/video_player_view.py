@@ -16,6 +16,7 @@ Falls back to a friendly error screen when libVLC is not available.
 from __future__ import annotations
 
 import logging
+import sqlite3
 import sys
 from pathlib import Path
 from typing import Any
@@ -702,7 +703,11 @@ class VideoPlayerView(QWidget):
             card.deleteLater()
         self._catalog_cards.clear()
 
-        all_videos = list(self._library.all_tracks(media_type="video"))
+        try:
+            all_videos = list(self._library.all_tracks(media_type="video"))
+        except sqlite3.ProgrammingError:
+            LOG.debug("Skipping video catalog refresh because the library is closed.")
+            return
         missing_ids = {t.id for t in all_videos if not Path(t.path).exists()}
         for track_id in missing_ids:
             self._library.delete_track(track_id)
