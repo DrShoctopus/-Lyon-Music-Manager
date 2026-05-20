@@ -16,7 +16,7 @@ from lyon.core.library import Track
 from lyon.core.metadata import ArtistInfo
 from lyon.core.player import Player
 from lyon.core.settings import Settings
-from lyon.ui.now_playing import NowPlayingView, _fetch_lrclib
+from lyon.ui.now_playing import NowPlayingView, _fetch_lrclib, _parse_lrc
 
 
 class _FakeBackend(QtCore.QObject):
@@ -63,6 +63,26 @@ def _track(track_id: int = 1, title: str = "Song", duration: float = 200.0) -> T
         album="Album", track_no=1, disc_no=1, year=2026,
         genre="", duration=duration,
     )
+
+
+# ---- _parse_lrc: timing normalization -----------------------------------
+
+def test_parse_lrc_applies_offset_tag():
+    parsed = _parse_lrc("[offset: 250]\n[00:01.00]Line one\n[00:02.50]Line two")
+
+    assert parsed == [(750, "Line one"), (2250, "Line two")]
+
+
+def test_parse_lrc_clamps_offset_before_zero():
+    parsed = _parse_lrc("[offset:750]\n[00:00.50]Intro")
+
+    assert parsed == [(0, "Intro")]
+
+
+def test_parse_lrc_handles_repeated_timestamps_for_same_line():
+    parsed = _parse_lrc("[00:01.00][00:02.50]Echo")
+
+    assert parsed == [(1000, "Echo"), (2500, "Echo")]
 
 
 # ---- _fetch_lrclib: pure function tests ---------------------------------
@@ -282,6 +302,46 @@ def test_now_playing_artist_ready_ignores_stale_panel_update(player):
     assert "Wrong" not in labels
 
 
+def test_now_playing_artist_lookup_prefers_track_artist_over_album_artist(player):
+    view = NowPlayingView(player, settings=Settings())
+    track = _track(track_id=3)
+    track.artist = "Actual Artist"
+    track.album_artist = "Various Artists"
+
+    with patch("lyon.ui.now_playing.threading.Thread"):
+        view._load_artist_info(track)
+
+    assert view._artist_task_key == "actual artist"
+
+
+def test_now_playing_artist_ready_does_not_cache_empty_lookup(player):
+    view = NowPlayingView(player, settings=Settings())
+    view._artist_task_key = "artist"
+
+    view._on_artist_ready("artist", None, None)
+
+    assert "artist" not in view._artist_cache
+    labels = [label.text() for label in view._artist_panel.findChildren(QtWidgets.QLabel)]
+    assert "No artist information available." in labels
+
+
+def test_now_playing_artist_empty_lookup_does_not_block_later_success(player):
+    view = NowPlayingView(player, settings=Settings())
+    view._artist_task_key = "artist"
+    view._on_artist_ready("artist", None, None)
+    view._artist_task_key = "artist"
+
+    view._on_artist_ready(
+        "artist",
+        ArtistInfo(name="Artist", biography="Recovered bio."),
+        None,
+    )
+
+    labels = [label.text() for label in view._artist_panel.findChildren(QtWidgets.QLabel)]
+    assert "Recovered bio." in labels
+    assert view._artist_cache["artist"][0].biography == "Recovered bio."
+
+
 def test_synced_lyrics_scrolls_current_line_to_center(player, app):
     view = NowPlayingView(player, settings=Settings())
     view.resize(1100, 720)
@@ -302,6 +362,36 @@ def test_synced_lyrics_scrolls_current_line_to_center(player, app):
     line_center = panel._labels[30].geometry().center().y()
     viewport_center = bar.value() + (panel._scroll.viewport().height() / 2)
     assert abs(line_center - viewport_center) <= 2
+
+    view.close()
+    view.deleteLater()
+
+
+def test_synced_lyrics_loaded_after_position_update_uses_current_position(player, app):
+    view = NowPlayingView(player, settings=Settings())
+    panel = view._lyrics_panel
+
+    panel.update_position(5_500)
+    panel.set_lyrics([(1_000, "Early"), (5_000, "Now"), (9_000, "Later")])
+    app.processEvents()
+
+    assert panel._current_line == 1
+    assert panel._labels[1].objectName() == "lyricsLineCurrent"
+
+    view.close()
+    view.deleteLater()
+
+
+def test_synced_lyrics_do_not_highlight_before_first_timestamp(player, app):
+    view = NowPlayingView(player, settings=Settings())
+    panel = view._lyrics_panel
+
+    panel.set_lyrics([(10_000, "First vocal line"), (20_000, "Second")])
+    panel.update_position(5_000)
+    app.processEvents()
+
+    assert panel._current_line == -1
+    assert all(lbl.objectName() == "lyricsLine" for lbl in panel._labels)
 
     view.close()
     view.deleteLater()

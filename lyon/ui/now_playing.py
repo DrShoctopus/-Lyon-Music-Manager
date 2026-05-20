@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import bisect
+from decimal import Decimal, InvalidOperation
 import json
 import re
 import threading
@@ -32,19 +33,32 @@ _TRANSPORT_THUMB_SIZE = 60
 
 # ---- LRC parsing -------------------------------------------------------
 
-_LRC_RE = re.compile(r"\[(\d+):(\d+(?:\.\d+)?)\](.*)")
+_LRC_RE = re.compile(r"\[(\d+):(\d+(?:\.\d+)?)\]")
+_LRC_OFFSET_RE = re.compile(r"\[offset:\s*([+-]?\d+)\s*\]", re.IGNORECASE)
 
 
 def _parse_lrc(text: str) -> list[tuple[int, str]]:
     """Return sorted list of (ms, lyric_line) from an LRC string."""
     lines: list[tuple[int, str]] = []
+    offset_ms = 0
     for raw in text.splitlines():
-        m = _LRC_RE.match(raw.strip())
-        if m:
+        stripped = raw.strip()
+        offset_match = _LRC_OFFSET_RE.match(stripped)
+        if offset_match:
+            offset_ms = int(offset_match.group(1))
+            continue
+        matches = list(_LRC_RE.finditer(stripped))
+        if not matches:
+            continue
+        lyric_text = stripped[matches[-1].end():].strip()
+        for m in matches:
             mins = int(m.group(1))
-            secs = float(m.group(2))
-            ms = int((mins * 60 + secs) * 1000)
-            lines.append((ms, m.group(3).strip()))
+            try:
+                secs = Decimal(m.group(2))
+            except InvalidOperation:
+                continue
+            ms = int((Decimal(mins * 60) + secs) * 1000) - offset_ms
+            lines.append((max(0, ms), lyric_text))
     lines.sort(key=lambda x: x[0])
     return lines
 
@@ -124,6 +138,7 @@ class _LyricsPanel(QWidget):
         self._synced: list[tuple[int, str]] = []   # (ms, text) — empty = not synced
         self._timestamps: list[int] = []
         self._current_line = -1
+        self._last_position_ms = 0
         self._labels: list[QLabel] = []
 
         self._scroll = QScrollArea()
@@ -183,20 +198,24 @@ class _LyricsPanel(QWidget):
             self._vl.addWidget(lbl)
             self._labels.append(lbl)
         self._scroll.verticalScrollBar().setValue(0)
+        if synced:
+            self.update_position(self._last_position_ms)
 
     def clear(self) -> None:
         self.set_lyrics([], None)
 
     def update_position(self, pos_ms: int) -> None:
+        self._last_position_ms = max(0, int(pos_ms))
         if not self._synced or not self._labels:
             return
-        idx = bisect.bisect_right(self._timestamps, pos_ms) - 1
-        idx = max(0, min(idx, len(self._labels) - 1))
+        idx = bisect.bisect_right(self._timestamps, self._last_position_ms) - 1
+        if idx < 0:
+            self._clear_current_line()
+            return
+        idx = min(idx, len(self._labels) - 1)
         if idx == self._current_line:
             return
-        if 0 <= self._current_line < len(self._labels):
-            self._labels[self._current_line].setObjectName("lyricsLine")
-            self._repolish_label(self._labels[self._current_line])
+        self._clear_current_line()
         self._current_line = idx
         self._labels[idx].setObjectName("lyricsLineCurrent")
         self._repolish_label(self._labels[idx])
@@ -231,6 +250,12 @@ class _LyricsPanel(QWidget):
     def _recenter_current_line(self) -> None:
         if 0 <= self._current_line < len(self._labels):
             self._center_current_line(self._labels[self._current_line], animate=False)
+
+    def _clear_current_line(self) -> None:
+        if 0 <= self._current_line < len(self._labels):
+            self._labels[self._current_line].setObjectName("lyricsLine")
+            self._repolish_label(self._labels[self._current_line])
+        self._current_line = -1
 
     @staticmethod
     def _repolish_label(label: QLabel) -> None:
@@ -635,7 +660,7 @@ class NowPlayingView(QWidget):
     # ---- Artist info ---------------------------------------------------
 
     def _load_artist_info(self, track: Track) -> None:
-        artist = (track.display_artist or track.artist or "").strip()
+        artist = (track.artist or track.display_artist or "").strip()
         key = artist.casefold()
         self._artist_task_key = ""
         if not artist or key == "unknown artist":
@@ -661,10 +686,11 @@ class NowPlayingView(QWidget):
 
     def _on_artist_ready(self, key: str, info: object, image_bytes: object) -> None:
         image = image_bytes if isinstance(image_bytes, bytes) else None
-        self._artist_cache[key] = (info, image)
-        if len(self._artist_cache) > self._PANEL_CACHE_MAX:
-            for cache_key in list(self._artist_cache.keys())[:-self._PANEL_CACHE_MAX]:
-                del self._artist_cache[cache_key]
+        if info is not None:
+            self._artist_cache[key] = (info, image)
+            if len(self._artist_cache) > self._PANEL_CACHE_MAX:
+                for cache_key in list(self._artist_cache.keys())[:-self._PANEL_CACHE_MAX]:
+                    del self._artist_cache[cache_key]
         if key != self._artist_task_key:
             return
         self._artist_panel.set_artist(info, image)
