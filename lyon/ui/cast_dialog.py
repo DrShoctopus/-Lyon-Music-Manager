@@ -136,6 +136,8 @@ class CastDialog(QDialog):
 
     def closeEvent(self, ev) -> None:
         if self._discovery is not None and self._discovery.isRunning():
-            self._discovery.quit()
-            self._discovery.wait(2000)
+            self._discovery.stop()
+            if not self._discovery.wait(4000):
+                ev.ignore()
+                return
         super().closeEvent(ev)

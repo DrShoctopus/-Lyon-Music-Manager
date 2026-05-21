@@ -76,6 +76,18 @@ class DlnaServer:
     def base_url(self) -> str:
         return self._base_url
 
+    def media_url_for_track(self, track: Track) -> str | None:
+        """Return a playable media URL for a library track, or None if unavailable."""
+        if not track.is_library_item:
+            return None
+        stored = self.library.track_by_id(track.id)
+        if stored is None:
+            return None
+        path = self._track_file_path(stored)
+        if path is None or not path.exists() or not path.is_file():
+            return None
+        return f"{self.base_url}/media/{stored.id}/{quote(path.name)}"
+
     def start(self) -> None:
         if self.running:
             return
@@ -451,7 +463,8 @@ class DlnaServer:
         mime = _mime_type(path)
         parent = "video" if track.media_type == "video" else "audio"
         upnp_class = "object.item.videoItem" if track.media_type == "video" else "object.item.audioItem.musicTrack"
-        url = f"{self.base_url}/media/{track.id}/{quote(path.name)}"
+        url = self.media_url_for_track(track)
+        assert url is not None
         stat = path.stat()
         attrs = f'protocolInfo="http-get:*:{escape(mime)}:*" size="{stat.st_size}"'
         if track.duration > 0:

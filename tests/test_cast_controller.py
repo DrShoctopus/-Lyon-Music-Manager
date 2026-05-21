@@ -51,6 +51,11 @@ def _make_dlna(base_url: str = "http://192.168.1.1:8200", running: bool = True):
     dlna = MagicMock()
     dlna.base_url = base_url
     dlna.running = running
+    dlna.media_url_for_track.side_effect = (
+        lambda track: None
+        if not track.path or not track.is_library_item
+        else f"{base_url}/media/{track.id}/{Path(track.path).name.replace(' ', '%20')}"
+    )
     return dlna
 
 
@@ -68,6 +73,13 @@ def test_media_url_builds_correctly():
 def test_media_url_no_path():
     dlna = _make_dlna("http://192.168.1.1:8200")
     track = _make_track("", track_id=1)
+    assert _media_url(dlna, track) is None
+
+
+def test_media_url_rejects_non_library_track():
+    dlna = _make_dlna("http://192.168.1.1:8200")
+    track = _make_track("/music/stream.mp3", track_id=0)
+    track.is_library_item = False
     assert _media_url(dlna, track) is None
 
 
@@ -161,7 +173,7 @@ def test_start_cast_sends_set_uri_and_play(qapp):
     assert mock_post.call_count == 2
     actions = [c.kwargs["headers"]["SOAPAction"] for c in mock_post.call_args_list]
     assert any("SetAVTransportURI" in a for a in actions)
-    assert any('"Play"' in a for a in actions)
+    assert any(a.endswith('#Play"') for a in actions)
 
 
 def test_start_cast_pauses_local_player(qapp):
@@ -230,6 +242,23 @@ def test_start_cast_emits_error_when_dlna_not_running(qapp):
     assert "DLNA sharing" in errors[0]
 
 
+def test_start_cast_emits_error_when_track_not_servable(qapp):
+    renderer = _make_renderer()
+    track = _make_track("/music/stream.mp3", track_id=0)
+    track.is_library_item = False
+    player = _make_player(track=track)
+    dlna = _make_dlna()
+
+    ctrl = CastController()
+    errors = []
+    ctrl.cast_error.connect(errors.append)
+
+    ctrl.start_cast(renderer, player, dlna)
+
+    assert errors
+    assert "file not found in library" in errors[0]
+
+
 def test_start_cast_emits_error_on_soap_failure(qapp):
     renderer = _make_renderer()
     track = _make_track()
@@ -268,7 +297,7 @@ def test_stop_cast_sends_stop_soap(qapp):
 
     assert mock_post.call_count == 1
     action = mock_post.call_args.kwargs["headers"]["SOAPAction"]
-    assert '"Stop"' in action
+    assert action.endswith('#Stop"')
 
 
 def test_stop_cast_emits_cast_stopped(qapp):

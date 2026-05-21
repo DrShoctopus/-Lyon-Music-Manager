@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 import logging
+import random
 from pathlib import Path
-from urllib.parse import quote
 from xml.sax.saxutils import escape
 
 import requests
@@ -12,7 +12,7 @@ from PySide6.QtCore import QObject, Signal
 from .dlna_renderer_discovery import RendererDevice
 from .dlna_server import DlnaServer
 from .library import Track
-from .player import Player
+from .player import Player, RepeatMode
 
 LOG = logging.getLogger(__name__)
 
@@ -32,12 +32,14 @@ class CastController(QObject):
     cast_started = Signal(str)
     cast_stopped = Signal()
     cast_error = Signal(str)
+    cast_playback_state_changed = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._renderer: RendererDevice | None = None
         self._player: Player | None = None
         self._dlna: DlnaServer | None = None
+        self._remote_playing = False
 
     # ------------------------------------------------------------------
     # Public API
@@ -98,6 +100,7 @@ class CastController(QObject):
         self._renderer = renderer
         self._player = player
         self._dlna = dlna_server
+        self._remote_playing = True
 
         # Pause local audio BEFORE connecting signals so the resulting
         # state_changed("paused") does not propagate to the renderer.
@@ -107,6 +110,7 @@ class CastController(QObject):
         player.track_changed.connect(self._on_track_changed)
 
         self.cast_started.emit(renderer.friendly_name)
+        self.cast_playback_state_changed.emit("playing")
 
     def stop_cast(self) -> None:
         """Stop the active cast session and send Stop to the renderer."""
@@ -119,6 +123,7 @@ class CastController(QObject):
         self._renderer = None
         self._dlna = None
         self._player = None
+        self._remote_playing = False
 
         if player is not None:
             try:
@@ -135,6 +140,68 @@ class CastController(QObject):
             LOG.debug("Stop SOAP failed (renderer may be gone): %s", exc)
 
         self.cast_stopped.emit()
+        self.cast_playback_state_changed.emit("stopped")
+
+    def toggle_play_pause(self) -> None:
+        """Toggle playback on the renderer without resuming local audio."""
+        if self._renderer is None:
+            return
+        if self._remote_playing:
+            self._send_transport_action("Pause", {"InstanceID": "0"}, state="paused")
+        else:
+            self._send_transport_action(
+                "Play",
+                {"InstanceID": "0", "Speed": "1"},
+                state="playing",
+            )
+
+    def next_track(self) -> None:
+        """Advance the cast queue and load the next track on the renderer."""
+        player = self._player
+        if player is None:
+            return
+        queue = player.queue()
+        if not queue:
+            return
+
+        index = player.current_index()
+        if player.repeat() == RepeatMode.ONE and 0 <= index < len(queue):
+            self._select_queue_index(index)
+            return
+        if player.shuffle():
+            candidates = [i for i in range(len(queue)) if i != index]
+            if candidates:
+                self._select_queue_index(random.choice(candidates))
+            elif player.repeat() == RepeatMode.ALL and 0 <= index < len(queue):
+                self._select_queue_index(index)
+            else:
+                self.stop_cast()
+            return
+        if index + 1 < len(queue):
+            self._select_queue_index(index + 1)
+        elif player.repeat() == RepeatMode.ALL and queue:
+            self._select_queue_index(0)
+        else:
+            self.stop_cast()
+
+    def previous_track(self) -> None:
+        """Move the cast queue to the previous track."""
+        player = self._player
+        if player is None:
+            return
+        index = player.current_index()
+        if index > 0:
+            self._select_queue_index(index - 1)
+
+    def _select_queue_index(self, index: int) -> None:
+        player = self._player
+        if player is None:
+            return
+        queue = player.queue()
+        if not (0 <= index < len(queue)):
+            return
+        self._remote_playing = True
+        player.load_queue(queue, index)
 
     # ------------------------------------------------------------------
     # Player signal handlers
@@ -145,18 +212,32 @@ class CastController(QObject):
             return
         try:
             if state == "playing":
-                _soap(self._renderer.av_transport_url, _AV_TRANSPORT_NS, "Play", {
-                    "InstanceID": "0",
-                    "Speed": "1",
-                })
+                _soap(
+                    self._renderer.av_transport_url,
+                    _AV_TRANSPORT_NS,
+                    "Play",
+                    {"InstanceID": "0", "Speed": "1"},
+                )
+                self._remote_playing = True
+                self.cast_playback_state_changed.emit("playing")
             elif state == "paused":
-                _soap(self._renderer.av_transport_url, _AV_TRANSPORT_NS, "Pause", {
-                    "InstanceID": "0",
-                })
+                _soap(
+                    self._renderer.av_transport_url,
+                    _AV_TRANSPORT_NS,
+                    "Pause",
+                    {"InstanceID": "0"},
+                )
+                self._remote_playing = False
+                self.cast_playback_state_changed.emit("paused")
             elif state == "stopped":
-                _soap(self._renderer.av_transport_url, _AV_TRANSPORT_NS, "Stop", {
-                    "InstanceID": "0",
-                })
+                _soap(
+                    self._renderer.av_transport_url,
+                    _AV_TRANSPORT_NS,
+                    "Stop",
+                    {"InstanceID": "0"},
+                )
+                self._remote_playing = False
+                self.cast_playback_state_changed.emit("stopped")
         except Exception as exc:
             LOG.warning("Cast state sync failed: %s", exc)
             self.cast_error.emit(f"Lost connection to renderer: {exc}")
@@ -172,10 +253,14 @@ class CastController(QObject):
                 })
             except Exception:
                 pass
+            self._remote_playing = False
+            self.cast_playback_state_changed.emit("stopped")
             return
 
         media_url = _media_url(self._dlna, track)
         if media_url is None:
+            self.cast_error.emit("Cannot cast this track — file is not available over DLNA.")
+            self.stop_cast()
             return
 
         try:
@@ -188,9 +273,29 @@ class CastController(QObject):
                 "InstanceID": "0",
                 "Speed": "1",
             })
+            self._remote_playing = True
+            self.cast_playback_state_changed.emit("playing")
         except Exception as exc:
             LOG.warning("Cast track-change failed: %s", exc)
             self.cast_error.emit(f"Cast lost: {exc}")
+
+    def _send_transport_action(
+        self,
+        action: str,
+        args: dict[str, str],
+        *,
+        state: str,
+    ) -> None:
+        if self._renderer is None:
+            return
+        try:
+            _soap(self._renderer.av_transport_url, _AV_TRANSPORT_NS, action, args)
+        except Exception as exc:
+            LOG.warning("Cast transport action failed: %s", exc)
+            self.cast_error.emit(f"Lost connection to renderer: {exc}")
+            return
+        self._remote_playing = state == "playing"
+        self.cast_playback_state_changed.emit(state)
 
 
 # ---------------------------------------------------------------------------
@@ -198,10 +303,7 @@ class CastController(QObject):
 # ---------------------------------------------------------------------------
 
 def _media_url(dlna_server: DlnaServer, track: Track) -> str | None:
-    if not track.path:
-        return None
-    name = Path(track.path).name
-    return f"{dlna_server.base_url}/media/{track.id}/{quote(name)}"
+    return dlna_server.media_url_for_track(track)
 
 
 def _didl(track: Track, url: str) -> str:

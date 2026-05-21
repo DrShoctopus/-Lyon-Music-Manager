@@ -129,6 +129,9 @@ class MainWindow(QMainWindow):
         self.cast_controller.cast_error.connect(
             lambda msg: self.show_toast(msg, level="warning")
         )
+        self.cast_controller.cast_playback_state_changed.connect(
+            self._on_cast_playback_state_changed
+        )
         self._scan_thread: _LibraryScanThread | None = None
         self._rg_scanner: ReplayGainScanner | None = None
         self._watch_index_thread: LibraryIndexThread | None = None
@@ -260,6 +263,9 @@ class MainWindow(QMainWindow):
         self.transport.open_now_playing.connect(
             lambda: self.tab_bar.setCurrentIndex(self._tab_index["Now Playing"]))
         self.transport.play_requested.connect(self._on_transport_play_requested)
+        self.transport.previous_requested.connect(self._on_transport_previous_requested)
+        self.transport.next_requested.connect(self._on_transport_next_requested)
+        self.transport.stop_requested.connect(self._on_transport_stop_requested)
         layout.addWidget(self.transport)
 
         self.setCentralWidget(root)
@@ -377,10 +383,10 @@ class MainWindow(QMainWindow):
         play_action = QAction("Play/Pause", self, triggered=self._on_transport_play_requested)
         play_action.setShortcut("Ctrl+Space")
         playback_menu.addAction(play_action)
-        prev_action = QAction("Previous", self, triggered=self.player.previous)
+        prev_action = QAction("Previous", self, triggered=self._on_transport_previous_requested)
         prev_action.setShortcut("Ctrl+Left")
         playback_menu.addAction(prev_action)
-        next_action = QAction("Next", self, triggered=self.player.next)
+        next_action = QAction("Next", self, triggered=self._on_transport_next_requested)
         next_action.setShortcut("Ctrl+Right")
         playback_menu.addAction(next_action)
         queue_action = QAction("Show Queue", self, triggered=self.open_queue)
@@ -431,6 +437,9 @@ class MainWindow(QMainWindow):
         )
 
     def _on_transport_play_requested(self) -> None:
+        if self.cast_controller.is_casting:
+            self.cast_controller.toggle_play_pause()
+            return
         if self.stack.currentWidget() is self.library_view and not self.player.is_playing():
             playback = self.library_view.highlighted_playback()
             if playback is not None:
@@ -438,6 +447,24 @@ class MainWindow(QMainWindow):
                 self.player.set_queue(tracks, start_index)
                 return
         self.player.toggle()
+
+    def _on_transport_previous_requested(self) -> None:
+        if self.cast_controller.is_casting:
+            self.cast_controller.previous_track()
+            return
+        self.player.previous()
+
+    def _on_transport_next_requested(self) -> None:
+        if self.cast_controller.is_casting:
+            self.cast_controller.next_track()
+            return
+        self.player.next()
+
+    def _on_transport_stop_requested(self) -> None:
+        if self.cast_controller.is_casting:
+            self.cast_controller.stop_cast()
+            return
+        self.player.stop()
 
     def _on_playback_unavailable(self, reason: str) -> None:
         self.show_toast(
@@ -1091,6 +1118,7 @@ class MainWindow(QMainWindow):
             self._cast_btn.style().polish(self._cast_btn)
         if self._cast_dialog is not None:
             self._cast_dialog.update_cast_state(True, name)
+        self._on_cast_playback_state_changed("playing")
         self.show_toast(f"Casting to {name}.", level="success")
 
     def _on_cast_stopped(self) -> None:
@@ -1100,7 +1128,11 @@ class MainWindow(QMainWindow):
             self._cast_btn.style().polish(self._cast_btn)
         if self._cast_dialog is not None:
             self._cast_dialog.update_cast_state(False)
+        self._on_cast_playback_state_changed("stopped")
         self.show_toast("Cast stopped.", level="info")
+
+    def _on_cast_playback_state_changed(self, state: str) -> None:
+        self.transport.play_btn.set_playing(state == "playing")
 
     # ------------------------------------------------------------------
 

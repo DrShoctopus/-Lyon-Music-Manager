@@ -177,6 +177,22 @@ def test_dlna_media_endpoint_supports_byte_ranges(tmp_path):
     assert body == b"ample"
 
 
+def test_dlna_media_url_for_track_matches_servable_media(tmp_path):
+    library = Library(tmp_path / "library.db")
+    track_id = _insert_track(library, tmp_path / "My Song.mp3")
+    server = DlnaServer(library, Settings(music_root=str(tmp_path), dlna_port=0))
+    server._base_url = "http://127.0.0.1:8200"
+    try:
+        track = library.track_by_id(track_id)
+        assert track is not None
+        assert (
+            server.media_url_for_track(track)
+            == f"http://127.0.0.1:8200/media/{track_id}/My%20Song.mp3"
+        )
+    finally:
+        library.close()
+
+
 def test_dlna_rejects_track_outside_configured_library_roots(tmp_path):
     library_root = tmp_path / "Music"
     library_root.mkdir()
@@ -190,6 +206,9 @@ def test_dlna_rejects_track_outside_configured_library_roots(tmp_path):
         server.serve_media(handler, track_id, send_body=True)
         assert handler.status == 404
         assert handler.wfile.getvalue() == b"Media file not found"
+        track = library.track_by_id(track_id)
+        assert track is not None
+        assert server.media_url_for_track(track) is None
 
         soap = b"""<?xml version="1.0"?>
 <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">

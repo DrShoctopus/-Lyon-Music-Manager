@@ -798,6 +798,9 @@ class TransportBar(QWidget):
 
     open_now_playing = Signal()
     play_requested = Signal()
+    previous_requested = Signal()
+    next_requested = Signal()
+    stop_requested = Signal()
 
     def __init__(
         self,
@@ -853,9 +856,9 @@ class TransportBar(QWidget):
         self.vol_btn.set_state(player.volume(), player.is_muted())
 
         self.play_btn.clicked.connect(self.play_requested.emit)
-        self.prev_btn.clicked.connect(player.previous)
-        self.next_btn.clicked.connect(player.next)
-        self.stop_btn.clicked.connect(player.stop)
+        self.prev_btn.clicked.connect(self.previous_requested.emit)
+        self.next_btn.clicked.connect(self.next_requested.emit)
+        self.stop_btn.clicked.connect(self.stop_requested.emit)
         self.shuffle_btn.toggled.connect(player.set_shuffle)
         self.shuffle_btn.setChecked(player.shuffle())
         self.repeat_btn.set_state(self._repeat_to_int(player.repeat()))

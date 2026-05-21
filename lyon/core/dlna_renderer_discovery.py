@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import socket
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from urllib.parse import urljoin
 
@@ -51,15 +52,23 @@ class RendererDiscovery(QThread):
         self._timeout = timeout
 
     def run(self) -> None:
-        devices = _scan(self._timeout)
+        devices = _scan(self._timeout, should_stop=self.isInterruptionRequested)
         self.discovered.emit(devices)
+
+    def stop(self) -> None:
+        self.requestInterruption()
 
 
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _scan(timeout: float) -> list[RendererDevice]:
+def _scan(
+    timeout: float,
+    *,
+    should_stop: Callable[[], bool] | None = None,
+) -> list[RendererDevice]:
+    should_stop = should_stop or (lambda: False)
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -71,29 +80,34 @@ def _scan(timeout: float) -> list[RendererDevice]:
         return []
 
     try:
-        sock.sendto(_MSEARCH.encode("utf-8"), _SSDP_ADDR)
-    except OSError as exc:
-        LOG.warning("Renderer discovery: M-SEARCH failed: %s", exc)
-        sock.close()
-        return []
-
-    locations: set[str] = set()
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
+        if should_stop():
+            return []
         try:
-            data, _ = sock.recvfrom(4096)
-        except TimeoutError:
-            continue
-        except OSError:
-            break
-        text = data.decode("utf-8", "ignore")
-        location = _header_value(text, "LOCATION")
-        if location:
-            locations.add(location)
-    sock.close()
+            sock.sendto(_MSEARCH.encode("utf-8"), _SSDP_ADDR)
+        except OSError as exc:
+            LOG.warning("Renderer discovery: M-SEARCH failed: %s", exc)
+            return []
+
+        locations: set[str] = set()
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline and not should_stop():
+            try:
+                data, _ = sock.recvfrom(4096)
+            except TimeoutError:
+                continue
+            except OSError:
+                break
+            text = data.decode("utf-8", "ignore")
+            location = _header_value(text, "LOCATION")
+            if location:
+                locations.add(location)
+    finally:
+        sock.close()
 
     devices: list[RendererDevice] = []
     for location in locations:
+        if should_stop():
+            break
         device = _fetch_device(location)
         if device is not None:
             devices.append(device)

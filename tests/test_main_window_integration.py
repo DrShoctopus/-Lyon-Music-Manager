@@ -229,6 +229,38 @@ def test_podcast_play_request_uses_audio_player(main_window, monkeypatch):
     ]
 
 
+def test_transport_controls_route_to_cast_controller_while_casting(main_window, monkeypatch):
+    calls = []
+    main_window.cast_controller._renderer = object()
+    monkeypatch.setattr(
+        main_window.cast_controller,
+        "toggle_play_pause",
+        lambda: calls.append("toggle_cast"),
+    )
+    monkeypatch.setattr(
+        main_window.cast_controller,
+        "previous_track",
+        lambda: calls.append("previous_cast"),
+    )
+    monkeypatch.setattr(
+        main_window.cast_controller,
+        "next_track",
+        lambda: calls.append("next_cast"),
+    )
+    monkeypatch.setattr(
+        main_window.cast_controller,
+        "stop_cast",
+        lambda: calls.append("stop_cast"),
+    )
+
+    main_window._on_transport_play_requested()
+    main_window._on_transport_previous_requested()
+    main_window._on_transport_next_requested()
+    main_window._on_transport_stop_requested()
+
+    assert calls == ["toggle_cast", "previous_cast", "next_cast", "stop_cast"]
+
+
 def test_video_disc_handoff_reports_unavailable_video_player(main_window, monkeypatch):
     from lyon.core.disc_playback import DiscKind, VideoDiscSource
 
