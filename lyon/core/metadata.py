@@ -5,7 +5,9 @@ import logging
 import re
 import threading
 import time
+from collections import OrderedDict
 from collections.abc import Callable
+from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, Optional
 from urllib.parse import urljoin, urlparse
@@ -48,6 +50,11 @@ _last_musicbrainz_useragent: tuple[str, str, str] | None = None
 # MusicBrainz API ToS requires ≤1 request per second.
 _mb_rate_limit_lock = threading.Lock()
 _mb_last_request_time: float = 0.0
+
+_METADATA_CACHE_TTL_SECONDS = 15 * 60
+_DISC_LOOKUP_CACHE_MAX = 128
+_ALBUM_SEARCH_CACHE_MAX = 128
+_ARTIST_LOOKUP_CACHE_MAX = 128
 
 
 def __getattr__(name: str) -> Any:
@@ -108,6 +115,21 @@ class ArtistInfo:
     metadata_source: str = "theaudiodb"
 
 
+_CacheValue = AlbumInfo | ArtistInfo | None
+_metadata_cache_lock = threading.RLock()
+_disc_lookup_cache: "OrderedDict[tuple[Any, ...], tuple[float, _CacheValue]]" = OrderedDict()
+_album_search_cache: "OrderedDict[tuple[Any, ...], tuple[float, _CacheValue]]" = OrderedDict()
+_artist_lookup_cache: "OrderedDict[tuple[Any, ...], tuple[float, _CacheValue]]" = OrderedDict()
+
+
+def clear_metadata_cache() -> None:
+    """Clear bounded metadata lookup caches used by network provider fallbacks."""
+    with _metadata_cache_lock:
+        _disc_lookup_cache.clear()
+        _album_search_cache.clear()
+        _artist_lookup_cache.clear()
+
+
 def _get_http_session() -> "requests.Session":
     global _http_session
     if _http_session is None:
@@ -129,6 +151,47 @@ def _http_get(url: str, **kwargs: Any) -> "requests.Response":
     if requests.get is not _DEFAULT_REQUESTS_GET:
         return requests.get(url, **kwargs)
     return _get_http_session().get(url, **kwargs)
+
+
+def _cache_get(
+    cache: "OrderedDict[tuple[Any, ...], tuple[float, _CacheValue]]",
+    key: tuple[Any, ...],
+) -> _CacheValue | object:
+    now = time.monotonic()
+    with _metadata_cache_lock:
+        entry = cache.get(key)
+        if entry is None:
+            return _CACHE_MISS
+        created_at, value = entry
+        if now - created_at > _METADATA_CACHE_TTL_SECONDS:
+            cache.pop(key, None)
+            return _CACHE_MISS
+        cache.move_to_end(key)
+        return deepcopy(value)
+
+
+def _cache_put(
+    cache: "OrderedDict[tuple[Any, ...], tuple[float, _CacheValue]]",
+    key: tuple[Any, ...],
+    value: _CacheValue,
+    max_size: int,
+) -> None:
+    with _metadata_cache_lock:
+        cache[key] = (time.monotonic(), deepcopy(value))
+        cache.move_to_end(key)
+        while len(cache) > max_size:
+            cache.popitem(last=False)
+
+
+_CACHE_MISS = object()
+
+
+def _function_cache_token(fn: Any) -> tuple[str, int]:
+    return (getattr(fn, "__name__", type(fn).__name__), id(fn))
+
+
+def _metadata_cache_text(value: Any) -> str:
+    return _text(value).strip()
 
 
 def _current_settings() -> Any:
@@ -202,6 +265,23 @@ def lookup_disc(
     use_cuetools_db: bool | None = None,
 ) -> Optional[AlbumInfo]:
     """Look up an album by disc identity using the supported provider order."""
+    diagnostics_enabled = bool(getattr(_current_settings(), "metadata_diagnostics_enabled", False))
+    cache_key = (
+        "lookup_disc",
+        _metadata_cache_text(discid_str),
+        _metadata_cache_text(toc),
+        _metadata_cache_text(ctdb_toc),
+        _use_cuetools_db(use_cuetools_db),
+        diagnostics_enabled,
+        _theaudiodb_api_key(),
+        _function_cache_token(lookup_cuetools_db_disc),
+        _function_cache_token(lookup_musicbrainz_disc),
+        _function_cache_token(search_theaudiodb_album),
+    )
+    cached = _cache_get(_disc_lookup_cache, cache_key)
+    if cached is not _CACHE_MISS:
+        return cached  # type: ignore[return-value]
+
     provider_attempts: list[tuple[str, AlbumInfo | None]] = []
     providers: list[tuple[str, Callable[[], Optional[AlbumInfo]]]] = []
     if _use_cuetools_db(use_cuetools_db):
@@ -216,10 +296,14 @@ def lookup_disc(
         info = provider()
         provider_attempts.append((provider_name, info))
         if _has_usable_metadata(info):
-            return _with_theaudiodb_enrichment(info)
+            result = _with_theaudiodb_enrichment(info)
+            _cache_put(_disc_lookup_cache, cache_key, result, _DISC_LOOKUP_CACHE_MAX)
+            return result
 
-    if _metadata_diagnostics_enabled():
+    if diagnostics_enabled and _metadata_diagnostics_enabled():
         _log_empty_disc_lookup(discid_str, toc, ctdb_toc, use_cuetools_db, provider_attempts)
+    if not diagnostics_enabled:
+        _cache_put(_disc_lookup_cache, cache_key, None, _DISC_LOOKUP_CACHE_MAX)
     return None
 
 
@@ -390,18 +474,35 @@ def lookup_cuetools_db_layout(ctdb_toc: str | None, *, fuzzy: bool = False) -> O
 
 def search_album(artist: str, album: str) -> Optional[AlbumInfo]:
     """Search album metadata providers, preferring results with track data."""
+    providers = _album_search_providers()
+    diagnostics_enabled = bool(getattr(_current_settings(), "metadata_diagnostics_enabled", False))
+    cache_key = (
+        "search_album",
+        _metadata_cache_text(artist),
+        _metadata_cache_text(album),
+        diagnostics_enabled,
+        _theaudiodb_api_key(),
+        tuple(_function_cache_token(provider) for provider in providers),
+    )
+    cached = _cache_get(_album_search_cache, cache_key)
+    if cached is not _CACHE_MISS:
+        return cached  # type: ignore[return-value]
+
     fallback_info = None
     provider_attempts: list[tuple[str, AlbumInfo | None]] = []
-    for provider in _album_search_providers():
+    for provider in providers:
         provider_name = _provider_log_name(provider)
         info = provider(artist, album)
         provider_attempts.append((provider_name, info))
         if _has_track_metadata(info):
+            _cache_put(_album_search_cache, cache_key, info, _ALBUM_SEARCH_CACHE_MAX)
             return info
         if fallback_info is None and _has_basic_metadata(info):
             fallback_info = info
-    if fallback_info is None and _metadata_diagnostics_enabled():
+    if fallback_info is None and diagnostics_enabled and _metadata_diagnostics_enabled():
         _log_empty_album_search(artist, album, provider_attempts)
+    if fallback_info is not None or not diagnostics_enabled:
+        _cache_put(_album_search_cache, cache_key, fallback_info, _ALBUM_SEARCH_CACHE_MAX)
     return fallback_info
 
 
@@ -559,6 +660,16 @@ def lookup_artist_info(artist: str) -> Optional[ArtistInfo]:
     artist = artist.strip()
     if not artist or artist.casefold() == "unknown artist":
         return None
+    cache_key = (
+        "lookup_artist_info",
+        artist,
+        _theaudiodb_api_key(),
+        _function_cache_token(_get_json),
+    )
+    cached = _cache_get(_artist_lookup_cache, cache_key)
+    if cached is not _CACHE_MISS:
+        return cached  # type: ignore[return-value]
+
     payload = _get_json(_theaudiodb_url("search.php"), params={"s": artist})
     artists = _ensure_list(payload.get("artists") or payload.get("artist"))
     match = next(
@@ -569,8 +680,11 @@ def lookup_artist_info(artist: str) -> Optional[ArtistInfo]:
         None,
     )
     if not isinstance(match, dict):
+        _cache_put(_artist_lookup_cache, cache_key, None, _ARTIST_LOOKUP_CACHE_MAX)
         return None
-    return _theaudiodb_artist_to_info(match, artist)
+    info = _theaudiodb_artist_to_info(match, artist)
+    _cache_put(_artist_lookup_cache, cache_key, info, _ARTIST_LOOKUP_CACHE_MAX)
+    return info
 
 
 def fetch_artist_image(artist: ArtistInfo) -> bytes | None:

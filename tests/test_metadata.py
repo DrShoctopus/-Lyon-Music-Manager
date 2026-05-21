@@ -3,6 +3,8 @@ import sys
 import types
 import xml.etree.ElementTree as ET
 
+import pytest
+
 
 def _install_dependency_stubs() -> None:
     if importlib.util.find_spec("musicbrainzngs") is None:
@@ -25,6 +27,13 @@ from lyon.core.metadata import (  # noqa: E402
     _musicbrainz_toc_to_ctdb_toc,
     _release_to_album,
 )
+
+
+@pytest.fixture(autouse=True)
+def _clear_metadata_caches():
+    metadata.clear_metadata_cache()
+    yield
+    metadata.clear_metadata_cache()
 
 
 def _stub_settings(monkeypatch) -> None:
@@ -99,6 +108,34 @@ def test_lookup_disc_uses_cuetools_db_before_musicbrainz(monkeypatch):
 
     assert metadata.lookup_disc("disc-id", "mb-toc", ctdb_toc="ctdb-toc") is ctdb_album
     assert calls == [("cuetools", "mb-toc", "ctdb-toc")]
+
+
+def test_lookup_disc_caches_repeated_success(monkeypatch):
+    ctdb_album = metadata.AlbumInfo(
+        artist="CTDB Artist",
+        album="CTDB Album",
+        artwork_url="https://example.test/cover.jpg",
+        tracks=[metadata.TrackInfo(number=1, title="Song")],
+    )
+    calls = []
+
+    def fake_cuetools(toc, ctdb_toc=None):
+        calls.append((toc, ctdb_toc))
+        return ctdb_album
+
+    def fail_musicbrainz(*_args):
+        raise AssertionError("cached CTDB result should avoid MusicBrainz")
+
+    monkeypatch.setattr(metadata, "lookup_cuetools_db_disc", fake_cuetools)
+    monkeypatch.setattr(metadata, "lookup_musicbrainz_disc", fail_musicbrainz)
+
+    first = metadata.lookup_disc("disc-id", "mb-toc", ctdb_toc="ctdb-toc")
+    second = metadata.lookup_disc("disc-id", "mb-toc", ctdb_toc="ctdb-toc")
+
+    assert first is ctdb_album
+    assert second is not ctdb_album
+    assert second.album == "CTDB Album"
+    assert calls == [("mb-toc", "ctdb-toc")]
 
 
 def test_lookup_disc_respects_cuetools_toggle(monkeypatch):
@@ -285,6 +322,41 @@ def test_search_album_uses_musicbrainz_before_theaudiodb(monkeypatch):
     ]
 
 
+def test_search_album_caches_repeated_success(monkeypatch):
+    calls = []
+    audiodb_album = metadata.AlbumInfo(
+        artist="AudioDB Artist",
+        album="AudioDB Album",
+        tracks=[metadata.TrackInfo(number=1, title="Song")],
+        metadata_source="theaudiodb",
+    )
+
+    def musicbrainz_provider(artist, album):
+        calls.append(("musicbrainz", artist, album))
+        return None
+
+    def audiodb_provider(artist, album):
+        calls.append(("theaudiodb", artist, album))
+        return audiodb_album
+
+    monkeypatch.setattr(
+        metadata,
+        "_album_search_providers",
+        lambda: (musicbrainz_provider, audiodb_provider),
+    )
+
+    first = metadata.search_album("Artist", "Album")
+    second = metadata.search_album("Artist", "Album")
+
+    assert first is audiodb_album
+    assert second is not audiodb_album
+    assert second.album == "AudioDB Album"
+    assert calls == [
+        ("musicbrainz", "Artist", "Album"),
+        ("theaudiodb", "Artist", "Album"),
+    ]
+
+
 def test_provider_names_keep_only_supported_metadata_sources():
     assert metadata.DISC_METADATA_PROVIDER_ORDER == ("cuetools_db", "musicbrainz")
     assert metadata.ALBUM_METADATA_PROVIDER_ORDER == ("musicbrainz", "theaudiodb")
@@ -418,6 +490,36 @@ def test_theaudiodb_artist_lookup_maps_bio_image_and_similar(monkeypatch):
     assert artist.similar_artists == ["A", "B", "C"]
     assert calls[0][0].endswith("/123/search.php")
     assert calls[0][1] == {"s": "Artist"}
+
+
+def test_artist_lookup_caches_repeated_success_and_clear_invalidates(monkeypatch):
+    calls = []
+
+    def fake_get_json(url, params=None, headers=None):
+        calls.append((url, params, headers))
+        return {
+            "artists": [
+                {
+                    "strArtist": "Artist",
+                    "strBiographyEN": "Artist biography.",
+                }
+            ]
+        }
+
+    monkeypatch.setattr(metadata, "_get_json", fake_get_json)
+    monkeypatch.setattr(metadata, "_theaudiodb_api_key", lambda: "123")
+
+    first = metadata.lookup_artist_info("Artist")
+    second = metadata.lookup_artist_info("Artist")
+    metadata.clear_metadata_cache()
+    third = metadata.lookup_artist_info("Artist")
+
+    assert first is not None
+    assert second is not None
+    assert third is not None
+    assert first is not second
+    assert first.name == second.name == third.name == "Artist"
+    assert len(calls) == 2
 
 
 def test_artist_lookup_skips_unknown_artist(monkeypatch):
