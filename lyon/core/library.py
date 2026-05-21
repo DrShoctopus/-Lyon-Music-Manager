@@ -381,8 +381,21 @@ class Library:
         file_path = Path(path)
         art = _find_video_artwork(file_path) if media_type == "video" else None
         art = art or _find_local_artwork(file_path.parent)
-        # Hash audio files only; video files are large and hashing gives little benefit.
-        file_hash = _compute_file_hash(path) if media_type == "audio" else None
+        previous_hash = (
+            row["file_hash"]
+            if row is not None and "file_hash" in row.keys()
+            else None
+        )
+        file_hash = (
+            previous_hash
+            if (
+                media_type == "audio"
+                and previous_hash is not None
+                and row is not None
+                and _row_matches_stat(row, stat)
+            )
+            else None
+        )
         now = time.time()
         with self._lock:
             values = (
@@ -406,11 +419,6 @@ class Library:
                 now,
                 None,
                 file_hash,
-            )
-            previous_hash = (
-                row["file_hash"]
-                if row is not None and "file_hash" in row.keys()
-                else None
             )
             acoustid_id = (
                 row["acoustid_id"]
@@ -1104,6 +1112,7 @@ class Library:
 
     def find_duplicates_by_hash(self) -> list[list[Track]]:
         """Return groups of audio tracks sharing an identical MD5 header hash."""
+        self._backfill_missing_hashes()
         with self._lock:
             rows = self.conn.execute(
                 """WITH dupe_keys AS (
@@ -1132,6 +1141,31 @@ class Library:
         if current_group:
             groups.append(current_group)
         return groups
+
+    def _backfill_missing_hashes(self) -> None:
+        """Populate missing audio file hashes before exact duplicate lookup."""
+        with self._lock:
+            rows = self.conn.execute(
+                """SELECT id, path FROM tracks
+                   WHERE media_type = 'audio'
+                     AND (file_hash IS NULL OR file_hash = '')"""
+            ).fetchall()
+        if not rows:
+            return
+
+        updates: list[tuple[str, int]] = []
+        for row in rows:
+            file_hash = _compute_file_hash(row["path"])
+            if file_hash:
+                updates.append((file_hash, int(row["id"])))
+
+        if updates:
+            with self._lock:
+                self.conn.executemany(
+                    "UPDATE tracks SET file_hash = ? WHERE id = ?",
+                    updates,
+                )
+                self.conn.commit()
 
     def find_duplicates_by_fingerprint(self) -> list[list[Track]]:
         """Return groups of audio tracks sharing the same AcoustID UUID."""
