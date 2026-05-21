@@ -262,6 +262,7 @@ class Settings:
     dlna_enabled: bool = False
     dlna_port: int = 8200
     dlna_friendly_name: str = "Sea Lyon Media Manager"
+    last_cast_renderer: str = ""
     radio_stations: list[dict[str, object]] = field(default_factory=list)
     podcast_subscriptions: list[dict[str, object]] = field(default_factory=list)
 
@@ -294,6 +295,7 @@ class Settings:
         self.dlna_enabled = _bool_value(self.dlna_enabled, False)
         self.dlna_port = _clamp_int(self.dlna_port, 8200, 0, 65535)
         self.dlna_friendly_name = str(self.dlna_friendly_name or "").strip() or "Sea Lyon Media Manager"
+        self.last_cast_renderer = str(self.last_cast_renderer or "").strip()
         self.radio_stations = normalize_radio_stations(self.radio_stations)
         self.podcast_subscriptions = normalize_podcast_subscriptions(self.podcast_subscriptions)
         self.yt_audio_format = str(self.yt_audio_format or "flac").lower()

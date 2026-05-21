@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 from .. import __app_name__, __version__
 from ..core import metadata
 from ..core.cd_detect import close_dll_handles as close_cd_dll_handles
+from ..core.cast_controller import CastController
 from ..core.dlna_server import DlnaServer
 from ..core.library import Library, ScanSummary, Track
 from ..core.library_watcher import (
@@ -35,6 +36,7 @@ from .branding import app_icon
 from .diagnostics_dialog import DiagnosticsDialog
 from .disc_view import DiscView
 from .duplicate_dialog import DuplicateDialog
+from .cast_dialog import CastDialog
 from .equalizer_dialog import EqualizerDialog
 from .first_run_dialog import FirstRunDialog
 from .library_view import LibraryView
@@ -121,6 +123,12 @@ class MainWindow(QMainWindow):
         self.player.set_gapless(self.settings.gapless_playback)
         self.scrobbler = ScrobblerService(self.player, self.settings, self)
         self.dlna_server = DlnaServer(self.library, self.settings)
+        self.cast_controller = CastController(self)
+        self.cast_controller.cast_started.connect(self._on_cast_started)
+        self.cast_controller.cast_stopped.connect(self._on_cast_stopped)
+        self.cast_controller.cast_error.connect(
+            lambda msg: self.show_toast(msg, level="warning")
+        )
         self._scan_thread: _LibraryScanThread | None = None
         self._rg_scanner: ReplayGainScanner | None = None
         self._watch_index_thread: LibraryIndexThread | None = None
@@ -129,6 +137,7 @@ class MainWindow(QMainWindow):
         self._watcher_unavailable_notified = False
         self._equalizer_dialog: EqualizerDialog | None = None
         self._queue_dialog: QueueDialog | None = None
+        self._cast_dialog: CastDialog | None = None
         self._current_toast: Toast | None = None
         # Debounce rapid library_updated signals (e.g. playlist downloads).
         self._library_refresh_timer = QTimer(self)
@@ -170,9 +179,11 @@ class MainWindow(QMainWindow):
         hlayout.addWidget(self.tab_bar)
         hlayout.addStretch(1)
 
+        self._cast_btn: QToolButton | None = None
         for label, tooltip, handler in (
             ("Queue",    "Show playback queue  [Ctrl+Q]", self.open_queue),
             ("EQ",       "Open 10-band equalizer",        self.open_equalizer),
+            ("Cast",     "Cast to a local device",        self.open_cast_dialog),
             ("Settings", "Open Settings",                 self.open_settings),
         ):
             btn = QToolButton()
@@ -181,6 +192,8 @@ class MainWindow(QMainWindow):
             btn.setObjectName("navToolBtn")
             btn.clicked.connect(handler)
             hlayout.addWidget(btn)
+            if label == "Cast":
+                self._cast_btn = btn
 
         self._sleep_btn = QToolButton()
         self._sleep_btn.setText("Sleep")
@@ -1037,6 +1050,60 @@ class MainWindow(QMainWindow):
         self.library_view.refresh_playlists()
         self.show_toast(f'Saved queue as playlist "{name}".', level="success")
 
+    # ------------------------------------------------------------------
+    # Cast dialog
+    # ------------------------------------------------------------------
+
+    def open_cast_dialog(self) -> None:
+        if self._cast_dialog is None:
+            dialog = CastDialog(
+                on_cast=self._start_cast,
+                on_stop=self._stop_cast,
+                is_casting=self.cast_controller.is_casting,
+                cast_target_name=(
+                    self.cast_controller.renderer.friendly_name
+                    if self.cast_controller.renderer else ""
+                ),
+                parent=self,
+            )
+            dialog.finished.connect(self._clear_cast_dialog)
+            dialog.finished.connect(dialog.deleteLater)
+            self._cast_dialog = dialog
+        self._cast_dialog.show()
+        self._cast_dialog.raise_()
+        self._cast_dialog.activateWindow()
+
+    def _clear_cast_dialog(self, *_args) -> None:
+        self._cast_dialog = None
+
+    def _start_cast(self, renderer) -> None:
+        self.cast_controller.start_cast(renderer, self.player, self.dlna_server)
+
+    def _stop_cast(self) -> None:
+        self.cast_controller.stop_cast()
+
+    def _on_cast_started(self, name: str) -> None:
+        self.settings.last_cast_renderer = name
+        self.settings.save()
+        if self._cast_btn is not None:
+            self._cast_btn.setProperty("casting", True)
+            self._cast_btn.style().unpolish(self._cast_btn)
+            self._cast_btn.style().polish(self._cast_btn)
+        if self._cast_dialog is not None:
+            self._cast_dialog.update_cast_state(True, name)
+        self.show_toast(f"Casting to {name}.", level="success")
+
+    def _on_cast_stopped(self) -> None:
+        if self._cast_btn is not None:
+            self._cast_btn.setProperty("casting", False)
+            self._cast_btn.style().unpolish(self._cast_btn)
+            self._cast_btn.style().polish(self._cast_btn)
+        if self._cast_dialog is not None:
+            self._cast_dialog.update_cast_state(False)
+        self.show_toast("Cast stopped.", level="info")
+
+    # ------------------------------------------------------------------
+
     def _focus_library_search(self) -> None:
         self.tab_bar.setCurrentIndex(self._tab_index["Library"])
         self.library_view.search.setFocus()
@@ -1226,6 +1293,7 @@ class MainWindow(QMainWindow):
             )
             ev.ignore()
             return
+        self.cast_controller.stop_cast()
         self.player.stop()
         self.dlna_server.stop()
         self.youtube_view.shutdown()
