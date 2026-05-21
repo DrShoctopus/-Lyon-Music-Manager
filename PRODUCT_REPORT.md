@@ -1,5 +1,5 @@
 # Sea Lyon Media Manager — Product Report
-**Version:** 0.6.0 · **Date:** 2026-05-17 · **Branch:** LMM-DEV  
+**Version:** 0.8.0-dev · **Date:** 2026-05-18 · **Branch:** LMM-DEV  
 **Methodology:** Direct source-code analysis of all files in `lyon/core/`, `lyon/ui/`, `build/`, `.github/`, and `tests/`. No third-party review documents referenced.
 
 ---
@@ -18,23 +18,19 @@
 
 Sea Lyon is a Windows-first desktop media manager built on Python 3.11 + PySide6 6.11, libVLC 3.0.21, and SQLite. Its core value proposition is an all-in-one experience covering CD ripping with multi-provider metadata, local library management, audio/video playback, and YouTube integration — no plugins required.
 
-At v0.6.0 the product is **approximately 92% complete** for its stated scope. All major systems are functional. The threading and resource lifecycle model is solid: worker threads use proper `shutdown()`/`join()` patterns, DLL handles are retained and released, and subprocess cancellation cleans up partial output files. Phase 1 (Audio Quality) is now complete: ReplayGain, output device/WASAPI, batch tag editor, and gapless playback are all implemented. The remaining gaps are **feature gaps, not stability blockers.**
+At v0.8.0-dev the product is **approximately 98% complete** for its stated scope. All major systems are functional. Phases 1 (Audio Quality), 2 (Library & Metadata Parity), and 3 (Connectivity & Discovery) are now complete. The only remaining work is Phase 4 platform hardening (macOS/Linux CD detection, MTP/USB device sync, podcast support, accessibility audit).
 
 **Genuine competitive advantages over any single rival:**
 - CUETools DB AccurateRip v1 verification (unique among GUI apps without plugins)
 - CTDB → MusicBrainz → TheAudioDB metadata fallback chain (more thorough than any competitor's default)
 - DVD/VCD playback integrated with the music library (no other music manager does this)
 - YouTube search + download with automatic library import (no competitor ships this)
+- AcoustID fingerprinting with "Identify Track" workflow and acoustic duplicate detection
 - All of the above in one installer — no plugin ecosystem required
 
-**Priority feature gaps to close (Phase 2):**
-- Acoustic fingerprinting (AcoustID) — needed for "identify unknown track" and better duplicate detection
-- Last.fm / ListenBrainz scrobbling — expected by engaged music listeners
-- Album grid browser — dominant UI pattern in all category leaders
-- CUE sheet support — single-image + CUE rips are invisible to the scanner
-- Playlist import (M3U/PLS) — common migration workflow
-
-*Phase 1 complete: ReplayGain, output device/WASAPI, batch tag editor, and gapless playback are all shipped.*
+*Phase 1 complete: ReplayGain, output device/WASAPI, batch tag editor, gapless playback.*  
+*Phase 2 complete: Album art grid (async), acoustic fingerprinting, Last.fm + ListenBrainz scrobbling, CUE sheet support, playlist import (M3U/PLS), hash-mode + fingerprint-mode duplicate detection.*  
+*Phase 3 complete: Internet radio (M3U/PLS/HLS parser + station browser), DLNA/UPnP MediaServer, artist bio/discovery panel in Now Playing, video resume position, subtitle delay controls, network stream / Open URL in video player.*
 
 ---
 
@@ -44,46 +40,51 @@ At v0.6.0 the product is **approximately 92% complete** for its stated scope. Al
 
 | System | Completeness | Notes |
 |--------|:-----------:|-------|
-| **SQLite Library** | 95% | v7 schema, 7 migrations, incremental scan, full-text search |
+| **SQLite Library** | 99% | v10 schema, 10 migrations, CUE tracks, file hash, AcoustID ID, video resume position |
 | **Audio Playback** | 100% | Crossfade, shuffle, repeat modes, queue persistence |
 | **Equalizer** | 100% | 10-band + preamp, 10 presets, custom curves, VLC fade animation |
 | **Smart Playlists** | 90% | 10 fields, all operators, SQL compiler; no nested AND/OR logic |
 | **CD Ripping** | 88% | 9 output formats, CTDB AccurateRip verify; no multi-disc support |
-| **Metadata Pipeline** | 95% | CTDB → MusicBrainz → TheAudioDB; no fingerprint, no persistent cache |
+| **Metadata Pipeline** | 98% | CTDB → MusicBrainz → TheAudioDB; AcoustID fingerprint; no persistent cache |
 | **Tag Writing** | 100% | FLAC, MP3, M4A, OGG/Opus, WAV/AIFF, WMA with embedded artwork |
 | **YouTube Integration** | 85% | Search + download, audio/video formats, library auto-import; no playlist mgmt UI |
-| **Video Playback** | 88% | VLC embedding, fullscreen, catalog, subtitles, OSD; no resume, no open-URL |
+| **Video Playback** | 97% | VLC embedding, fullscreen, catalog, subtitles, OSD, resume position, Open URL, subtitle delay |
 | **Optical Disc Playback** | 100% | Audio CD, DVD, VCD/SVCD via VLC MRL |
-| **Library Browsing UI** | 90% | List/grid/simple modes, sortable columns, genre filter, M3U export |
-| **Now Playing / Lyrics** | 95% | Synced LRC, LRCLIB fetch, queue preview, info panel |
+| **Library Browsing UI** | 97% | List/grid/simple modes, async art grid, M3U export, playlist import, Identify Track |
+| **Internet Radio** | 90% | M3U/PLS/HLS parser, station browser, genre filter, bitrate display; no community station feed |
+| **DLNA / UPnP Server** | 88% | SSDP announce, ContentDirectory browse/search, HTTP track serving; no renderer support |
+| **Now Playing / Lyrics** | 98% | Synced LRC, LRCLIB fetch, queue preview, info panel, artist bio/discovery panel |
 | **Transport** | 100% | Custom-painted glyphs, all states, both audio and video players |
 | **Ripper UI** | 85% | Track table, metadata lookup, progress; no multi-disc, no retry-failed |
-| **Video Player UI** | 88% | Catalog sidebar, variable speed, audio/subtitle track select, screenshots |
-| **Settings** | 90% | 5 tabs, 22 fields, validation; no bandwidth cap, no API key verification |
+| **Video Player UI** | 96% | Catalog sidebar, variable speed, audio/subtitle track select, screenshots, resume, subtitle delay, Open URL |
+| **Settings** | 97% | 8 tabs, Scrobbling + DLNA tabs, radio station management, 35+ fields |
 | **Disc View UI** | 85% | Audio CD + DVD/VCD playback; no track previews, no disc bookmarking |
 | **Queue Dialog** | 85% | Track list, reorder, save as playlist; no multi-select, no filter |
-| **Duplicate Detector** | 80% | Title+artist normalization; no hash or acoustic fingerprint matching |
+| **Duplicate Detector** | 97% | Title+artist, file-hash, AcoustID fingerprint modes; scan-fingerprints workflow |
+| **Scrobbling** | 90% | Last.fm (token auth flow) + ListenBrainz (user token); NowPlaying + scrobble at 50%/4min |
+| **CUE Sheet Support** | 95% | Parser + library indexer + VLC segment playback; multi-file CUE is partial |
 | **Library Watcher** | 100% | watchdog integration, event coalescing, graceful no-op if unavailable |
 | **Diagnostics** | 100% | Runtime checks for ffmpeg, libdiscid, VLC, yt-dlp |
 | **Windows Installer** | 100% | Inno Setup 6 script, per-user/machine, auto-upgrade |
 | **CI/CD (GitHub Actions)** | 100% | Windows build + smoke test, binary caching, artifact upload |
 | **Media Keys (macOS)** | 100% | PyObjC integration, graceful no-op elsewhere |
 
-**Overall: ~92% complete for stated v0.6 scope**
+**Overall: ~98% complete for stated v0.8 scope**
 
 ---
 
 ### 2.2 System-by-System Detail
 
-#### SQLite Library (`lyon/core/library.py` — 1,115 lines)
-- **Schema:** v7 with complete migration chain from v0; `Track` dataclass with 25 fields
-- **Formats:** Audio — FLAC, MP3, M4A, AAC, OGG, Opus, WAV, AIFF, WMA; Video — MP4, MKV, WebM, AVI, MOV
-- **Scanning:** Incremental via mtime+size change detection; `should_cancel` callback prevents UI freezes
-- **Queries:** all_artists, albums_for_artist, tracks_for_album, all_genres, search (LIKE-escaped), recently_added, recently_played, most_played, top_rated, tracks_for_genre
-- **Library ops:** ratings (0–5), liked flag, play_count increment, disc_id for duplicate detection
-- **Playlists:** manual + smart; `create_playlist`, `reorder_playlist`, M3U export; smart playlist via `SmartPlaylistSpec`
-- **Duplicate finder:** `find_duplicates()` by normalized artist + title
-- **Gap:** No acoustic fingerprint or file-hash comparison; video metadata falls back to folder names
+#### SQLite Library (`lyon/core/library.py`)
+- **Schema:** v9 with complete migration chain from v0; `Track` dataclass with 28+ fields
+- **Formats:** Audio — FLAC, MP3, M4A, AAC, OGG, Opus, WAV, AIFF, WMA; Video — MP4, MKV, WebM, AVI, MOV; CUE virtual tracks (media_type='cue_track')
+- **Scanning:** Incremental via mtime+size change detection; `should_cancel` callback prevents UI freezes; `.cue` branch with `_index_cue_file()`; `remove_stale_cue_tracks()`
+- **Queries:** all_artists, albums_for_artist, tracks_for_album, all_genres, search, recently_added, recently_played, most_played, top_rated, tracks_for_genre
+- **Library ops:** ratings (0–5), liked flag, play_count increment, `update_track()`, `update_acoustid()`, disc_id
+- **Playlists:** manual + smart; `create_playlist`, `reorder_playlist`, M3U export; playlist import (M3U/PLS) via `playlist_import.py`
+- **Duplicate finder:** `find_duplicates()` title+artist; `find_duplicates_by_hash()` MD5 first 64 KB; `find_duplicates_by_fingerprint()` by AcoustID UUID
+- **Fingerprinting:** `file_hash` (MD5 header), `acoustid_id` columns; `tracks_without_acoustid()` for batch scan targeting
+- **Gap:** Video metadata still falls back to folder names for unknown files
 
 #### Audio Playback (`lyon/core/player.py`)
 - **Queue:** `load_queue`, `set_queue`, `enqueue`, `remove_queue_index`, `move_queue_item`, `clear_queue`
@@ -126,26 +127,47 @@ At v0.6.0 the product is **approximately 92% complete** for its stated scope. Al
 #### Video Playback (`lyon/ui/video_player_view.py` — 1,326 lines)
 - **VLC embedding:** Native-windowed `_VideoSurface` with deferred creation; proper VLC window ID set on first show
 - **Catalog sidebar:** 234px, searchable, lazy-loaded 40-track batches, 96×54 thumbnail cards
-- **Controls:** Seek, play/pause/stop, volume, mute, speed (0.25×–2×), audio track select, subtitle track select + load external file, screenshot
+- **Controls:** Seek, play/pause/stop, volume, mute, speed (0.25×–2×), audio track select, subtitle track select + load external file, screenshot, subtitle delay (±50 ms steps, keyboard `[`/`]`, OSD feedback)
 - **Fullscreen:** Borderless `_FullscreenWindow` with keyboard controls (Space, Esc/F, arrows ±5s/30s, M, ↑↓ volume), OSD feedback
 - **Equalizer:** 10-band applied via same `VlcEqualizerController` as audio player
-- **Gap:** No per-video resume position; no "Open URL" for network streams; no subtitle delay controls; no aspect ratio/zoom; no deinterlace
+- **Resume position:** DB-persisted per library file; "Resume from MM:SS?" toast on load; cleared automatically when video plays to natural end; same-source re-click guard prevents spurious prompts
+- **Network stream:** "Open URL…" button → text input → VLC HTTP/RTSP/HLS; recent-streams list in settings
+- **Gap:** No aspect ratio/zoom; no deinterlace; no chapter/bookmark navigation
 
-#### Library Browsing UI (`lyon/ui/library_view.py` — ~1,900 lines)
-- **Modes:** List (4-pane: Genre → Artist → Album → Track with sortable columns), Grid (album art grid), Simple (3-pane without genres)
-- **Track actions:** Play, enqueue, add to playlist, edit metadata (single + batch), open folder, YouTube search
+#### Library Browsing UI (`lyon/ui/library_view.py`)
+- **Modes:** List (4-pane: Genre → Artist → Album → Track), Grid (180×180 async album art, 210×240 cells), Simple (3-pane)
+- **Track actions:** Play, enqueue, add to playlist, edit metadata (single + batch), open folder, **Identify Track…** (AcoustID), YouTube search, Properties
+- **Async art grid:** `_ArtLoader(QRunnable)` + `_ArtSignals(QObject)` loads QImage on worker thread, converts to QPixmap on main thread; in-memory LRU cache (200 entries)
 - **Format badges:** Color-coded FLAC/MP3/AAC/OGG per track row
 - **Star rating:** Inline 5-star delegate with hover preview
 - **Virtual collections:** Recently Added/Played, Most Played, Top Rated (4★+)
 - **Search:** 150ms debounced full-text search
-- **Playlist management:** Create, add tracks, reorder (drag-drop), M3U export, smart playlist editor
-- **Gap:** No playlist import; no artwork-focused album grid (grid mode shows albums but small)
+- **Playlist management:** Create, add tracks, reorder (drag-drop), M3U export, smart playlist editor, **M3U/PLS import**
+- **Identify Track dialog:** QRunnable fingerprint worker → candidate table (Score/Artist/Title/Release) → apply writes file tags + updates DB + stores acoustid_id
+- **Gap:** No artwork-focused artist view; no playlist search/filter
 
 #### Now Playing + Lyrics (`lyon/ui/now_playing.py` — 904 lines)
 - **Artwork:** 280×280 cover with blurred full-background effect
-- **Lyrics system:** LRC sidecar → embedded USLT tag → LRCLIB online fetch; synced highlight with animated scroll; 256-entry FIFO cache; plain-text fallback
-- **Panels:** Queue (12 upcoming, double-click to jump, drag-reorder), Lyrics (synced/plain), Info (year, genre, track count)
+- **Lyrics system:** LRC sidecar → embedded USLT tag → LRCLIB online fetch; synced highlight with animated scroll; 256-entry FIFO cache (`_PANEL_CACHE_MAX`); plain-text fallback; `fetch_lyrics_online` settings toggle
+- **Artist panel:** TheAudioDB biography, artist photo, genre, similar artists list; background thread with race-guard (task-key comparison); 256-entry FIFO cache shared with lyrics cache; gated to library items only — network streams show "No artist info" placeholder
+- **Panels:** Queue (12 upcoming, double-click to jump, drag-reorder), Lyrics (synced/plain), Artist, Info (year, genre, track count)
 - **Gap:** No lyrics editing/submission; no visualizer in Now Playing
+
+#### Internet Radio (`lyon/core/radio.py`, `lyon/ui/radio_view.py`)
+- **Playlist parsing:** M3U/EXTM3U (EXTINF attributes, EXTGRP genre, HLS `#EXT-X-STREAM-INF` with relative URL resolution), PLS (title, bitrate, URL deduplication by casefold)
+- **EXTINF handling:** Quoted-comma-aware attribute splitter; duration token skipped so it is never misread as bitrate; `bitrate=` attribute parsed correctly
+- **Station model:** `RadioStation(name, url, genre, bitrate)` dataclass; `station_from_url()` rejects non-stream schemes (file://, etc.)
+- **Settings:** `radio_stations` list persisted in settings JSON; `add_radio_stations()` merges by URL — preserves existing bitrate/genre when incoming omits them
+- **UI:** Station browser tab with search, genre filter, bitrate column, Play button; playback via `Player.play_url()` backed by existing VLC HTTP stream support
+- **Gap:** No community/Shoutcast station directory integration; no favorite-station sync
+
+#### DLNA / UPnP MediaServer (`lyon/core/dlna_server.py`)
+- **SSDP:** Multicast announce on 239.255.255.250:1900; `M-SEARCH` response; periodic `ssdp:alive` keepalive; `ssdp:byebye` on shutdown
+- **ContentDirectory:** SOAP/XML `Browse` (BrowseDirectChildren + BrowseMetadata) and `Search` actions; serves Artists, Albums, Tracks virtual containers from the library
+- **HTTP serving:** Threaded `http.server`; MIME detection; `Content-Length` + `transferMode.dlna.org` headers for renderer compatibility
+- **Local IP discovery:** connect-to-8.8.8.8 trick with `getaddrinfo` hostname fallback for air-gapped LANs; last resort 127.0.0.1
+- **Settings:** Enable toggle, port, friendly name in DLNA settings tab
+- **Gap:** No UPnP renderer (playback control); no AV Transport service; no DLNA renderer discovery
 
 #### Smart Playlists (`lyon/core/smart_playlist.py`, `lyon/ui/smart_playlist_dialog.py`)
 - **Fields:** title, artist, album, genre, year, rating, play_count, bitrate, duration, liked
@@ -181,15 +203,15 @@ At v0.6.0 the product is **approximately 92% complete** for its stated scope. Al
 | Smart / auto-playlists | ✅ | ✅ | ✅ | via plugin | ✅ |
 | Auto-scan watched folders | ✅ | ✅ | ✅ | via plugin | ✅ |
 | Ratings + play counts | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Album grid browser | ⚠️ | ✅ | ✅ | via skin | ✅ |
+| Album grid browser | ✅ | ✅ | ✅ | via skin | ✅ |
 | Sortable column browser | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Batch tag editor | ✅ | ✅ | ✅ | ✅ | ❌ |
 | Grouping / custom tags | ✅ | ✅ | ✅ | ✅ | ❌ |
-| Duplicate detection | ⚠️ | ✅ | ✅ | via plugin | ✅ |
+| Duplicate detection | ✅ | ✅ | ✅ | via plugin | ✅ |
 | M3U playlist export | ✅ | ✅ | ✅ | ✅ | ❌ |
-| Playlist import | ❌ | ✅ | ✅ | ✅ | ❌ |
+| Playlist import | ✅ | ✅ | ✅ | ✅ | ❌ |
 
-> ⚠️ = partial — Sea Lyon's album grid shows albums but is not the primary browsing surface; duplicate detection uses title+artist normalization only (no hash or fingerprint)
+> Sea Lyon duplicate detection now supports title+artist, file-hash, and AcoustID fingerprint modes.
 
 #### Playback & Audio Quality
 
@@ -213,7 +235,7 @@ At v0.6.0 the product is **approximately 92% complete** for its stated scope. Al
 | CD ripping (multi-format) | ✅ | ✅ | ✅ | via plugin | ❌ |
 | AccurateRip verification | ✅ | ✅ | ✅ | ✅ | ❌ |
 | **CUETools DB verification** | ✅ | ❌ | ❌ | via plugin | ❌ |
-| CUE sheet support | ❌ | ✅ | ✅ | ✅ | ❌ |
+| CUE sheet support | ✅ | ✅ | ✅ | ✅ | ❌ |
 | CD playback | ✅ | ✅ | ✅ | ✅ | ❌ |
 | **DVD / VCD playback** | ✅ | ❌ | ❌ | ❌ | ❌ |
 | MusicBrainz metadata | ✅ | ✅ | ✅ | via plugin | ✅ |
@@ -225,11 +247,11 @@ At v0.6.0 the product is **approximately 92% complete** for its stated scope. Al
 |---------|:---:|:---:|:---:|:---:|:---:|
 | Automatic artwork | ✅ | ✅ | ✅ | via plugin | ✅ |
 | Synced lyrics (LRC + online) | ✅ | ✅ | ❌ | via plugin | ✅ |
-| Acoustic fingerprinting | ❌ | ✅ | ✅ | via plugin | ✅ |
-| Artist bio / info panel | ❌ | ✅ | ✅ | ❌ | ✅ |
-| Last.fm scrobbling | ❌ | ✅ | ✅ | via plugin | ✅ |
-| ListenBrainz scrobbling | ❌ | via plugin | ❌ | via plugin | ❌ |
-| Internet radio | ❌ | ✅ | ✅ | via plugin | ❌ |
+| Acoustic fingerprinting | ✅ | ✅ | ✅ | via plugin | ✅ |
+| Artist bio / info panel | ✅ | ✅ | ✅ | ❌ | ✅ |
+| Last.fm scrobbling | ✅ | ✅ | ✅ | via plugin | ✅ |
+| ListenBrainz scrobbling | ✅ | via plugin | ❌ | via plugin | ❌ |
+| Internet radio | ✅ | ✅ | ✅ | via plugin | ❌ |
 | Podcast support | ❌ | ✅ | ❌ | ❌ | ❌ |
 
 #### YouTube & Web
@@ -246,10 +268,10 @@ At v0.6.0 the product is **approximately 92% complete** for its stated scope. Al
 | Feature | **Sea Lyon** | MusicBee | MediaMonkey | foobar2000 | Roon |
 |---------|:---:|:---:|:---:|:---:|:---:|
 | MTP/USB device sync | ❌ | ✅ | ✅ | ❌ | ❌ |
-| DLNA/UPnP server | ❌ | ✅ | ✅ | ❌ | ✅ |
+| DLNA/UPnP server | ✅ | ✅ | ✅ | ❌ | ✅ |
 | DLNA/UPnP renderer | ❌ | ✅ | ✅ | ❌ | ✅ |
 | AirPlay output | ❌ | ❌ | ❌ | ❌ | ✅ |
-| Network stream playback (URL) | ❌ | ❌ | ❌ | ✅ | ✅ |
+| Network stream playback (URL) | ✅ | ❌ | ❌ | ✅ | ✅ |
 | Streaming service integration | ❌ | ❌ | ❌ | ❌ | ✅ |
 
 #### Video
@@ -263,9 +285,9 @@ At v0.6.0 the product is **approximately 92% complete** for its stated scope. Al
 | Audio track selection | ✅ | ❌ | ✅ | ✅ | ✅ |
 | Variable playback speed | ✅ | ❌ | ✅ | ✅ | ✅ |
 | Video catalog with artwork | ✅ | ❌ | ✅ | ❌ | ✅ |
-| Video resume position | ❌ | ❌ | ✅ | ⚠️ | ✅ |
-| Network stream (URL/IPTV) | ❌ | ❌ | ❌ | ✅ | ✅ |
-| Subtitle delay controls | ❌ | ❌ | ❌ | ✅ | ✅ |
+| Video resume position | ✅ | ❌ | ✅ | ⚠️ | ✅ |
+| Network stream (URL/IPTV) | ✅ | ❌ | ❌ | ✅ | ✅ |
+| Subtitle delay controls | ✅ | ❌ | ❌ | ✅ | ✅ |
 | Chapter / bookmark navigation | ❌ | ❌ | ❌ | ✅ | ✅ |
 
 ---
@@ -291,17 +313,17 @@ These are the gaps that most affect users coming from MusicBee or MediaMonkey:
 | ~~ReplayGain scan + read + playback~~ | ✅ | ✅ | ~~Critical~~ — **Done** |
 | ~~Output device / WASAPI~~ | ✅ | ✅ | ~~Critical~~ — **Done** |
 | ~~Gapless playback~~ | ✅ | ✅ | ~~High~~ — **Done** |
-| Acoustic fingerprinting (AcoustID) | ✅ | ✅ | **High** |
-| Last.fm / ListenBrainz scrobbling | ✅ | ✅ | **High** |
-| CUE sheet support | ✅ | ✅ | **High** |
-| Album art grid as primary browser | ✅ | ✅ | **High** |
-| DLNA/UPnP server | ✅ | ✅ | Medium |
-| Internet radio | ✅ | ✅ | Medium |
-| Artist bio / info panel | ✅ | ✅ | Medium |
-| Playlist import (M3U/PLS) | ✅ | ✅ | Medium |
-| Video resume position | n/a | ✅ | Medium |
+| ~~Acoustic fingerprinting (AcoustID)~~ | ✅ | ✅ | ~~High~~ — **Done** |
+| ~~Last.fm / ListenBrainz scrobbling~~ | ✅ | ✅ | ~~High~~ — **Done** |
+| ~~CUE sheet support~~ | ✅ | ✅ | ~~High~~ — **Done** |
+| ~~Album art grid as primary browser~~ | ✅ | ✅ | ~~High~~ — **Done** |
+| ~~Playlist import (M3U/PLS)~~ | ✅ | ✅ | ~~Medium~~ — **Done** |
+| ~~DLNA/UPnP server~~ | ✅ | ✅ | ~~Medium~~ — **Done** |
+| ~~Internet radio~~ | ✅ | ✅ | ~~Medium~~ — **Done** |
+| ~~Artist bio / info panel~~ | ✅ | ✅ | ~~Medium~~ — **Done** |
+| ~~Video resume position~~ | n/a | ✅ | ~~Medium~~ — **Done** |
 | MTP/USB device sync | ✅ | ✅ | Low |
-| Network stream / open URL | ❌ | ❌ | Low |
+| ~~Network stream / open URL~~ | ❌ | ❌ | ~~Low~~ — **Done** |
 
 ---
 
@@ -320,59 +342,49 @@ These are the gaps that most affect users coming from MusicBee or MediaMonkey:
 **~~Batch Tag Editor (existing library files)~~** ✅ *Implemented in v0.6.0*  
 `write_partial_tags()` in `tagger.py` handles all 7 formats; both single-track and batch dialogs in `library_view.py` write through it; "Edit Metadata…" available from the Now Playing queue context menu; grouping field added to single-track dialog.
 
-### 4.2 High — Required for MusicBee Functional Parity
+### 4.2 High — Required for MusicBee Functional Parity ✅ All Complete
 
-**Acoustic Fingerprinting (AcoustID)**  
-No "identify unknown track" workflow. Duplicate detection is title+artist normalization only — misses files with wrong/missing tags or identical audio under different names.  
-Scope: `pyacoustid` + `fpcalc` binary; `lyon/core/fingerprint.py`; library context menu "Identify Track" → candidate dialog; duplicate dialog "match by fingerprint" option.
+**~~Acoustic Fingerprinting (AcoustID)~~** ✅ *Implemented in v0.7.0-dev*  
+`lyon/core/fingerprint.py` — `fingerprint_file()` via `fpcalc`; `lookup_candidates()` via AcoustID API; `is_available()` graceful fallback. Library view "Identify Track…" context-menu item (single track, disabled when fpcalc absent) → `_IdentifyTrackDialog` with candidate table → applies title/artist/album + stores `acoustid_id`. Duplicate dialog "By AcoustID Fingerprint" mode uses `find_duplicates_by_fingerprint()`; "Scan Missing Fingerprints…" button runs `_FingerprintScanDialog` batch job. Schema v9 adds `acoustid_id` column with index.
 
-**Last.fm / ListenBrainz Scrobbling**  
-No play history submitted to external services. Many engaged listeners use this for discovery, year-in-review stats, and recommendations.  
-Scope: OAuth flow for Last.fm; user token for ListenBrainz; hook into `player.py` play-count increment point; submit NowPlaying on start, Scrobble after 50% or 4 min.
+**~~Last.fm / ListenBrainz Scrobbling~~** ✅ *Implemented in v0.7.0-dev*  
+`lyon/core/scrobbler.py` — `ScrobblerService(QObject)` connects to `player.track_changed` / `player.position_changed`; emits NowPlaying on track start; scrobbles at 50% or 240 s (Last.fm ≥30 s minimum enforced). All HTTP via `QThreadPool` worker tasks. Last.fm token auth flow (get token → open browser → poll `auth.getSession` every 5 s) wired into settings dialog. ListenBrainz uses user-paste token. Settings: 4 new fields (`lastfm_session_key`, `lastfm_scrobbling_enabled`, `listenbrainz_token`, `listenbrainz_scrobbling_enabled`). New "Scrobbling" tab in settings dialog.
 
-**CUE Sheet Support**  
-No `.cue` + image parsing. Many ripped CDs are distributed as single-image + CUE. These are completely invisible to Sea Lyon's scanner.  
-Scope: `lyon/core/cue_parser.py` → parse CUE, expose as virtual tracks; library scan picks up `.cue`; playback seeks to CUE offset within parent image.
+**~~CUE Sheet Support~~** ✅ *Implemented in v0.7.0-dev*  
+`lyon/core/cue_parser.py` — UTF-8 BOM + Latin-1 fallback; multi-file CUE partial support (first FILE block only). Library scanner picks up `.cue` files, inserts rows as `media_type='cue_track'` with `cue_image_path` + `cue_offset_sectors`; orphan cleanup via `remove_stale_cue_tracks()`. Playback routes through `Track.playback_uri` / `playback_options` using VLC `--start-time` / `--stop-time`.
 
-**Album Art Grid as Primary Browser**  
-The current grid mode shows albums but it is not the dominant browsing surface (list mode is default). A full-bleed artwork grid is the expected entry point for casual browsing and is the primary UI pattern in every competitor.  
-Scope: Dedicated album grid view with 180×180 artwork tiles, async pixmap cache, double-click → track list. Should be the default view for "Albums" in the sidebar.
+**~~Album Art Grid as Primary Browser~~** ✅ *Implemented in v0.7.0-dev*  
+`_ArtLoader(QRunnable)` + `_ArtSignals(QObject)` — loads QImage off main thread, scales to 180×180, emits to main thread via queued signal, converts to QPixmap. In-memory LRU pixmap cache (200 entries). Icon size 180×180, grid cell 210×240. Generation counter prevents stale updates after rapid refreshes.
 
-### 4.3 Medium — MediaMonkey Connectivity Parity
+### 4.3 Medium — MediaMonkey Connectivity Parity ✅ All Complete
 
-**DLNA / UPnP Server**  
-Cannot stream library to smart TVs, AV receivers, or other DLNA renderers on the local network.  
-Scope: `python-didl-lite` + `async-upnp-client`; minimal UPnP MediaServer with SSDP announce; serve tracks with correct MIME types; settings: enable/port/name.
+**~~DLNA / UPnP Server~~** ✅ *Implemented in v0.8.0-dev*  
+`lyon/core/dlna_server.py` — stdlib `http.server` + SSDP multicast; ContentDirectory SOAP Browse/Search actions serving Artists, Albums, Tracks containers; correct MIME types and DLNA transfer-mode headers; `_local_ip()` with interface-enumeration fallback for air-gapped LANs; settings DLNA tab (enable, port, friendly name).
 
-**Internet Radio**  
-No Shoutcast/Icecast stream support. Common request from users who also want background listening without YouTube.  
-Scope: `lyon/core/radio.py`; m3u/pls/m3u8 URL parsing; `lyon/ui/radio_view.py` with station browser; playback via existing player with URI support (VLC already handles HTTP streams).
+**~~Internet Radio~~** ✅ *Implemented in v0.8.0-dev*  
+`lyon/core/radio.py` — M3U/EXTM3U (EXTINF attrs + EXTGRP + HLS `#EXT-X-STREAM-INF`), PLS parser with URL deduplication; quoted-comma-aware EXTINF splitter; `station_from_url()` rejects non-stream schemes. `lyon/ui/radio_view.py` — station browser with search, genre filter, bitrate column. Playback via `Player.play_url()`. Station list persisted in settings with merge-on-import (preserves existing bitrate/genre when incoming omits them).
 
-**Artist Bio / Info Panel**  
-TheAudioDB data (biography, artist image, similar artists) is fetched during disc lookup but never displayed anywhere.  
-Scope: `lyon/ui/artist_panel.py`; collapsible panel in Now Playing; pulls cached TheAudioDB data already in the metadata pipeline.
+**~~Artist Bio / Info Panel~~** ✅ *Implemented in v0.8.0-dev*  
+`lyon/ui/artist_panel.py` — biography text, artist photo, genre, similar artists list in Now Playing side panel; TheAudioDB fetch on background thread with race-guard task-key comparison; 256-entry FIFO cache shared with lyrics (`_PANEL_CACHE_MAX`); gated to library items — network streams show placeholder.
 
-**Video Resume Position**  
-No per-file last-position tracking for video. Every video starts from the beginning.  
-Scope: Library schema migration v8 adds `resume_position` integer column; `video_player_view.py` saves on stop, seeks on load with "Resume from MM:SS?" toast.
+**~~Video Resume Position~~** ✅ *Implemented in v0.8.0-dev*  
+Schema migration v10 adds `resume_position INTEGER` column. `video_player_view.py` saves position on stop/tab-switch; shows "Resume from MM:SS?" toast on load with seek-on-confirm; cleared on natural end; same-source re-click guard prevents spurious prompts.
 
-**Subtitle Delay Controls**  
-VLC supports `libvlc_video_set_spu_delay()` but the UI does not expose it.  
-Scope: ±50ms step buttons + fine slider in video controls bar.
+**~~Subtitle Delay Controls~~** ✅ *Implemented in v0.8.0-dev*  
+±50 ms step buttons (`[` / `]` keyboard shortcuts) call `libvlc_video_set_spu_delay()`; fine-tune slider in video controls bar; OSD feedback shows current delay value.
 
-**Playlist Import (M3U / PLS)**  
-M3U export exists; import does not. Common workflow when migrating from another app.  
-Scope: File picker in library sidebar → parse M3U/PLS → match paths to library → create playlist.
+**~~Playlist Import (M3U / PLS)~~** ✅ *Implemented in v0.7.0-dev*  
+`lyon/core/playlist_import.py` — `parse_m3u()`, `parse_pls()`, `import_playlist()` with exact-path + case-insensitive fallback matching. Library sidebar "Import Playlist…" context menu item; shows QMessageBox warning for unmatched paths (first 10); auto-selects new playlist on completion.
 
 ### 4.4 Low — Nice-to-Have / Differentiation
 
 | Feature | Notes |
 |---------|-------|
-| Network stream / Open URL | VLC supports HTTP/RTSP/HLS natively; just expose "Open URL" button in video player |
+| ~~Network stream / Open URL~~ | ✅ *Done v0.8.0-dev* — "Open URL…" in video player; HTTP/RTSP/HLS via VLC |
+| ~~Subtitle delay controls~~ | ✅ *Done v0.8.0-dev* — see §4.3 above |
 | Multi-disc album ripping | Ripper has no concept of disc number within an album rip session |
 | Nested smart playlist logic | Current AND/OR applies globally; power users want (A OR B) AND C |
 | EQ frequency response graph | Visual feedback while adjusting bands |
-| Subtitle delay controls | Already noted in Medium above |
 | Podcast support | RSS feed + episode download; separate from music library |
 | MTP / USB device sync | Complex; requires `libmtp`; useful for Android + portable DAP users |
 | Streaming service integration | Tidal, Qobuz; out of scope for near-term but table-stakes for Roon comparison |
@@ -412,65 +424,62 @@ Scope: File picker in library sidebar → parse M3U/PLS → match paths to libra
 ### Phase 2 — Library & Metadata Parity (v0.7)
 *Estimated: 4–6 weeks. Brings Sea Lyon to MusicBee functional parity.*
 
-**2.1 Album Art Grid (Primary Browser)**
-- `lyon/ui/library_view.py`: New album grid page using `QListView` + `QStyledItemDelegate` rendering 180×180 artwork + title + artist + year; make this the default for "Albums" nav entry
-- Async pixmap loading via `QThreadPool` with in-memory cache (avoid blocking scroll)
-- Double-click → switch to track list for that album
+**2.1 Album Art Grid (Primary Browser)** ✅ *Complete*
+- `_ArtSignals(QObject)` + `_ArtLoader(QRunnable)`: QImage loaded on worker, emitted via queued signal, converted to QPixmap on main thread
+- In-memory LRU cache (200 entries) — `_art_cache: dict[str, QPixmap]`; generation counter prevents stale updates
+- Icon 180×180, grid cell 210×240; items show placeholder immediately, art fills in asynchronously
 
-**2.2 Acoustic Fingerprinting (AcoustID)**
-- Add `pyacoustid` + ship `fpcalc.exe` in `bin/`; update `build/lyon.spec` binaries list
-- `lyon/core/fingerprint.py`: `fingerprint_file(path)` → call AcoustID API → return `[(score, mbid, title, artist)]`
-- Library view: "Identify Track" context menu → fingerprint worker → candidate dialog → apply + update DB
-- `lyon/ui/duplicate_dialog.py`: "Match by fingerprint" option alongside existing title+artist mode
+**2.2 Acoustic Fingerprinting (AcoustID)** ✅ *Complete*
+- `lyon/core/fingerprint.py`: `is_available()`, `fingerprint_file()`, `lookup_candidates()` with graceful pyacoustid/fpcalc fallback; `ACOUSTID_API_KEY` constant; searches bundled `bin/fpcalc[.exe]` first
+- Schema v9: `acoustid_id TEXT` column + index; `update_acoustid()`, `find_duplicates_by_fingerprint()`, `tracks_without_acoustid()` in library
+- Library view "Identify Track…" → `_IdentifyTrackDialog` (candidate table, apply writes tags + DB + acoustid_id)
+- Duplicate dialog "By AcoustID Fingerprint" mode with "Scan Missing Fingerprints…" batch job (`_FingerprintScanDialog`)
 
-**2.3 Last.fm + ListenBrainz Scrobbling**
-- `lyon/core/scrobbler.py`: Last.fm (API key + secret, token-based auth via local HTTP callback) + ListenBrainz (user token)
-- Hook into `player.py` `track_changed` signal: emit NowPlaying on start; track elapsed time; scrobble at 50% or 4 min
-- `lyon/ui/settings_dialog.py`: Scrobbling section — enable/disable per service, login/logout, last-scrobbled indicator
+**2.3 Last.fm + ListenBrainz Scrobbling** ✅ *Complete*
+- `lyon/core/scrobbler.py`: `ScrobblerService(QObject)` — NowPlaying on track start, scrobble at 50%/240 s, ≥30 s minimum; all HTTP off-thread via `_HttpTask(QRunnable)`
+- Last.fm token auth: `start_lastfm_auth()` → get token → open browser → `poll_lastfm_session()` via QTimer; full flow in settings dialog
+- ListenBrainz: user-paste token, `Authorization: Token` header
+- 4 new Settings fields; new "Scrobbling" tab; `ScrobblerService` wired in `MainWindow.__init__`
 
-**2.4 CUE Sheet Support**
-- `lyon/core/cue_parser.py`: Parse `.cue` + paired image (FLAC/WAV/MP3); produce virtual `Track` objects with sector-based start/end offsets
-- `lyon/core/library.py`: Add `.cue` to scanner; store as media_type='cue_track' with parent image path + offsets
-- Playback: Seek to CUE offset within parent image via VLC `--start-time` / `--stop-time` options
+**2.4 CUE Sheet Support** ✅ *Complete*
+- `lyon/core/cue_parser.py`: UTF-8-sig + Latin-1 fallback; multi-file stop at second FILE directive; `_parse_sectors()` MM:SS:FF→sectors; fills `end_sectors` on all but last track
+- Schema v8: `cue_image_path`, `cue_offset_sectors`; `_index_cue_file()`, `remove_stale_cue_tracks()`; virtual tracks excluded from `remove_missing()`
+- Playback: `Track.playback_uri` = image path, `playback_options` = `--start-time` / `--stop-time` VLC flags
 
-**2.5 Playlist Import (M3U / PLS)**
-- `lyon/core/playlist_import.py`: Parse M3U8 (extended) + PLS; resolve relative paths; match to library DB by path
-- Library view: File picker → import as new playlist; warn on unmatched paths
+**2.5 Playlist Import (M3U / PLS)** ✅ *Complete*
+- `lyon/core/playlist_import.py`: `parse_m3u()`, `parse_pls()`, `_normalize()` path resolution; `import_playlist()` with exact + case-insensitive matching; `ImportResult` dataclass
+- Library sidebar "Import Playlist…" menu item; auto-selects new playlist; warns on unmatched paths (max 10)
 
-**2.6 Duplicate Detection — Hash Mode**
-- `lyon/core/library.py`: Add `file_hash` column (MD5 of first 64 KB, fast + collision-resistant for music use)
-- `lyon/core/library.py`: `find_duplicates_by_hash()` — exact byte match without relying on tags
-- `lyon/ui/duplicate_dialog.py`: Mode selector: "By title/artist" / "By file hash" / "By fingerprint" (once 2.2 ships)
+**2.6 Duplicate Detection — Hash Mode** ✅ *Complete*
+- Schema v8: `file_hash TEXT` (MD5 first 64 KB) + index; computed on all audio files during indexing
+- `find_duplicates_by_hash()` CTE query; duplicate dialog mode selector "By File Hash (content sample)"
 
 ---
 
-### Phase 3 — Connectivity & Discovery (v0.8)
-*Estimated: 5–7 weeks. Closes remaining MediaMonkey parity gaps.*
+### Phase 3 — Connectivity & Discovery (v0.8) ✅ Complete
+*All 6 items shipped. MediaMonkey connectivity parity achieved.*
 
-**3.1 Internet Radio**
-- `lyon/core/radio.py`: m3u/pls/m3u8 URL parser; optional station list from community JSON feed
-- `lyon/ui/radio_view.py`: Station browser tab with search, genre filter, bitrate, play button
-- Playback: `player.play_url(uri)` — VLC already handles HTTP streams; add URI path to `Player`
-- Save favorite stations as library playlist type "Radio"
+**3.1 Internet Radio** ✅ *Complete*
+- `lyon/core/radio.py`: M3U/EXTM3U (EXTINF attrs, EXTGRP, HLS EXT-X-STREAM-INF), PLS parser with URL deduplication; quoted-comma-aware EXTINF splitter; `station_from_url()` rejects non-stream schemes
+- `lyon/ui/radio_view.py`: Station browser tab with search, genre filter, bitrate column, play button
+- Playback: `Player.play_url(uri)` — VLC HTTP stream; station list persisted + merged in settings
 
-**3.2 DLNA / UPnP Server**
-- Dependencies: `python-didl-lite`, `async-upnp-client`
-- `lyon/core/dlna_server.py`: UPnP MediaServer device; SSDP announce; browse/search content actions; serve tracks as HTTP with correct MIME types
+**3.2 DLNA / UPnP Server** ✅ *Complete*
+- `lyon/core/dlna_server.py`: stdlib `http.server` + SSDP multicast; ContentDirectory SOAP Browse/Search; Artists/Albums/Tracks virtual containers; correct MIME + DLNA headers; `_local_ip()` interface-enumeration fallback
 - `lyon/ui/settings_dialog.py`: DLNA tab — enable toggle, port, friendly name
 
-**3.3 Artist Bio / Info Panel**
-- `lyon/ui/artist_panel.py`: Collapsible side panel in Now Playing; artist photo + bio from TheAudioDB; similar artists list; discography count
-- TheAudioDB response already cached in metadata pipeline — parse and surface it
+**3.3 Artist Bio / Info Panel** ✅ *Complete*
+- `lyon/ui/artist_panel.py`: Biography, artist photo, genre, similar artists in Now Playing side panel; background TheAudioDB fetch with race-guard task-key; 256-entry FIFO cache; library-item guard (network streams show placeholder)
 
-**3.4 Video Resume Position**
-- `lyon/core/library.py`: Schema migration v8 — add `resume_position INTEGER` column
-- `lyon/ui/video_player_view.py`: Save position to DB on stop/tab-switch; on load, show "Resume from MM:SS?" toast with seek-on-confirm
+**3.4 Video Resume Position** ✅ *Complete*
+- Schema migration v10: `resume_position INTEGER` column
+- `video_player_view.py`: Saves on stop/tab-switch; "Resume from MM:SS?" toast on load; cleared on natural end; same-source re-click guard suppresses spurious prompt
 
-**3.5 Subtitle Delay Controls**
-- `lyon/ui/video_player_view.py`: Expose `libvlc_video_set_spu_delay()` via ±50ms step buttons (keyboard shortcut `[` / `]`) + fine-tune slider; OSD feedback
+**3.5 Subtitle Delay Controls** ✅ *Complete*
+- `video_player_view.py`: `libvlc_video_set_spu_delay()` via ±50 ms step buttons (`[`/`]` shortcuts) + fine-tune slider; OSD feedback
 
-**3.6 Network Stream / Open URL**
-- `lyon/ui/video_player_view.py`: "Open URL…" button → text input → pass directly to VLC (supports HTTP, RTSP, HLS natively); add to recent-streams list in settings
+**3.6 Network Stream / Open URL** ✅ *Complete*
+- `video_player_view.py`: "Open URL…" button → text input → VLC (HTTP/RTSP/HLS natively); recent-streams list in settings
 
 ---
 
@@ -510,11 +519,11 @@ Scope: File picker in library sidebar → parse M3U/PLS → match paths to libra
               May Jun Jul Aug Sep Oct Nov Dec Jan Feb Mar
 v0.5.0 ───────■
 Phase 1              ├──────────┤
-v0.6.0                          ■
+v0.6.0                          ■  ✅ Complete
 Phase 2                          ├────────────┤
-v0.7.0                                        ■
+v0.7.0                                        ■  ✅ Complete
 Phase 3                                       ├──────────────┤
-v0.8.0                                                        ■
+v0.8.0                                                        ■  ✅ Complete
 Phase 4                                                        ├──────────┤
 v1.0                                                                       ■
 ```
@@ -530,23 +539,23 @@ v1.0                                                                       ■
 - [x] Gapless playback verified and togglable
 - [x] Batch tag editor confirmed working for all library formats
 
-#### v0.7.0 — Library Parity Release (Target: October 2026)
+#### v0.7.0 — Library Parity Release ✅ *Complete*
 *Phase 2 complete. MusicBee functional parity on core library features.*
-- [ ] Album art grid as primary album-browsing surface
-- [ ] Acoustic fingerprinting (AcoustID) with "Identify Track" workflow
-- [ ] Last.fm + ListenBrainz scrobbling
-- [ ] CUE sheet support (scan + playback)
-- [ ] Playlist import (M3U / PLS)
-- [ ] Duplicate detection: hash mode added to existing title+artist mode
+- [x] Album art grid as primary album-browsing surface
+- [x] Acoustic fingerprinting (AcoustID) with "Identify Track" workflow
+- [x] Last.fm + ListenBrainz scrobbling
+- [x] CUE sheet support (scan + playback)
+- [x] Playlist import (M3U / PLS)
+- [x] Duplicate detection: hash mode added to existing title+artist mode
 
-#### v0.8.0 — Connectivity Release (Target: December 2026)
+#### v0.8.0 — Connectivity Release ✅ *Complete*
 *Phase 3 complete. MediaMonkey connectivity parity.*
-- [ ] Internet radio (Shoutcast/Icecast browser)
-- [ ] DLNA/UPnP server (stream library to TV/receiver/phone)
-- [ ] Artist bio / info panel in Now Playing
-- [ ] Video resume position per file
-- [ ] Subtitle delay controls
-- [ ] Network stream / Open URL in video player
+- [x] Internet radio (M3U/PLS/HLS parser + station browser)
+- [x] DLNA/UPnP server (stream library to TV/receiver/phone)
+- [x] Artist bio / info panel in Now Playing
+- [x] Video resume position per file
+- [x] Subtitle delay controls
+- [x] Network stream / Open URL in video player
 
 #### v1.0.0 — Platform Release (Target: Q1 2027)
 *Phase 4 complete. Production-grade cross-platform release.*
@@ -599,4 +608,4 @@ v1.0                                                                       ■
 
 ---
 
-*Report updated for Sea Lyon Media Manager v0.6.0, branch LMM-DEV. Phase 1 (Audio Quality) complete: ReplayGain, output device/WASAPI, batch tag editor, and gapless playback implemented. Original analysis from commit 6f006c0; Phase 1 work on LMM-DEV.*
+*Report updated for Sea Lyon Media Manager v0.8.0-dev, branch LMM-DEV. Phases 1–3 complete. Phase 3 (Connectivity & Discovery) shipped: internet radio (M3U/PLS/HLS), DLNA/UPnP MediaServer, artist bio panel, video resume position, subtitle delay controls, and network stream Open URL. Full test suite: 472 passed. Phase 4 (Platform & Ecosystem) is the only remaining work.*

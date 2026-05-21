@@ -4,7 +4,9 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from typing import TYPE_CHECKING
+
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFileDialog,
     QFormLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QMessageBox,
@@ -15,6 +17,9 @@ from .. import __app_name__, __version__
 from ..core.settings import Settings, normalize_library_paths
 from .about import COPYRIGHT_NOTICE, THIRD_PARTY_NOTICE
 from .branding import app_icon
+
+if TYPE_CHECKING:
+    from ..core.scrobbler import ScrobblerService
 
 # (display label, settings key) pairs — order matches the combo box
 _RIP_FORMATS = [
@@ -30,6 +35,9 @@ _RIP_FORMATS = [
 ]
 _LOSSY_FORMATS = {"mp3", "aac", "opus", "ogg", "wma"}
 _FLAC_FORMAT = "flac"
+_DIALOG_DEFAULT_WIDTH = 900
+_DIALOG_DEFAULT_HEIGHT = 460
+_DIALOG_MIN_WIDTH = 760
 
 
 class SettingsDialog(QDialog):
@@ -40,10 +48,12 @@ class SettingsDialog(QDialog):
         *,
         audio_outputs: list[tuple[str, str]] | None = None,
         audio_devices_map: dict[str, list[tuple[str, str]]] | None = None,
+        scrobbler: "ScrobblerService | None" = None,
     ):
         super().__init__(parent)
         self.setWindowTitle("Settings")
-        self.resize(540, 460)
+        self.setMinimumWidth(_DIALOG_MIN_WIDTH)
+        self.resize(_DIALOG_DEFAULT_WIDTH, _DIALOG_DEFAULT_HEIGHT)
         self.result_settings = replace(settings)
         self.result_settings.library_paths = normalize_library_paths(settings.library_paths)
         self._initial_music_root = settings.music_root.strip()
@@ -51,12 +61,17 @@ class SettingsDialog(QDialog):
         self._audio_outputs: list[tuple[str, str]] = audio_outputs or [("", "Default")]
         self._audio_devices_map: dict[str, list[tuple[str, str]]] = audio_devices_map or {}
 
+        self._scrobbler = scrobbler
+        self._lastfm_poll_timer: QTimer | None = None
+
         tabs = QTabWidget()
         tabs.addTab(self._build_library_tab(settings), "Library")
         tabs.addTab(self._build_playback_tab(settings), "Playback")
         tabs.addTab(self._build_ripping_tab(settings), "CD Ripping")
         tabs.addTab(self._build_metadata_tab(settings), "Metadata")
         tabs.addTab(self._build_youtube_tab(settings), "YouTube")
+        tabs.addTab(self._build_scrobbling_tab(settings), "Scrobbling")
+        tabs.addTab(self._build_dlna_tab(settings), "DLNA")
         tabs.addTab(self._build_about_tab(), "About")
 
         layout = QVBoxLayout(self)
@@ -369,6 +384,170 @@ class SettingsDialog(QDialog):
 
         return w
 
+    def _build_scrobbling_tab(self, settings: Settings) -> QWidget:
+        from ..core.scrobbler import lastfm_api_configured
+        w = QWidget()
+        layout = QVBoxLayout(w)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(8)
+
+        # ---- Last.fm
+        lfm_label = QLabel("Last.fm")
+        lfm_label.setObjectName("sectionHeader")
+        layout.addWidget(lfm_label)
+
+        self.lastfm_enabled = QCheckBox("Enable Last.fm scrobbling")
+        self.lastfm_enabled.setChecked(settings.lastfm_scrobbling_enabled)
+        layout.addWidget(self.lastfm_enabled)
+
+        lfm_status_row = QHBoxLayout()
+        self._lastfm_status_label = QLabel(self._lastfm_status_text(settings))
+        lfm_status_row.addWidget(self._lastfm_status_label)
+        lfm_status_row.addStretch(1)
+        self._lastfm_connect_btn = QPushButton("Connect Last.fm…")
+        self._lastfm_connect_btn.clicked.connect(self._connect_lastfm)
+        lfm_status_row.addWidget(self._lastfm_connect_btn)
+        self._lastfm_disconnect_btn = QPushButton("Disconnect")
+        self._lastfm_disconnect_btn.setEnabled(bool(settings.lastfm_session_key))
+        self._lastfm_disconnect_btn.clicked.connect(self._disconnect_lastfm)
+        lfm_status_row.addWidget(self._lastfm_disconnect_btn)
+        layout.addLayout(lfm_status_row)
+
+        if self._scrobbler is None:
+            self._lastfm_connect_btn.setEnabled(False)
+            warn = QLabel("Last.fm sign-in is unavailable: no scrobbler service is attached.")
+            warn.setObjectName("warningLabel")
+            warn.setWordWrap(True)
+            layout.addWidget(warn)
+        elif not lastfm_api_configured():
+            lfm_warn = QLabel(
+                "Last.fm API key/secret not configured — scrobbling is disabled until a developer "
+                "sets _LASTFM_API_KEY and _LASTFM_API_SECRET in lyon/core/scrobbler.py."
+            )
+            lfm_warn.setObjectName("warningLabel")
+            lfm_warn.setWordWrap(True)
+            layout.addWidget(lfm_warn)
+            self._lastfm_connect_btn.setEnabled(False)
+        else:
+            self._scrobbler.lastfm_token_ready.connect(self._on_lastfm_token_ready)
+            self._scrobbler.lastfm_auth_complete.connect(self._on_lastfm_auth_complete)
+            self._scrobbler.lastfm_auth_failed.connect(self._on_lastfm_auth_failed)
+
+        layout.addSpacing(8)
+
+        # ---- ListenBrainz
+        lbz_label = QLabel("ListenBrainz")
+        lbz_label.setObjectName("sectionHeader")
+        layout.addWidget(lbz_label)
+
+        self.lbz_enabled = QCheckBox("Enable ListenBrainz scrobbling")
+        self.lbz_enabled.setChecked(settings.listenbrainz_scrobbling_enabled)
+        layout.addWidget(self.lbz_enabled)
+
+        lbz_token_row = QHBoxLayout()
+        self.lbz_token = QLineEdit(settings.listenbrainz_token)
+        self.lbz_token.setPlaceholderText("Paste your ListenBrainz user token here…")
+        self.lbz_token.setEchoMode(QLineEdit.Password)
+        lbz_token_row.addWidget(self.lbz_token, 1)
+        lbz_link = QPushButton("Get token ↗")
+        lbz_link.setToolTip("Open listenbrainz.org/profile/ in your browser")
+        lbz_link.clicked.connect(self._open_lbz_profile)
+        lbz_token_row.addWidget(lbz_link)
+        layout.addLayout(lbz_token_row)
+
+        layout.addStretch(1)
+        return w
+
+    def _build_dlna_tab(self, settings: Settings) -> QWidget:
+        w = QWidget()
+        form = QFormLayout(w)
+        form.setContentsMargins(12, 12, 12, 12)
+        form.setVerticalSpacing(8)
+
+        self.dlna_enabled = QCheckBox("Share library over DLNA / UPnP")
+        self.dlna_enabled.setChecked(settings.dlna_enabled)
+        form.addRow("", self.dlna_enabled)
+
+        self.dlna_name = QLineEdit(settings.dlna_friendly_name)
+        self.dlna_name.setPlaceholderText("Sea Lyon Media Manager")
+        form.addRow("Server name:", self.dlna_name)
+
+        self.dlna_port = QSpinBox()
+        self.dlna_port.setRange(0, 65535)
+        self.dlna_port.setSpecialValueText("Auto")
+        self.dlna_port.setValue(settings.dlna_port)
+        self.dlna_port.setToolTip("Use 0 to let the operating system choose an available port.")
+        form.addRow("Port:", self.dlna_port)
+
+        note = QLabel(
+            "DLNA shares indexed audio and video files on your local network while Sea Lyon is running."
+        )
+        note.setWordWrap(True)
+        note.setObjectName("mutedText")
+        form.addRow("", note)
+
+        return w
+
+    @staticmethod
+    def _lastfm_status_text(settings: Settings) -> str:
+        if not settings.lastfm_session_key:
+            return "Not connected"
+        if settings.lastfm_username:
+            return f"Connected as {settings.lastfm_username}"
+        return "Connected"
+
+    def _connect_lastfm(self) -> None:
+        if self._scrobbler is None:
+            QMessageBox.warning(self, "Last.fm", "Scrobbler service is unavailable.")
+            return
+        self._lastfm_connect_btn.setEnabled(False)
+        self._lastfm_status_label.setText("Getting token…")
+        self._scrobbler.start_lastfm_auth()
+
+    def _on_lastfm_token_ready(self, token: str) -> None:
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+        from ..core.scrobbler import lastfm_auth_url
+        QDesktopServices.openUrl(QUrl(lastfm_auth_url(token)))
+        self._lastfm_status_label.setText("Waiting for browser authorisation…")
+        if self._lastfm_poll_timer is None:
+            self._lastfm_poll_timer = QTimer(self)
+            self._lastfm_poll_timer.setInterval(5000)
+            assert self._scrobbler is not None
+            self._lastfm_poll_timer.timeout.connect(self._scrobbler.poll_lastfm_session)
+        self._lastfm_poll_timer.start()
+
+    def _on_lastfm_auth_complete(self, sk: str, name: str) -> None:
+        if self._lastfm_poll_timer:
+            self._lastfm_poll_timer.stop()
+        self.result_settings.lastfm_session_key = sk
+        self.result_settings.lastfm_username = name
+        self._lastfm_status_label.setText(
+            f"Connected as {name}" if name else "Connected"
+        )
+        self._lastfm_disconnect_btn.setEnabled(True)
+        self._lastfm_connect_btn.setEnabled(True)
+
+    def _on_lastfm_auth_failed(self, msg: str) -> None:
+        if self._lastfm_poll_timer:
+            self._lastfm_poll_timer.stop()
+        self._lastfm_status_label.setText(f"Auth failed: {msg}")
+        self._lastfm_connect_btn.setEnabled(True)
+
+    def _disconnect_lastfm(self) -> None:
+        if self._lastfm_poll_timer:
+            self._lastfm_poll_timer.stop()
+        self.result_settings.lastfm_session_key = ""
+        self.result_settings.lastfm_username = ""
+        self._lastfm_status_label.setText("Not connected")
+        self._lastfm_disconnect_btn.setEnabled(False)
+        self._lastfm_connect_btn.setEnabled(True)
+
+    def _open_lbz_profile(self) -> None:
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+        QDesktopServices.openUrl(QUrl("https://listenbrainz.org/profile/"))
+
     def _build_about_tab(self) -> QWidget:
         w = QWidget()
         layout = QVBoxLayout(w)
@@ -533,4 +712,14 @@ class SettingsDialog(QDialog):
         self.result_settings.yt_video_format = self.yt_video_fmt.currentText()
         self.result_settings.yt_output_dir = self.yt_save_dir.text().strip()
         self.result_settings.yt_auto_add = self.yt_auto_add.isChecked()
+        self.result_settings.lastfm_scrobbling_enabled = self.lastfm_enabled.isChecked()
+        self.result_settings.listenbrainz_scrobbling_enabled = self.lbz_enabled.isChecked()
+        self.result_settings.listenbrainz_token = self.lbz_token.text().strip()
+        self.result_settings.dlna_enabled = self.dlna_enabled.isChecked()
+        self.result_settings.dlna_port = self.dlna_port.value()
+        self.result_settings.dlna_friendly_name = (
+            self.dlna_name.text().strip() or "Sea Lyon Media Manager"
+        )
+        # lastfm_session_key and lastfm_username are updated live by the auth flow;
+        # preserve whatever's there.
         self.accept()

@@ -383,6 +383,53 @@ def test_theaudiodb_search_maps_album_tracks_and_artwork(monkeypatch):
     assert calls[1][1] == {"m": "42"}
 
 
+def test_theaudiodb_artist_lookup_maps_bio_image_and_similar(monkeypatch):
+    calls = []
+
+    def fake_get_json(url, params=None, headers=None):
+        calls.append((url, params, headers))
+        return {
+            "artists": [
+                {
+                    "strArtist": "Artist",
+                    "strBiographyEN": "Artist biography.",
+                    "strArtistThumb": "https://example.test/artist.jpg",
+                    "strGenre": "Rock",
+                    "strCountry": "Canada",
+                    "intFormedYear": "1999",
+                    "strWebsite": "artist.example.test",
+                    "strSimilarArtists": "A, B; C",
+                }
+            ]
+        }
+
+    monkeypatch.setattr(metadata, "_get_json", fake_get_json)
+    monkeypatch.setattr(metadata, "_theaudiodb_api_key", lambda: "123")
+
+    artist = metadata.lookup_artist_info("Artist")
+
+    assert artist.name == "Artist"
+    assert artist.biography == "Artist biography."
+    assert artist.image_url == "https://example.test/artist.jpg"
+    assert artist.genre == "Rock"
+    assert artist.country == "Canada"
+    assert artist.formed_year == 1999
+    assert artist.website == "artist.example.test"
+    assert artist.similar_artists == ["A", "B", "C"]
+    assert calls[0][0].endswith("/123/search.php")
+    assert calls[0][1] == {"s": "Artist"}
+
+
+def test_artist_lookup_skips_unknown_artist(monkeypatch):
+    monkeypatch.setattr(
+        metadata,
+        "_get_json",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("network call")),
+    )
+
+    assert metadata.lookup_artist_info("Unknown Artist") is None
+
+
 def test_fetch_artwork_uses_cover_art_archive_then_album_artwork(monkeypatch):
     album = metadata.AlbumInfo(
         artist="Artist",
@@ -684,3 +731,23 @@ def test_metadata_diagnostics_logs_empty_disc_provider_summary(monkeypatch, tmp_
                 metadata.LOG.removeHandler(handler)
                 handler.close()
         metadata._metadata_file_handler = None
+
+
+def test_theaudiodb_artist_match_accepts_the_prefix_variants():
+    from lyon.core.metadata import _is_theaudiodb_artist_match
+    assert _is_theaudiodb_artist_match({"strArtist": "The Beatles"}, "Beatles")
+    assert _is_theaudiodb_artist_match({"strArtist": "The Beatles"}, "The Beatles")
+    assert _is_theaudiodb_artist_match({"strArtist": "Fleetwood Mac"}, "Mac")
+
+
+def test_theaudiodb_artist_match_rejects_substring_overlaps():
+    from lyon.core.metadata import _is_theaudiodb_artist_match
+    # Loose substring matches were producing wrong bios in the field.
+    assert not _is_theaudiodb_artist_match({"strArtist": "The Dreadnoughts"}, "Dre")
+    assert not _is_theaudiodb_artist_match({"strArtist": "Beatlemania"}, "Beatles")
+    assert not _is_theaudiodb_artist_match({"strArtist": "Dr. Dre"}, "Dr")
+
+
+def test_split_similar_artists_keeps_slash_in_band_names():
+    from lyon.core.metadata import _split_similar_artists
+    assert _split_similar_artists("AC/DC, Metallica") == ["AC/DC", "Metallica"]

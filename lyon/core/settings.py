@@ -7,6 +7,7 @@ import os
 import sys
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
+from urllib.parse import urlparse
 
 from .equalizer import (
     DEFAULT_EQ_CURVE_NAME,
@@ -22,6 +23,18 @@ LOG = logging.getLogger(__name__)
 _RIP_FORMATS = {"flac", "mp3", "aac", "opus", "ogg", "alac", "wav", "aiff", "wma"}
 _YT_AUDIO_FORMATS = {"flac", "mp3"}
 _YT_VIDEO_FORMATS = {"mp4", "mkv", "webm"}
+_STREAM_URL_SCHEMES = {
+    "http",
+    "https",
+    "rtmp",
+    "rtmps",
+    "rtsp",
+    "mms",
+    "mmsh",
+    "icy",
+}
+_MAX_RECENT_STREAM_URLS = 25
+_MAX_RADIO_STATIONS = 200
 
 
 def _default_music_root() -> Path:
@@ -105,6 +118,65 @@ def normalize_library_paths(paths: object) -> list[str]:
     return normalized
 
 
+def normalize_stream_urls(urls: object, *, limit: int = _MAX_RECENT_STREAM_URLS) -> list[str]:
+    """Return valid network stream URLs without duplicates, preserving order."""
+    if not isinstance(urls, list | tuple):
+        return []
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in urls:
+        url = str(value).strip()
+        if not _is_network_stream_url(url):
+            continue
+        key = url.casefold()
+        if key in seen:
+            continue
+        normalized.append(url)
+        seen.add(key)
+        if len(normalized) >= limit:
+            break
+    return normalized
+
+
+def _is_network_stream_url(url: str) -> bool:
+    if not url:
+        return False
+    parsed = urlparse(url)
+    return parsed.scheme.casefold() in _STREAM_URL_SCHEMES and bool(parsed.netloc)
+
+
+def normalize_radio_stations(stations: object, *, limit: int = _MAX_RADIO_STATIONS) -> list[dict[str, object]]:
+    """Return saved radio stations with valid stream URLs and stable keys."""
+    if not isinstance(stations, list | tuple):
+        return []
+
+    normalized: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for value in stations:
+        if not isinstance(value, dict):
+            continue
+        url = str(value.get("url") or "").strip()
+        if not _is_network_stream_url(url):
+            continue
+        key = url.casefold()
+        if key in seen:
+            continue
+        name = str(value.get("name") or "").strip() or url
+        genre = str(value.get("genre") or "").strip()
+        bitrate = _nonnegative_int(value.get("bitrate"), 0)
+        normalized.append({
+            "name": name,
+            "url": url,
+            "genre": genre,
+            "bitrate": bitrate,
+        })
+        seen.add(key)
+        if len(normalized) >= limit:
+            break
+    return normalized
+
+
 @dataclass
 class Settings:
     music_root: str = field(default_factory=lambda: str(_default_music_root()))
@@ -145,6 +217,16 @@ class Settings:
     audio_output: str = ""              # VLC audio output module ID (e.g. "wasapi", "directsound")
     audio_output_device: str = ""       # VLC device ID string; "" = VLC default
     gapless_playback: bool = False      # pre-buffer next track to minimize inter-track gap; no-op when crossfade > 0
+    lastfm_session_key: str = ""        # per-user session key obtained via auth.getSession
+    lastfm_username: str = ""           # display name for the connected Last.fm account
+    lastfm_scrobbling_enabled: bool = False
+    listenbrainz_token: str = ""        # per-user token from listenbrainz.org/profile/
+    listenbrainz_scrobbling_enabled: bool = False
+    recent_stream_urls: list[str] = field(default_factory=list)
+    dlna_enabled: bool = False
+    dlna_port: int = 8200
+    dlna_friendly_name: str = "Sea Lyon Media Manager"
+    radio_stations: list[dict[str, object]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.rip_format = str(self.rip_format or "flac").lower()
@@ -166,6 +248,16 @@ class Settings:
         self.audio_output = str(self.audio_output or "").strip()
         self.audio_output_device = str(self.audio_output_device or "").strip()
         self.gapless_playback = _bool_value(self.gapless_playback, False)
+        self.lastfm_scrobbling_enabled = _bool_value(self.lastfm_scrobbling_enabled, False)
+        self.listenbrainz_scrobbling_enabled = _bool_value(self.listenbrainz_scrobbling_enabled, False)
+        self.lastfm_session_key = str(self.lastfm_session_key or "").strip()
+        self.lastfm_username = str(self.lastfm_username or "").strip()
+        self.listenbrainz_token = str(self.listenbrainz_token or "").strip()
+        self.recent_stream_urls = normalize_stream_urls(self.recent_stream_urls)
+        self.dlna_enabled = _bool_value(self.dlna_enabled, False)
+        self.dlna_port = _clamp_int(self.dlna_port, 8200, 0, 65535)
+        self.dlna_friendly_name = str(self.dlna_friendly_name or "").strip() or "Sea Lyon Media Manager"
+        self.radio_stations = normalize_radio_stations(self.radio_stations)
         self.yt_audio_format = str(self.yt_audio_format or "flac").lower()
         if self.yt_audio_format not in _YT_AUDIO_FORMATS:
             self.yt_audio_format = "flac"
@@ -189,6 +281,36 @@ class Settings:
             custom_curve_selected or built_in_curve_selected
         ):
             self.equalizer_curve_name = DEFAULT_EQ_CURVE_NAME
+
+    def remember_stream_url(self, url: str) -> None:
+        """Move a valid stream URL to the front of the recents list."""
+        self.recent_stream_urls = normalize_stream_urls([url, *self.recent_stream_urls])
+
+    def add_radio_stations(self, stations: list[dict[str, object]]) -> None:
+        """Append or update saved radio stations by URL.
+
+        Existing fields are preserved when the incoming station leaves them
+        blank, so re-importing a playlist without a bitrate does not wipe a
+        bitrate the user had captured earlier.
+        """
+        merged: dict[str, dict[str, object]] = {
+            str(station["url"]).casefold(): dict(station)
+            for station in normalize_radio_stations(self.radio_stations)
+        }
+        for station in normalize_radio_stations(stations):
+            key = str(station["url"]).casefold()
+            existing = merged.get(key)
+            if existing is None:
+                merged[key] = station
+                continue
+            combined = dict(existing)
+            for field_name in ("name", "genre", "bitrate"):
+                incoming = station.get(field_name)
+                if incoming:
+                    combined[field_name] = incoming
+            combined["url"] = station["url"]
+            merged[key] = combined
+        self.radio_stations = normalize_radio_stations(list(merged.values()))
 
     @classmethod
     def load(cls) -> "Settings":

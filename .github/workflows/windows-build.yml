@@ -25,12 +25,34 @@ jobs:
       - name: Install Python dependencies
         run: python -m pip install -r requirements.txt pyinstaller
 
+      - name: Resolve latest fpcalc
+        id: fpcalc-release
+        shell: pwsh
+        run: |
+          $release = Invoke-RestMethod `
+            -Uri "https://api.github.com/repos/acoustid/chromaprint/releases/latest" `
+            -Headers @{ "User-Agent" = "SeaLyonMediaManager-Build" }
+          $asset = $release.assets |
+            Where-Object { $_.name -match '^chromaprint-fpcalc-.+-windows-x86_64\.zip$' } |
+            Select-Object -First 1
+          if (-not $asset) {
+            throw "Latest Chromaprint release did not include a Windows x86_64 fpcalc zip."
+          }
+          $version = ([string]$release.tag_name) -replace '^v', ''
+          "CHROMAPRINT_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "FPCALC_ARCHIVE=$($asset.name)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "FPCALC_URL=$($asset.browser_download_url)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "archive=$($asset.name)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "url=$($asset.browser_download_url)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "Latest fpcalc: $version ($($asset.name))"
+
       - name: Cache binary runtimes
         id: cache-bins
         uses: actions/cache@v4
         with:
           path: bin
-          key: windows-bins-ffmpeg-${{ env.FFMPEG_VERSION }}-discid-${{ env.LIBDISCID_VERSION }}-vlc-${{ env.VLC_VERSION }}
+          key: windows-bins-ffmpeg-${{ env.FFMPEG_VERSION }}-discid-${{ env.LIBDISCID_VERSION }}-vlc-${{ env.VLC_VERSION }}-chromaprint-${{ steps.fpcalc-release.outputs.version }}
 
       - name: Fetch ffmpeg.exe
         if: steps.cache-bins.outputs.cache-hit != 'true'
@@ -81,6 +103,24 @@ jobs:
           Remove-Item $zip
           Remove-Item -Recurse -Force libdiscid-extract
 
+      - name: Fetch fpcalc.exe
+        if: steps.cache-bins.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path bin | Out-Null
+          Invoke-WebRequest -Uri "${{ steps.fpcalc-release.outputs.url }}" -OutFile fpcalc.zip
+          Expand-Archive fpcalc.zip -DestinationPath fpcalc-extract -Force
+          $exe = Get-ChildItem -Path fpcalc-extract -Recurse -Filter fpcalc.exe | Select-Object -First 1
+          if (-not $exe) { throw "fpcalc.exe was not found in ${{ steps.fpcalc-release.outputs.archive }}." }
+          Copy-Item $exe.FullName -Destination bin\fpcalc.exe -Force
+          $versionOutput = & bin\fpcalc.exe -version 2>&1
+          if ($LASTEXITCODE -ne 0) { throw "fpcalc.exe -version failed: $versionOutput" }
+          if ($versionOutput -notmatch [regex]::Escape("${{ steps.fpcalc-release.outputs.version }}")) {
+            throw "Expected fpcalc ${{ steps.fpcalc-release.outputs.version }}, got: $versionOutput"
+          }
+          Remove-Item fpcalc.zip
+          Remove-Item -Recurse -Force fpcalc-extract
+
       - name: Fetch libVLC runtime
         if: steps.cache-bins.outputs.cache-hit != 'true'
         shell: pwsh
@@ -108,11 +148,12 @@ jobs:
           $env:VLC_PLUGIN_PATH = "${{ github.workspace }}\bin\vlc\plugins"
           python -c "from lyon.app import main; print('imports OK')"
           python -c "from PySide6.QtCore import QCoreApplication; app = QCoreApplication([]); from lyon.core.playback_backend import create_playback_backend; backend = create_playback_backend(); print(type(backend).__name__); assert type(backend).__name__ == 'VlcPlaybackBackend'"
+          python -c "from lyon.core.fingerprint import is_available; assert is_available(); print('fpcalc OK')"
 
       - name: Validate PyInstaller inputs
         shell: pwsh
         run: |
-          foreach ($required in @('main.py', 'docs\brand\lyon-app-icon.png', 'bin\ffmpeg.exe')) {
+          foreach ($required in @('main.py', 'docs\brand\lyon-app-icon.png', 'bin\ffmpeg.exe', 'bin\fpcalc.exe')) {
             if (-not (Test-Path $required)) {
               throw "Required build input missing: $required"
             }
@@ -131,6 +172,11 @@ jobs:
           if (-not (Test-Path (Join-Path $bundleVlc 'libvlc.dll'))) { throw "Packaged app is missing libvlc.dll." }
           if (-not (Test-Path (Join-Path $bundleVlc 'libvlccore.dll'))) { throw "Packaged app is missing libvlccore.dll." }
           if (-not (Test-Path (Join-Path $bundleVlc 'plugins'))) { throw "Packaged app is missing VLC plugins." }
+          $bundleBin = "dist\LyonMusicManager\_internal\bin"
+          if (-not (Test-Path $bundleBin)) {
+            $bundleBin = "dist\LyonMusicManager\bin"
+          }
+          if (-not (Test-Path (Join-Path $bundleBin 'fpcalc.exe'))) { throw "Packaged app is missing fpcalc.exe." }
 
       - name: Zip dist folder
         shell: pwsh
