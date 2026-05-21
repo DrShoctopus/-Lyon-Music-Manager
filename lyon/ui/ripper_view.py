@@ -543,7 +543,6 @@ class RipperView(QWidget):
         row[2].setEditable(False)
         row[2].setData(_STATUS_WAITING, Qt.UserRole)
         self.tracks_model.appendRow(row)
-        self.tracks.horizontalHeader().resizeSection(2, self._status_column_width)
 
     def _set_track_progress(self, number: int, pct: int) -> None:
         pct = max(0, min(100, int(pct)))
