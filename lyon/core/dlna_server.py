@@ -4,8 +4,10 @@ from __future__ import annotations
 import base64
 import logging
 import mimetypes
+import os
 import platform
 import socket
+import stat as stat_module
 import threading
 import time
 import uuid
@@ -30,6 +32,7 @@ _SSDP_ADDR = ("239.255.255.250", 1900)
 _CHUNK_SIZE = 256 * 1024
 _MAX_SOAP_BODY = 1024 * 1024
 _MAX_BROWSE_ITEMS = 500
+_TRACK_CACHE_TTL = 5.0
 
 _MIME_BY_EXT = {
     ".flac": "audio/flac",
@@ -67,6 +70,8 @@ class DlnaServer:
         self._thread: threading.Thread | None = None
         self._ssdp: _SsdpResponder | None = None
         self._base_url = ""
+        self._track_cache_lock = threading.Lock()
+        self._track_cache: dict[str | None, tuple[float, tuple[Path, ...], list[Track]]] = {}
 
     @property
     def running(self) -> bool:
@@ -83,10 +88,16 @@ class DlnaServer:
         stored = self.library.track_by_id(track.id)
         if stored is None:
             return None
-        path = self._track_file_path(stored)
-        if path is None or not path.exists() or not path.is_file():
+        file_info = self._track_file(stored)
+        if file_info is None:
             return None
+        path, _stat = file_info
         return f"{self.base_url}/media/{stored.id}/{quote(path.name)}"
+
+    def invalidate_cache(self) -> None:
+        """Drop cached DLNA library views after scans or settings changes."""
+        with self._track_cache_lock:
+            self._track_cache.clear()
 
     def start(self) -> None:
         if self.running:
@@ -224,12 +235,13 @@ class DlnaServer:
         if track is None:
             _send_error(handler, HTTPStatus.NOT_FOUND, "Track not found")
             return
-        path = self._track_file_path(track)
-        if path is None or not path.exists() or not path.is_file():
+        file_info = self._track_file(track)
+        if file_info is None:
             _send_error(handler, HTTPStatus.NOT_FOUND, "Media file not found")
             return
+        path, stat = file_info
         mime = _mime_type(path)
-        size = path.stat().st_size
+        size = stat.st_size
         byte_range = _parse_range(handler.headers.get("Range"), size)
         if byte_range is None:
             start, end = 0, max(0, size - 1)
@@ -283,7 +295,7 @@ class DlnaServer:
         count = _nonnegative_xml_int(root, "RequestedCount", 0)
         query = _search_query(_xml_text(root, "SearchCriteria", ""))
         tracks = self._tracks_matching(query) if query else self._tracks()
-        items = [self._track_item(track) for track in tracks]
+        items = self._track_items_from_tracks(tracks)
         limit = _MAX_BROWSE_ITEMS if count <= 0 else min(count, _MAX_BROWSE_ITEMS)
         visible = items[start:start + limit]
         payload = (
@@ -309,11 +321,11 @@ class DlnaServer:
             if object_id == "audio:all":
                 return [_container("audio:all", "audio", "All Music", len(self._tracks("audio")))]
             if object_id == "audio:artists":
-                return [_container("audio:artists", "audio", "Artists", len(self._artists("audio")))]
+                return [_container("audio:artists", "audio", "Artists", len(self._artist_counts("audio")))]
             if object_id == "audio:albums":
-                return [_container("audio:albums", "audio", "Albums", len(self._albums("audio")))]
+                return [_container("audio:albums", "audio", "Albums", len(self._album_counts("audio")))]
             if object_id == "audio:genres":
-                return [_container("audio:genres", "audio", "Genres", len(self._genres("audio")))]
+                return [_container("audio:genres", "audio", "Genres", len(self._genre_counts("audio")))]
             if object_id == "video:all":
                 return [_container("video:all", "video", "All Videos", len(self._tracks("video")))]
             if object_id.startswith("artist:"):
@@ -331,7 +343,8 @@ class DlnaServer:
                 return [_container(object_id, "audio:genres", genre, len(tracks))] if genre else []
             if object_id.startswith("track:"):
                 track = _track_from_object_id(self.library, object_id)
-                return [self._track_item(track)] if track and self._track_file_path(track) else []
+                item = self._track_item(track) if track else None
+                return [item] if item is not None else []
             return []
         if object_id == "0":
             return [
@@ -341,9 +354,9 @@ class DlnaServer:
         if object_id == "audio":
             return [
                 _container("audio:all", "audio", "All Music", len(self._tracks("audio"))),
-                _container("audio:artists", "audio", "Artists", len(self._artists("audio"))),
-                _container("audio:albums", "audio", "Albums", len(self._albums("audio"))),
-                _container("audio:genres", "audio", "Genres", len(self._genres("audio"))),
+                _container("audio:artists", "audio", "Artists", len(self._artist_counts("audio"))),
+                _container("audio:albums", "audio", "Albums", len(self._album_counts("audio"))),
+                _container("audio:genres", "audio", "Genres", len(self._genre_counts("audio"))),
             ]
         if object_id == "audio:all":
             return self._track_items("audio")
@@ -353,40 +366,40 @@ class DlnaServer:
                     f"artist:{_encode_object_value(artist)}",
                     "audio:artists",
                     artist,
-                    len(self._tracks_for_artist(artist, "audio")),
+                    count,
                 )
-                for artist in self._artists("audio")
+                for artist, count in self._artist_counts("audio").items()
             ]
         if object_id.startswith("artist:"):
             artist = _decode_object_value(object_id.removeprefix("artist:"))
-            return [self._track_item(track) for track in self._tracks_for_artist(artist, "audio")] if artist else []
+            return self._track_items_from_tracks(self._tracks_for_artist(artist, "audio")) if artist else []
         if object_id == "audio:albums":
             return [
                 _container(
                     f"album:{_encode_object_value(_join_pair(artist, album))}",
                     "audio:albums",
                     f"{artist} - {album}",
-                    len(self._tracks_for_album(artist, album, "audio")),
+                    count,
                 )
-                for artist, album in self._albums("audio")
+                for (artist, album), count in self._album_counts("audio").items()
             ]
         if object_id.startswith("album:"):
             decoded = _decode_object_value(object_id.removeprefix("album:"))
             artist, album = _split_pair(decoded)
-            return [self._track_item(track) for track in self._tracks_for_album(artist, album, "audio")] if artist and album else []
+            return self._track_items_from_tracks(self._tracks_for_album(artist, album, "audio")) if artist and album else []
         if object_id == "audio:genres":
             return [
                 _container(
                     f"genre:{_encode_object_value(genre)}",
                     "audio:genres",
                     genre,
-                    len(self._tracks_for_genre(genre, "audio")),
+                    count,
                 )
-                for genre in self._genres("audio")
+                for genre, count in self._genre_counts("audio").items()
             ]
         if object_id.startswith("genre:"):
             genre = _decode_object_value(object_id.removeprefix("genre:"))
-            return [self._track_item(track) for track in self._tracks_for_genre(genre, "audio")] if genre else []
+            return self._track_items_from_tracks(self._tracks_for_genre(genre, "audio")) if genre else []
         if object_id == "video":
             return [_container("video:all", "video", "All Videos", len(self._tracks("video")))]
         if object_id == "video:all":
@@ -394,78 +407,137 @@ class DlnaServer:
         return []
 
     def _track_items(self, media_type: str | None = None) -> list[_BrowseItem]:
-        return [self._track_item(track) for track in self._tracks(media_type)]
+        return self._track_items_from_tracks(self._tracks(media_type))
+
+    def _track_items_from_tracks(self, tracks: list[Track]) -> list[_BrowseItem]:
+        items: list[_BrowseItem] = []
+        for track in tracks:
+            item = self._track_item(track)
+            if item is not None:
+                items.append(item)
+        return items
 
     def _artists(self, media_type: str) -> list[str]:
-        return sorted({track.display_artist for track in self._tracks(media_type)}, key=str.casefold)
+        return list(self._artist_counts(media_type))
 
     def _albums(self, media_type: str) -> list[tuple[str, str]]:
-        albums = {
-            (track.display_artist, track.album or "Unknown Album")
-            for track in self._tracks(media_type)
-        }
-        return sorted(albums, key=lambda item: (item[0].casefold(), item[1].casefold()))
+        return list(self._album_counts(media_type))
 
     def _genres(self, media_type: str) -> list[str]:
-        return sorted({track.genre for track in self._tracks(media_type) if track.genre}, key=str.casefold)
+        return list(self._genre_counts(media_type))
 
     def _tracks(self, media_type: str | None = None) -> list[Track]:
+        roots = tuple(self._library_roots())
+        now = time.monotonic()
+        with self._track_cache_lock:
+            cached = self._track_cache.get(media_type)
+            if cached is not None:
+                cached_at, cached_roots, cached_tracks = cached
+                if cached_roots == roots and now - cached_at <= _TRACK_CACHE_TTL:
+                    return list(cached_tracks)
+
         tracks: list[Track] = []
-        for track in self.library.all_tracks():
+        for track in self.library.all_tracks(media_type):
             if track.media_type not in {"audio", "video"}:
                 continue
-            if media_type is not None and track.media_type != media_type:
-                continue
-            path = self._track_file_path(track)
-            if path is None or not path.exists() or not path.is_file():
+            if self._track_file(track, roots) is None:
                 continue
             tracks.append(track)
+        with self._track_cache_lock:
+            self._track_cache[media_type] = (time.monotonic(), roots, tracks)
         return tracks
 
     def _tracks_for_artist(self, artist: str, media_type: str) -> list[Track]:
-        return self._filter_tracks(self.library.tracks_for_artist(artist, media_type))
+        tracks = [track for track in self._tracks(media_type) if track.display_artist == artist]
+        return sorted(tracks, key=_track_album_sort_key)
 
     def _tracks_for_album(self, artist: str, album: str, media_type: str) -> list[Track]:
-        return self._filter_tracks(self.library.tracks_for_album(artist, album, media_type))
+        tracks = [
+            track
+            for track in self._tracks(media_type)
+            if track.display_artist == artist and (track.album or "Unknown Album") == album
+        ]
+        return sorted(tracks, key=_track_number_sort_key)
 
     def _tracks_for_genre(self, genre: str, media_type: str) -> list[Track]:
-        return self._filter_tracks(self.library.tracks_for_genre(genre, media_type))
+        tracks = [track for track in self._tracks(media_type) if track.genre == genre]
+        return sorted(tracks, key=_track_library_sort_key)
 
     def _tracks_matching(self, query: str) -> list[Track]:
         return self._filter_tracks(self.library.search(query))
 
     def _filter_tracks(self, tracks: list[Track]) -> list[Track]:
+        roots = tuple(self._library_roots())
         return [
             track
             for track in tracks
             if track.media_type in {"audio", "video"}
-            and (path := self._track_file_path(track)) is not None
-            and path.exists()
-            and path.is_file()
+            and self._track_file(track, roots) is not None
         ]
 
-    def _track_file_path(self, track: Track) -> Path | None:
+    def _artist_counts(self, media_type: str) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for track in self._tracks(media_type):
+            counts[track.display_artist] = counts.get(track.display_artist, 0) + 1
+        return dict(sorted(counts.items(), key=lambda item: item[0].casefold()))
+
+    def _album_counts(self, media_type: str) -> dict[tuple[str, str], int]:
+        counts: dict[tuple[str, str], int] = {}
+        for track in self._tracks(media_type):
+            key = (track.display_artist, track.album or "Unknown Album")
+            counts[key] = counts.get(key, 0) + 1
+        return dict(
+            sorted(
+                counts.items(),
+                key=lambda item: (item[0][0].casefold(), item[0][1].casefold()),
+            )
+        )
+
+    def _genre_counts(self, media_type: str) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for track in self._tracks(media_type):
+            if track.genre:
+                counts[track.genre] = counts.get(track.genre, 0) + 1
+        return dict(sorted(counts.items(), key=lambda item: item[0].casefold()))
+
+    def _track_file_path(self, track: Track, roots: tuple[Path, ...] | None = None) -> Path | None:
         path = _track_file_path(track)
         if path is None:
             return None
         resolved = _resolved_path(path)
-        if resolved is None or not _path_is_under_roots(resolved, self._library_roots()):
+        if roots is None:
+            roots = tuple(self._library_roots())
+        if resolved is None or not _path_is_under_roots(resolved, list(roots)):
             return None
         return resolved
+
+    def _track_file(
+        self, track: Track, roots: tuple[Path, ...] | None = None
+    ) -> tuple[Path, os.stat_result] | None:
+        path = self._track_file_path(track, roots)
+        if path is None:
+            return None
+        try:
+            stat = path.stat()
+        except OSError:
+            return None
+        if not stat_module.S_ISREG(stat.st_mode):
+            return None
+        return path, stat
 
     def _library_roots(self) -> list[Path]:
         roots = [Path(self.settings.music_root), *(Path(p) for p in self.settings.library_paths)]
         return [resolved for root in roots if (resolved := _resolved_path(root)) is not None]
 
-    def _track_item(self, track: Track) -> _BrowseItem:
-        path = self._track_file_path(track)
-        assert path is not None
+    def _track_item(self, track: Track) -> _BrowseItem | None:
+        file_info = self._track_file(track)
+        if file_info is None:
+            return None
+        path, stat = file_info
         mime = _mime_type(path)
         parent = "video" if track.media_type == "video" else "audio"
         upnp_class = "object.item.videoItem" if track.media_type == "video" else "object.item.audioItem.musicTrack"
-        url = self.media_url_for_track(track)
-        assert url is not None
-        stat = path.stat()
+        url = f"{self.base_url}/media/{track.id}/{quote(path.name)}"
         attrs = f'protocolInfo="http-get:*:{escape(mime)}:*" size="{stat.st_size}"'
         if track.duration > 0:
             attrs += f' duration="{_duration_text(track.duration)}"'

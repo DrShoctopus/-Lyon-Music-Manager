@@ -675,6 +675,7 @@ class MainWindow(QMainWindow):
         message = ", ".join(parts)
         toast_level = "success" if (n > 0 or updated > 0 or removed > 0) else "info"
         self.show_toast(message, level=toast_level, duration_ms=4000)
+        self.dlna_server.invalidate_cache()
         self.library_view.refresh()
         self.video_player_view.refresh_catalog()
         self._scan_thread = None
@@ -845,6 +846,7 @@ class MainWindow(QMainWindow):
                 level="warning" if summary.failed else "success",
                 duration_ms=4000,
             )
+            self.dlna_server.invalidate_cache()
             self._library_refresh_timer.start()
         self._watch_index_thread = None
 
@@ -883,6 +885,7 @@ class MainWindow(QMainWindow):
             )
         else:
             self.show_toast("No missing tracks were found.", level="info")
+        self.dlna_server.invalidate_cache()
         self.library_view.refresh()
 
     def _play_disc_audio_tracks(self, tracks: list, start_index: int) -> None:
@@ -1272,6 +1275,7 @@ class MainWindow(QMainWindow):
             for f in files:
                 self.library.add_file(f)
             self.library.commit()
+            self.dlna_server.invalidate_cache()
             self.library_view.refresh()
             plural = "" if len(files) == 1 else "s"
             self.show_toast(

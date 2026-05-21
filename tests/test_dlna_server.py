@@ -193,6 +193,36 @@ def test_dlna_media_url_for_track_matches_servable_media(tmp_path):
         library.close()
 
 
+def test_dlna_browse_skips_track_deleted_after_cache_fill(tmp_path):
+    library = Library(tmp_path / "library.db")
+    track_path = tmp_path / "gone.mp3"
+    _insert_track(library, track_path)
+    server = DlnaServer(library, Settings(music_root=str(tmp_path), dlna_port=0))
+    server._base_url = "http://127.0.0.1:8200"
+    try:
+        assert len(server._tracks("audio")) == 1
+        track_path.unlink()
+        items = server._track_items("audio")
+    finally:
+        library.close()
+
+    assert items == []
+
+
+def test_dlna_cache_invalidation_refreshes_track_list(tmp_path):
+    library = Library(tmp_path / "library.db")
+    _insert_track(library, tmp_path / "one.mp3")
+    server = DlnaServer(library, Settings(music_root=str(tmp_path), dlna_port=0))
+    try:
+        assert len(server._tracks("audio")) == 1
+        _insert_track(library, tmp_path / "two.mp3")
+        assert len(server._tracks("audio")) == 1
+        server.invalidate_cache()
+        assert len(server._tracks("audio")) == 2
+    finally:
+        library.close()
+
+
 def test_dlna_rejects_track_outside_configured_library_roots(tmp_path):
     library_root = tmp_path / "Music"
     library_root.mkdir()
