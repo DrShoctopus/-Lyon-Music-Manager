@@ -426,8 +426,7 @@ class Library:
                     row is not None
                     and "acoustid_id" in row.keys()
                     and media_type == "audio"
-                    and previous_hash is not None
-                    and previous_hash == file_hash
+                    and _row_matches_stat(row, stat)
                 )
                 else None
             )
@@ -1162,7 +1161,7 @@ class Library:
         if updates:
             with self._lock:
                 self.conn.executemany(
-                    "UPDATE tracks SET file_hash = ? WHERE id = ?",
+                    "UPDATE tracks SET file_hash = ? WHERE id = ? AND (file_hash IS NULL OR file_hash = '')",
                     updates,
                 )
                 self.conn.commit()

@@ -377,6 +377,43 @@ def test_video_catalog_refresh_rebuilds_changed_card(qapp, tmp_path, monkeypatch
         view.deleteLater()
 
 
+def test_video_catalog_changed_card_does_not_move_to_end(qapp, tmp_path, monkeypatch):
+    """Regression: a card whose metadata changes must not jump to the bottom of the catalog."""
+    from lyon.ui import video_player_view as video_mod
+
+    player = _FakeVlcPlayer()
+    _install_fake_vlc(monkeypatch, player)
+    monkeypatch.setattr(video_mod, "_configure_vlc_runtime_path", lambda: None)
+    one = tmp_path / "one.mp4"
+    two = tmp_path / "two.mp4"
+    three = tmp_path / "three.mp4"
+    one.write_bytes(b"video-1")
+    two.write_bytes(b"video-2")
+    three.write_bytes(b"video-3")
+    library = _CatalogLibrary([
+        _video_track(str(one), track_id=1, title="Alpha"),
+        _video_track(str(two), track_id=2, title="Beta"),
+        _video_track(str(three), track_id=3, title="Gamma"),
+    ])
+
+    view = video_mod.VideoPlayerView(library=library)
+    try:
+        view.refresh_catalog()
+        # Mutate the middle card's title so its signature changes.
+        library.tracks[1] = _video_track(str(two), track_id=2, title="Beta Updated")
+
+        view.refresh_catalog()
+
+        # All three cards must be present.
+        assert set(view._catalog_card_by_path) == {str(one), str(two), str(three)}
+        # The updated card must remain in the middle (index 1), not at the end.
+        paths_in_order = [card.path for card in view._catalog_cards]
+        assert paths_in_order == [str(one), str(two), str(three)]
+    finally:
+        view.cleanup()
+        view.deleteLater()
+
+
 def test_fullscreen_handoff_rebuilds_vlc_output_before_resuming(qapp, monkeypatch):
     from lyon.ui import video_player_view as video_mod
 

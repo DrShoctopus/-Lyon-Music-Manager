@@ -202,6 +202,32 @@ def test_index_file_clears_stale_hash_when_audio_changes(tmp_path, monkeypatch):
     assert row["acoustid_id"] is None
 
 
+def test_index_file_preserves_acoustid_when_file_hash_is_null(tmp_path, monkeypatch):
+    """Regression: acoustid must survive a rescan even when file_hash is still NULL."""
+    audio = tmp_path / "song.flac"
+    audio.write_bytes(b"FLAC" + b"\x00" * 60)
+    _patch_basic_audio_metadata(monkeypatch)
+
+    library = Library(tmp_path / "lib.db")
+    library.index_file(str(audio))
+
+    # Simulate fingerprinting: acoustid set but file_hash still NULL (deferred hashing).
+    library.conn.execute(
+        "UPDATE tracks SET acoustid_id = 'test-acoustid-uuid' WHERE path = ?",
+        (str(audio),),
+    )
+    library.conn.commit()
+
+    # Rescan the unchanged file — acoustid must not be erased.
+    library.index_file(str(audio), force=True)
+
+    row = library.conn.execute(
+        "SELECT file_hash, acoustid_id FROM tracks WHERE path = ?", (str(audio),)
+    ).fetchone()
+    assert row["file_hash"] is None, "hash should remain NULL (deferred)"
+    assert row["acoustid_id"] == "test-acoustid-uuid", "acoustid must be preserved on unchanged rescan"
+
+
 # ===========================================================================
 # 2.6 — find_duplicates_by_hash
 # ===========================================================================
@@ -280,6 +306,43 @@ def test_find_duplicates_by_hash_reuses_backfilled_hash_after_reopen(tmp_path, m
 
     assert len(groups) == 1
     assert {track.path for track in groups[0]} == {str(a), str(b)}
+
+
+def test_backfill_does_not_overwrite_hash_set_concurrently(tmp_path, monkeypatch):
+    """Regression: backfill UPDATE must not stomp a hash written by a concurrent index_file."""
+    audio = tmp_path / "song.flac"
+    audio.write_bytes(b"FLAC" + b"\x00" * 60)
+    _patch_basic_audio_metadata(monkeypatch)
+
+    library = Library(tmp_path / "lib.db")
+    library.index_file(str(audio))
+
+    track_id = library.conn.execute(
+        "SELECT id FROM tracks WHERE path = ?", (str(audio),)
+    ).fetchone()["id"]
+
+    sentinel = "hash-set-by-concurrent-index"
+
+    # Wrap _compute_file_hash to also simulate a concurrent index setting the hash first.
+    original_compute = library_module._compute_file_hash
+
+    def _compute_and_inject(path):
+        # Simulate a concurrent index_file winning the race and writing the hash.
+        library.conn.execute(
+            "UPDATE tracks SET file_hash = ? WHERE id = ?",
+            (sentinel, track_id),
+        )
+        library.conn.commit()
+        return original_compute(path)
+
+    monkeypatch.setattr(library_module, "_compute_file_hash", _compute_and_inject)
+
+    library._backfill_missing_hashes()
+
+    row = library.conn.execute(
+        "SELECT file_hash FROM tracks WHERE id = ?", (track_id,)
+    ).fetchone()
+    assert row["file_hash"] == sentinel, "backfill must not overwrite a concurrently-written hash"
 
 
 def test_find_duplicates_by_hash_ignores_null_hash(tmp_path):

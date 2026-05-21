@@ -144,24 +144,11 @@ def _cache_thumb(key: tuple[Any, ...], pixmap: QPixmap) -> None:
 # ---------------------------------------------------------------------------
 
 def _video_card_signature(track: Any) -> tuple[Any, ...]:
-    title = track.title or Path(track.path).stem
-    sources: list[str] = []
-    artwork_path = track.artwork_path or None
-    if artwork_path:
-        sources.append(artwork_path)
-    parent = Path(track.path).parent
-    stem = Path(track.path).stem
-    for ext in (".jpg", ".jpeg", ".webp", ".png"):
-        sidecar = parent / (stem + ext)
-        if sidecar.exists():
-            sources.append(str(sidecar))
-            break
     return (
         track.path,
-        title,
+        track.title or Path(track.path).stem,
         float(track.duration or 0.0),
-        artwork_path,
-        tuple(_thumb_source_state(src) for src in sources),
+        track.artwork_path or None,
     )
 
 
@@ -746,16 +733,38 @@ class VideoPlayerView(QWidget):
             for path, track in desired_by_path.items()
         }
 
+        replacement_paths: set[str] = set()
         for path, card in list(self._catalog_card_by_path.items()):
-            if path not in desired_signatures or card.signature != desired_signatures[path]:
+            if path not in desired_signatures:
                 self._catalog_layout.removeWidget(card)
                 card.deleteLater()
                 self._catalog_card_by_path.pop(path, None)
+            elif card.signature != desired_signatures[path]:
+                self._catalog_layout.removeWidget(card)
+                card.deleteLater()
+                self._catalog_card_by_path.pop(path, None)
+                replacement_paths.add(path)
 
         self._catalog_cards = [
             card for card in self._catalog_cards
             if card.path in self._catalog_card_by_path
         ]
+
+        if replacement_paths:
+            query = self._catalog_search.text().strip().lower()
+            insert_idx = 0
+            for track in desired_tracks:
+                if track.path in self._catalog_card_by_path:
+                    insert_idx += 1
+                elif track.path in replacement_paths:
+                    card = _VideoCard(track)
+                    card.load_requested.connect(self.load_path)
+                    self._catalog_layout.insertWidget(insert_idx, card)
+                    self._catalog_cards.insert(insert_idx, card)
+                    self._catalog_card_by_path[track.path] = card
+                    if query and not card.matches(query):
+                        card.hide()
+                    insert_idx += 1
 
         self._catalog_pending_tracks = [
             track for track in desired_tracks
