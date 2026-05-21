@@ -43,7 +43,6 @@ from .now_playing import NowPlayingView, TransportBar
 from .queue_dialog import QueueDialog
 from .styles import apply_app_styles
 from .toast import Toast
-from .video_player_view import VideoPlayerView
 from .yt_download_dialog import YtDownloadDialog
 
 
@@ -142,6 +141,7 @@ class MainWindow(QMainWindow):
         self._youtube_view = None
         self._disc_view = None
         self._ripper_view = None
+        self._video_player_view = None
         self._tab_placeholders: dict[str, QWidget] = {}
         # Debounce rapid library_updated signals (e.g. playlist downloads).
         self._library_refresh_timer = QTimer(self)
@@ -225,13 +225,7 @@ class MainWindow(QMainWindow):
         self.library_view = LibraryView(self.library)
         self._library_refresh_timer.timeout.connect(self.library_view.refresh)
         self.now_playing = NowPlayingView(self.player, library=self.library, settings=self.settings)
-        self.video_player_view = VideoPlayerView(
-            library=self.library,
-            initial_volume=self.settings.last_volume,
-            settings=self.settings,
-        )
-        self.video_player_view.apply_equalizer(self.settings.equalizer_enabled, self.settings.equalizer_bands, self.settings.equalizer_preamp)
-        self._library_refresh_timer.timeout.connect(self.video_player_view.refresh_catalog)
+        self._library_refresh_timer.timeout.connect(self._refresh_video_catalog_if_loaded)
 
         # Build tab bar + stack together so indices always match _TAB_ORDER.
         _tab_views = {
@@ -239,7 +233,7 @@ class MainWindow(QMainWindow):
             "Now Playing": self.now_playing,
             "Podcasts": self._placeholder_page("Podcasts"),
             "Radio": self._placeholder_page("Radio"),
-            "Video": self.video_player_view,
+            "Video": self._placeholder_page("Video"),
             "Disc": self._placeholder_page("Disc"),
             "Rip": self._placeholder_page("Rip"),
             "YouTube": self._placeholder_page("YouTube"),
@@ -296,8 +290,6 @@ class MainWindow(QMainWindow):
         self.library_view.request_diagnostics.connect(self.show_diagnostics)
         self.library_view.request_scan_replaygain.connect(self._on_scan_replaygain)
         self.now_playing.request_edit_metadata.connect(self.library_view.edit_track_metadata)
-        self.video_player_view.request_diagnostics.connect(self.show_diagnostics)
-        self.video_player_view.resume_available.connect(self._on_video_resume_available)
         self._library_watcher.paths_changed.connect(self._on_watched_paths_changed)
         self._library_watcher.paths_deleted.connect(self._on_watched_paths_deleted)
         self._library_watcher.paths_moved.connect(self._on_watched_paths_moved)
@@ -426,6 +418,10 @@ class MainWindow(QMainWindow):
     def ripper_view(self):
         return self._ensure_tab_view("Rip")
 
+    @property
+    def video_player_view(self):
+        return self._ensure_tab_view("Video")
+
     def _placeholder_page(self, name: str) -> QWidget:
         page = QWidget()
         page.setObjectName(f"lazy{name.replace(' ', '')}Placeholder")
@@ -469,6 +465,24 @@ class MainWindow(QMainWindow):
                 view.download_requested.connect(self._on_yt_download)
                 self._youtube_view = self._replace_tab_widget(name, view)
             return self._youtube_view
+        if name == "Video":
+            if self._video_player_view is None:
+                from .video_player_view import VideoPlayerView
+
+                view = VideoPlayerView(
+                    library=self.library,
+                    initial_volume=self.settings.last_volume,
+                    settings=self.settings,
+                )
+                view.apply_equalizer(
+                    self.settings.equalizer_enabled,
+                    self.settings.equalizer_bands,
+                    self.settings.equalizer_preamp,
+                )
+                view.request_diagnostics.connect(self.show_diagnostics)
+                view.resume_available.connect(self._on_video_resume_available)
+                self._video_player_view = self._replace_tab_widget(name, view)
+            return self._video_player_view
         if name == "Disc":
             if self._disc_view is None:
                 from .disc_view import DiscView
@@ -477,7 +491,7 @@ class MainWindow(QMainWindow):
                 view.play_audio_tracks.connect(self._play_disc_audio_tracks)
                 view.enqueue_audio_tracks.connect(self._enqueue_disc_audio_tracks)
                 view.play_video_disc.connect(self._play_video_disc)
-                view.stop_video_disc.connect(self.video_player_view.stop_playback)
+                view.stop_video_disc.connect(self._stop_video_playback_if_loaded)
                 view.rip_drive_requested.connect(self._rip_disc_drive)
                 view.status_message.connect(lambda m: self.show_toast(m, level="info"))
                 self._disc_view = self._replace_tab_widget(name, view)
@@ -502,6 +516,31 @@ class MainWindow(QMainWindow):
         if self.tab_bar.currentIndex() == idx or self.stack.currentIndex() == idx:
             self.stack.setCurrentIndex(idx)
         return view
+
+    def _refresh_video_catalog_if_loaded(self) -> None:
+        if self._video_player_view is not None:
+            self._video_player_view.refresh_catalog()
+
+    def _pause_video_playback_if_loaded(self) -> None:
+        if self._video_player_view is not None:
+            self._video_player_view.pause_playback()
+
+    def _stop_video_playback_if_loaded(self) -> None:
+        if self._video_player_view is not None:
+            self._video_player_view.stop_playback()
+
+    def _apply_video_equalizer_if_loaded(
+        self,
+        enabled: bool,
+        bands: list[float],
+        preamp: float,
+    ) -> None:
+        if self._video_player_view is not None:
+            self._video_player_view.apply_equalizer(enabled, bands, preamp)
+
+    def _apply_video_settings_if_loaded(self) -> None:
+        if self._video_player_view is not None:
+            self._video_player_view.apply_settings(self.settings)
 
     def keyPressEvent(self, ev) -> None:
         if ev.key() == Qt.Key_Space and not self._focus_widget_accepts_text():
@@ -613,8 +652,9 @@ class MainWindow(QMainWindow):
 
     def _on_view_changed(self, _idx: int) -> None:
         current = self.stack.currentWidget()
-        is_rip = self.stack.currentIndex() == self._tab_index["Rip"]
-        is_video = current is self.video_player_view
+        current_index = self.stack.currentIndex()
+        is_rip = current_index == self._tab_index["Rip"]
+        is_video = current_index == self._tab_index["Video"]
         self.transport.setVisible(not is_rip and not is_video)
         if current is self.library_view:
             self.library_view.refresh_playlists()
@@ -623,7 +663,7 @@ class MainWindow(QMainWindow):
         if is_video and self.player.is_playing():
             self.player.pause()
         if not is_video:
-            self.video_player_view.pause_playback()
+            self._pause_video_playback_if_loaded()
 
     # ------------------------------------------------------------------ actions
     def add_folder(self) -> None:
@@ -698,12 +738,12 @@ class MainWindow(QMainWindow):
             self.show_toast("YouTube search is unavailable.", level="error")
 
     def _play_radio_station(self, url: str, title: str) -> None:
-        self.video_player_view.pause_playback()
+        self._pause_video_playback_if_loaded()
         self.player.play_url(url, title=title)
         self.show_toast(f"Playing radio: {title}", level="info")
 
     def _play_podcast_episode(self, url: str, title: str) -> None:
-        self.video_player_view.pause_playback()
+        self._pause_video_playback_if_loaded()
         self.player.play_url(url, title=title)
         self.show_toast(f"Playing podcast: {title}", level="info")
 
@@ -758,7 +798,7 @@ class MainWindow(QMainWindow):
         self.show_toast(message, level=toast_level, duration_ms=4000)
         self.dlna_server.invalidate_cache()
         self.library_view.refresh()
-        self.video_player_view.refresh_catalog()
+        self._refresh_video_catalog_if_loaded()
         self._scan_thread = None
 
     def _on_scan_failed(self, label: str, error: str) -> None:
@@ -973,7 +1013,7 @@ class MainWindow(QMainWindow):
         self.library_view.refresh()
 
     def _play_disc_audio_tracks(self, tracks: list, start_index: int) -> None:
-        self.video_player_view.pause_playback()
+        self._pause_video_playback_if_loaded()
         self.player.set_queue(tracks, start_index)
 
     def _enqueue_disc_audio_tracks(self, tracks: list) -> None:
@@ -981,8 +1021,9 @@ class MainWindow(QMainWindow):
         self.show_toast(f"Enqueued {len(tracks)} disc track(s).", level="success")
 
     def _play_library_video(self, track: Track) -> None:
-        if not self.video_player_view.playback_available():
-            reason = self.video_player_view.unavailable_reason() or "VLC video playback is unavailable."
+        video_view = self.video_player_view
+        if not video_view.playback_available():
+            reason = video_view.unavailable_reason() or "VLC video playback is unavailable."
             self.show_toast(
                 "Video playback requires VLC/libVLC. Run diagnostics for setup details.",
                 level="error",
@@ -993,11 +1034,12 @@ class MainWindow(QMainWindow):
             return
         self.player.stop()
         self.tab_bar.setCurrentIndex(self._tab_index["Video"])
-        QTimer.singleShot(0, lambda: self.video_player_view.load_path(track.path))
+        QTimer.singleShot(0, lambda: video_view.load_path(track.path))
 
     def _play_video_disc(self, source) -> None:
-        if not self.video_player_view.playback_available():
-            reason = self.video_player_view.unavailable_reason() or "VLC video playback is unavailable."
+        video_view = self.video_player_view
+        if not video_view.playback_available():
+            reason = video_view.unavailable_reason() or "VLC video playback is unavailable."
             self.show_toast(
                 "Video disc playback requires VLC/libVLC. Run diagnostics for setup details.",
                 level="error",
@@ -1010,7 +1052,7 @@ class MainWindow(QMainWindow):
         self.tab_bar.setCurrentIndex(self._tab_index["Video"])
         QTimer.singleShot(
             0,
-            lambda: self.video_player_view.load_location(source.uri, label=source.label),
+            lambda: video_view.load_location(source.uri, label=source.label),
         )
         if source.fallback_uri:
             self.show_toast(
@@ -1063,7 +1105,7 @@ class MainWindow(QMainWindow):
             if self._ripper_view is not None:
                 self._ripper_view.apply_settings(self.settings)
             self.now_playing._settings = self.settings
-            self.video_player_view.apply_settings(self.settings)
+            self._apply_video_settings_if_loaded()
             if self._podcast_view is not None:
                 self._podcast_view.apply_settings(self.settings)
             if self._radio_view is not None:
@@ -1092,7 +1134,7 @@ class MainWindow(QMainWindow):
             )
             if new_dlna != old_dlna:
                 self._restart_dlna_server(show_toast=True)
-            self.video_player_view.apply_equalizer(
+            self._apply_video_equalizer_if_loaded(
                 self.settings.equalizer_enabled,
                 self.settings.equalizer_bands,
                 self.settings.equalizer_preamp,
@@ -1121,7 +1163,7 @@ class MainWindow(QMainWindow):
             if self._ripper_view is not None:
                 self._ripper_view.apply_settings(self.settings)
             self.now_playing._settings = self.settings
-            self.video_player_view.apply_settings(self.settings)
+            self._apply_video_settings_if_loaded()
             if self._podcast_view is not None:
                 self._podcast_view.apply_settings(self.settings)
             if self._radio_view is not None:
@@ -1295,7 +1337,7 @@ class MainWindow(QMainWindow):
         if self._equalizer_dialog is None:
             dialog = EqualizerDialog(self.settings, self)
             dialog.equalizer_changed.connect(self.player.set_equalizer)
-            dialog.equalizer_changed.connect(self.video_player_view.apply_equalizer)
+            dialog.equalizer_changed.connect(self._apply_video_equalizer_if_loaded)
             dialog.settings_saved.connect(self._apply_equalizer_settings)
             dialog.finished.connect(self._clear_equalizer_dialog)
             dialog.finished.connect(dialog.deleteLater)
@@ -1311,7 +1353,7 @@ class MainWindow(QMainWindow):
         self.settings.equalizer_curve_name = settings.equalizer_curve_name
         self.settings.equalizer_custom_curves = dict(settings.equalizer_custom_curves)
         self.player.set_equalizer(self.settings.equalizer_enabled, self.settings.equalizer_bands, self.settings.equalizer_preamp)
-        self.video_player_view.apply_equalizer(self.settings.equalizer_enabled, self.settings.equalizer_bands, self.settings.equalizer_preamp)
+        self._apply_video_equalizer_if_loaded(self.settings.equalizer_enabled, self.settings.equalizer_bands, self.settings.equalizer_preamp)
         self.show_toast("Equalizer settings saved.", level="success")
 
     def _clear_equalizer_dialog(self, *_args) -> None:
@@ -1442,7 +1484,8 @@ class MainWindow(QMainWindow):
         else:
             self.settings.queue_current_index = 0
         self.settings.save()
-        self.video_player_view.cleanup()
+        if self._video_player_view is not None:
+            self._video_player_view.cleanup()
         self.player.cleanup()
         self.library.close()
         metadata.shutdown()
