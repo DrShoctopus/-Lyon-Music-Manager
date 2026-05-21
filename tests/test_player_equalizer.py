@@ -116,6 +116,20 @@ def test_equalizer_is_reapplied_on_track_load():
     assert backend.equalizer_calls[-1] == (True, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 3)
 
 
+def test_restored_queue_play_loads_current_track_source():
+    backend = FakeBackend()
+    player = Player(backend=backend)
+    track = _track("C:/Music/restored.flac")
+
+    player.load_queue([track], 0)
+    player.play()
+
+    assert player.current() is track
+    assert backend.sources == ["C:/Music/restored.flac"]
+    assert backend.play_count == 1
+    assert backend.is_playing()
+
+
 def test_disc_track_uses_location_source_options_and_skips_library_play_count():
     class Library:
         def __init__(self):

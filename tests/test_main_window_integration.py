@@ -219,6 +219,38 @@ def test_audio_disc_handoff_reuses_disc_tab_read_on_rip_tab(main_window, monkeyp
     assert main_window.ripper_view.start_btn.isEnabled()
 
 
+def test_audio_disc_handoff_starts_artwork_lookup_for_reused_album(main_window, monkeypatch):
+    from lyon.core.cd_detect import DiscToc
+    from lyon.core.metadata import AlbumInfo, TrackInfo
+
+    toc = DiscToc(
+        drive="D:",
+        discid="disc-id",
+        toc_string="toc",
+        track_count=1,
+        track_offsets=[150],
+        sectors=15150,
+    )
+    album = AlbumInfo(
+        artist="Artist",
+        album="Album",
+        artwork_url="https://example.test/cover.jpg",
+        tracks=[TrackInfo(1, "Song")],
+    )
+    artwork_calls = []
+    monkeypatch.setattr(
+        main_window.ripper_view,
+        "_start_artwork_lookup",
+        lambda info: artwork_calls.append(info),
+    )
+    main_window.disc_view._on_audio_read(toc, album)
+
+    main_window._rip_disc_drive("D:")
+
+    assert main_window.stack.currentWidget() is main_window.ripper_view
+    assert artwork_calls == [album]
+
+
 def test_library_video_handoff_uses_video_tab(main_window, monkeypatch, qapp):
     from lyon.core.library import Track
 

@@ -223,6 +223,24 @@ class _AlbumSearchThread(QThread):
         self.finished_with.emit(info, art)
 
 
+class _ArtworkThread(QThread):
+    finished_with = Signal(object, object)   # (AlbumInfo, bytes|None)
+
+    def __init__(self, album: AlbumInfo, parent=None):
+        super().__init__(parent)
+        self.album = album
+        self._cancelled = False
+
+    def cancel(self) -> None:
+        self._cancelled = True
+
+    def run(self) -> None:
+        art = fetch_artwork(self.album)
+        if self._cancelled:
+            return
+        self.finished_with.emit(self.album, art)
+
+
 def _rip_request_from_toc(
     toc: cd_detect.DiscToc,
     album: AlbumInfo,
@@ -265,6 +283,7 @@ class RipperView(QWidget):
         self._disc_reader: _DiscReadThread | None = None
         self._lookup: _LookupThread | None = None
         self._search: _AlbumSearchThread | None = None
+        self._artwork: _ArtworkThread | None = None
         self._active_track_nums: set[int] = set()
         self._done_track_nums: set[int] = set()
         self._last_rip_folder: Path | None = None
@@ -470,6 +489,14 @@ class RipperView(QWidget):
             if self._search.isRunning():
                 self._search.cancel()
             self._search = None
+        if self._artwork is not None:
+            try:
+                self._artwork.finished_with.disconnect(self._on_artwork_done)
+            except (TypeError, RuntimeError):
+                pass
+            if self._artwork.isRunning():
+                self._artwork.cancel()
+            self._artwork = None
         if self.drive_combo.findText(toc.drive) < 0:
             self.drive_combo.addItem(toc.drive)
         self.drive_combo.setEnabled(True)
@@ -500,6 +527,8 @@ class RipperView(QWidget):
         self._populate_default_tracks(toc.track_count)
         if album is not None:
             self._apply_album(album)
+            if self.settings.download_artwork and not album.artwork:
+                self._start_artwork_lookup(album)
         elif self.settings.auto_lookup_metadata:
             self._start_lookup(toc)
         else:
@@ -526,6 +555,14 @@ class RipperView(QWidget):
         self._lookup.finished_with.connect(self._on_lookup_done)
         self._lookup.finished.connect(self._lookup.deleteLater)
         self._lookup.start()
+
+    def _start_artwork_lookup(self, album: AlbumInfo) -> None:
+        if self._artwork is not None and self._artwork.isRunning():
+            return
+        self._artwork = _ArtworkThread(album, self)
+        self._artwork.finished_with.connect(self._on_artwork_done)
+        self._artwork.finished.connect(self._artwork.deleteLater)
+        self._artwork.start()
 
     def _populate_default_tracks(self, n: int) -> None:
         self.tracks_model.removeRows(0, self.tracks_model.rowCount())
@@ -574,6 +611,15 @@ class RipperView(QWidget):
             info.artwork = art
         self._apply_album(info)
 
+    def _on_artwork_done(self, info: AlbumInfo, art: bytes | None) -> None:
+        if self.sender() is not self._artwork:
+            return
+        self._artwork = None
+        if art is None or self._album is not info:
+            return
+        info.artwork = art
+        self._set_cover_art(art)
+
     def _apply_album(self, info: AlbumInfo) -> None:
         self._album = info
         self.album_edit.setText(info.album)
@@ -583,15 +629,18 @@ class RipperView(QWidget):
         for tr in info.tracks:
             self._add_track_row(tr.number, tr.title)
         if info.artwork:
-            pm = QPixmap()
-            pm.loadFromData(info.artwork)
-            if not pm.isNull():
-                self.cover.setPixmap(pm.scaled(140, 140, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            self._set_cover_art(info.artwork)
         else:
             self.cover.setPixmap(cover_pixmap(None, 140, "CD"))
         self.status_label.setText(f"Found: {info.artist} - {info.album}")
         self.start_btn.setEnabled(True)
         self._update_dest()
+
+    def _set_cover_art(self, art: bytes) -> None:
+        pm = QPixmap()
+        pm.loadFromData(art)
+        if not pm.isNull():
+            self.cover.setPixmap(pm.scaled(140, 140, Qt.KeepAspectRatio, Qt.SmoothTransformation))
 
     def _clear_metadata(self) -> None:
         self.tracks_model.removeRows(0, self.tracks_model.rowCount())
@@ -723,7 +772,7 @@ class RipperView(QWidget):
         "Destroyed while thread is still running" when the process is exiting.
         """
         self.ripper.shutdown()
-        for thread_attr in ("_disc_reader", "_lookup", "_search"):
+        for thread_attr in ("_disc_reader", "_lookup", "_search", "_artwork"):
             t = getattr(self, thread_attr, None)
             if t is None:
                 continue
