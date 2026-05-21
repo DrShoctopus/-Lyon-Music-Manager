@@ -73,8 +73,20 @@ def test_clicking_a_tab_swaps_stack_page(main_window):
 
 
 def test_low_coupling_tabs_are_lazy_created_on_first_use(main_window):
+    assert main_window._now_playing_view is None
     assert main_window._podcast_view is None
     assert main_window._radio_view is None
+    assert main_window._youtube_view is None
+    assert main_window._disc_view is None
+    assert main_window._ripper_view is None
+    assert main_window._video_player_view is None
+
+    main_window.tab_bar.setCurrentIndex(main_window._tab_index["Now Playing"])
+
+    assert main_window._now_playing_view is not None
+    assert main_window.stack.currentWidget() is main_window.now_playing
+    assert main_window._radio_view is None
+    assert main_window._podcast_view is None
     assert main_window._youtube_view is None
     assert main_window._disc_view is None
     assert main_window._ripper_view is None

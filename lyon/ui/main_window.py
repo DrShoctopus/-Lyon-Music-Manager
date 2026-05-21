@@ -39,7 +39,7 @@ from .cast_dialog import CastDialog
 from .equalizer_dialog import EqualizerDialog
 from .first_run_dialog import FirstRunDialog
 from .library_view import LibraryView
-from .now_playing import NowPlayingView, TransportBar
+from .now_playing import TransportBar
 from .queue_dialog import QueueDialog
 from .styles import apply_app_styles
 from .toast import Toast
@@ -136,6 +136,7 @@ class MainWindow(QMainWindow):
         self._queue_dialog: QueueDialog | None = None
         self._cast_dialog: CastDialog | None = None
         self._current_toast: Toast | None = None
+        self._now_playing_view = None
         self._podcast_view = None
         self._radio_view = None
         self._youtube_view = None
@@ -224,13 +225,12 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
         self.library_view = LibraryView(self.library)
         self._library_refresh_timer.timeout.connect(self.library_view.refresh)
-        self.now_playing = NowPlayingView(self.player, library=self.library, settings=self.settings)
         self._library_refresh_timer.timeout.connect(self._refresh_video_catalog_if_loaded)
 
         # Build tab bar + stack together so indices always match _TAB_ORDER.
         _tab_views = {
             "Library": self.library_view,
-            "Now Playing": self.now_playing,
+            "Now Playing": self._placeholder_page("Now Playing"),
             "Podcasts": self._placeholder_page("Podcasts"),
             "Radio": self._placeholder_page("Radio"),
             "Video": self._placeholder_page("Video"),
@@ -289,7 +289,6 @@ class MainWindow(QMainWindow):
         self.library_view.request_open_settings.connect(self.open_settings)
         self.library_view.request_diagnostics.connect(self.show_diagnostics)
         self.library_view.request_scan_replaygain.connect(self._on_scan_replaygain)
-        self.now_playing.request_edit_metadata.connect(self.library_view.edit_track_metadata)
         self._library_watcher.paths_changed.connect(self._on_watched_paths_changed)
         self._library_watcher.paths_deleted.connect(self._on_watched_paths_deleted)
         self._library_watcher.paths_moved.connect(self._on_watched_paths_moved)
@@ -403,6 +402,10 @@ class MainWindow(QMainWindow):
         return self._ensure_tab_view("Podcasts")
 
     @property
+    def now_playing(self):
+        return self._ensure_tab_view("Now Playing")
+
+    @property
     def radio_view(self):
         return self._ensure_tab_view("Radio")
 
@@ -439,6 +442,18 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentIndex(idx)
 
     def _ensure_tab_view(self, name: str) -> QWidget:
+        if name == "Now Playing":
+            if self._now_playing_view is None:
+                from .now_playing import NowPlayingView
+
+                view = NowPlayingView(
+                    self.player,
+                    library=self.library,
+                    settings=self.settings,
+                )
+                view.request_edit_metadata.connect(self.library_view.edit_track_metadata)
+                self._now_playing_view = self._replace_tab_widget(name, view)
+            return self._now_playing_view
         if name == "Podcasts":
             if self._podcast_view is None:
                 from .podcast_view import PodcastView
@@ -1104,7 +1119,8 @@ class MainWindow(QMainWindow):
             metadata.reset_musicbrainz_useragent()
             if self._ripper_view is not None:
                 self._ripper_view.apply_settings(self.settings)
-            self.now_playing._settings = self.settings
+            if self._now_playing_view is not None:
+                self._now_playing_view._settings = self.settings
             self._apply_video_settings_if_loaded()
             if self._podcast_view is not None:
                 self._podcast_view.apply_settings(self.settings)
@@ -1162,7 +1178,8 @@ class MainWindow(QMainWindow):
             metadata.reset_musicbrainz_useragent()
             if self._ripper_view is not None:
                 self._ripper_view.apply_settings(self.settings)
-            self.now_playing._settings = self.settings
+            if self._now_playing_view is not None:
+                self._now_playing_view._settings = self.settings
             self._apply_video_settings_if_loaded()
             if self._podcast_view is not None:
                 self._podcast_view.apply_settings(self.settings)
