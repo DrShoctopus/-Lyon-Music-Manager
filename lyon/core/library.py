@@ -907,6 +907,17 @@ class Library:
             if len(rows) < _PAGE_SIZE:
                 break
 
+    def count_tracks(self, media_type: str | None = None) -> int:
+        """Return the number of tracks, optionally restricted by media type."""
+        filter_sql = "" if media_type is None else "WHERE media_type = ?"
+        params = () if media_type is None else (media_type,)
+        with self._lock:
+            row = self.conn.execute(
+                f"SELECT COUNT(*) FROM tracks {filter_sql}",
+                params,
+            ).fetchone()
+        return int(row[0]) if row is not None else 0
+
     def track_by_id(self, track_id: int) -> Track | None:
         """Return one track by database id, or None when it is not indexed."""
         with self._lock:
@@ -1165,13 +1176,37 @@ class Library:
 
     def tracks_without_acoustid(self) -> list[Track]:
         """Return audio tracks that have no acoustid_id stored yet."""
+        return list(self.iter_tracks_without_acoustid())
+
+    def count_tracks_without_acoustid(self) -> int:
+        """Return the number of audio tracks missing an AcoustID UUID."""
         with self._lock:
-            rows = self.conn.execute(
-                "SELECT * FROM tracks WHERE media_type = 'audio' "
-                "AND (acoustid_id IS NULL OR acoustid_id = '') "
-                "ORDER BY artist COLLATE NOCASE, album COLLATE NOCASE, track_no"
-            ).fetchall()
-        return [_row_to_track(r) for r in rows]
+            row = self.conn.execute(
+                "SELECT COUNT(*) FROM tracks WHERE media_type = 'audio' "
+                "AND (acoustid_id IS NULL OR acoustid_id = '')"
+            ).fetchone()
+        return int(row[0]) if row is not None else 0
+
+    def iter_tracks_without_acoustid(self, batch_size: int = _PAGE_SIZE) -> Iterator[Track]:
+        """Yield audio tracks missing an AcoustID UUID in bounded pages."""
+        batch_size = max(1, int(batch_size))
+        offset = 0
+        while True:
+            with self._lock:
+                rows = self.conn.execute(
+                    "SELECT * FROM tracks WHERE media_type = 'audio' "
+                    "AND (acoustid_id IS NULL OR acoustid_id = '') "
+                    "ORDER BY artist COLLATE NOCASE, album COLLATE NOCASE, track_no "
+                    "LIMIT ? OFFSET ?",
+                    (batch_size, offset),
+                ).fetchall()
+            if not rows:
+                break
+            for row in rows:
+                yield _row_to_track(row)
+            offset += len(rows)
+            if len(rows) < batch_size:
+                break
 
     # ------------------------------------------------------------------ playlist CRUD
     def all_playlists(self) -> list[Playlist]:
