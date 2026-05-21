@@ -182,7 +182,7 @@ class DlnaServer:
             return _soap_envelope(
                 "GetSearchCapabilitiesResponse",
                 "urn:schemas-upnp-org:service:ContentDirectory:1",
-                "<SearchCaps>dc:title,dc:creator,upnp:artist,upnp:album</SearchCaps>",
+                "<SearchCaps>dc:title,dc:creator,upnp:artist,upnp:album,upnp:class</SearchCaps>",
             )
         if action == "GetSortCapabilities":
             return _soap_envelope(
@@ -291,11 +291,21 @@ class DlnaServer:
         )
 
     def _search_response(self, root) -> bytes:
+        container_id = _xml_text(root, "ContainerID", "0")
         start = _nonnegative_xml_int(root, "StartingIndex", 0)
         count = _nonnegative_xml_int(root, "RequestedCount", 0)
-        query = _search_query(_xml_text(root, "SearchCriteria", ""))
-        tracks = self._tracks_matching(query) if query else self._tracks()
-        items = self._track_items_from_tracks(tracks)
+        criteria = _xml_text(root, "SearchCriteria", "")
+        query = _search_query(criteria)
+        media_type = _search_media_type(criteria) or _container_media_type(container_id)
+        tracks = (
+            self._tracks_matching(query, media_type)
+            if query
+            else self._tracks_for_container(container_id, media_type)
+        )
+        items = self._track_items_from_tracks(
+            tracks,
+            parent_id=_track_parent_for_container(container_id, media_type),
+        )
         limit = _MAX_BROWSE_ITEMS if count <= 0 else min(count, _MAX_BROWSE_ITEMS)
         visible = items[start:start + limit]
         payload = (
@@ -359,7 +369,7 @@ class DlnaServer:
                 _container("audio:genres", "audio", "Genres", len(self._genre_counts("audio"))),
             ]
         if object_id == "audio:all":
-            return self._track_items("audio")
+            return self._track_items("audio", parent_id="audio:all")
         if object_id == "audio:artists":
             return [
                 _container(
@@ -372,7 +382,14 @@ class DlnaServer:
             ]
         if object_id.startswith("artist:"):
             artist = _decode_object_value(object_id.removeprefix("artist:"))
-            return self._track_items_from_tracks(self._tracks_for_artist(artist, "audio")) if artist else []
+            return (
+                self._track_items_from_tracks(
+                    self._tracks_for_artist(artist, "audio"),
+                    parent_id=object_id,
+                )
+                if artist
+                else []
+            )
         if object_id == "audio:albums":
             return [
                 _container(
@@ -386,7 +403,14 @@ class DlnaServer:
         if object_id.startswith("album:"):
             decoded = _decode_object_value(object_id.removeprefix("album:"))
             artist, album = _split_pair(decoded)
-            return self._track_items_from_tracks(self._tracks_for_album(artist, album, "audio")) if artist and album else []
+            return (
+                self._track_items_from_tracks(
+                    self._tracks_for_album(artist, album, "audio"),
+                    parent_id=object_id,
+                )
+                if artist and album
+                else []
+            )
         if object_id == "audio:genres":
             return [
                 _container(
@@ -399,20 +423,31 @@ class DlnaServer:
             ]
         if object_id.startswith("genre:"):
             genre = _decode_object_value(object_id.removeprefix("genre:"))
-            return self._track_items_from_tracks(self._tracks_for_genre(genre, "audio")) if genre else []
+            return (
+                self._track_items_from_tracks(
+                    self._tracks_for_genre(genre, "audio"),
+                    parent_id=object_id,
+                )
+                if genre
+                else []
+            )
         if object_id == "video":
             return [_container("video:all", "video", "All Videos", len(self._tracks("video")))]
         if object_id == "video:all":
-            return self._track_items("video")
+            return self._track_items("video", parent_id="video:all")
         return []
 
-    def _track_items(self, media_type: str | None = None) -> list[_BrowseItem]:
-        return self._track_items_from_tracks(self._tracks(media_type))
+    def _track_items(
+        self, media_type: str | None = None, *, parent_id: str | None = None
+    ) -> list[_BrowseItem]:
+        return self._track_items_from_tracks(self._tracks(media_type), parent_id=parent_id)
 
-    def _track_items_from_tracks(self, tracks: list[Track]) -> list[_BrowseItem]:
+    def _track_items_from_tracks(
+        self, tracks: list[Track], *, parent_id: str | None = None
+    ) -> list[_BrowseItem]:
         items: list[_BrowseItem] = []
         for track in tracks:
-            item = self._track_item(track)
+            item = self._track_item(track, parent_id=parent_id)
             if item is not None:
                 items.append(item)
         return items
@@ -463,8 +498,23 @@ class DlnaServer:
         tracks = [track for track in self._tracks(media_type) if track.genre == genre]
         return sorted(tracks, key=_track_library_sort_key)
 
-    def _tracks_matching(self, query: str) -> list[Track]:
-        return self._filter_tracks(self.library.search(query))
+    def _tracks_matching(self, query: str, media_type: str | None = None) -> list[Track]:
+        return self._filter_tracks(self.library.search(query, media_type))
+
+    def _tracks_for_container(
+        self, container_id: str, media_type: str | None = None
+    ) -> list[Track]:
+        if container_id.startswith("artist:"):
+            artist = _decode_object_value(container_id.removeprefix("artist:"))
+            return self._tracks_for_artist(artist, "audio") if artist else []
+        if container_id.startswith("album:"):
+            decoded = _decode_object_value(container_id.removeprefix("album:"))
+            artist, album = _split_pair(decoded)
+            return self._tracks_for_album(artist, album, "audio") if artist and album else []
+        if container_id.startswith("genre:"):
+            genre = _decode_object_value(container_id.removeprefix("genre:"))
+            return self._tracks_for_genre(genre, "audio") if genre else []
+        return self._tracks(media_type)
 
     def _filter_tracks(self, tracks: list[Track]) -> list[Track]:
         roots = tuple(self._library_roots())
@@ -529,13 +579,13 @@ class DlnaServer:
         roots = [Path(self.settings.music_root), *(Path(p) for p in self.settings.library_paths)]
         return [resolved for root in roots if (resolved := _resolved_path(root)) is not None]
 
-    def _track_item(self, track: Track) -> _BrowseItem | None:
+    def _track_item(self, track: Track, *, parent_id: str | None = None) -> _BrowseItem | None:
         file_info = self._track_file(track)
         if file_info is None:
             return None
         path, stat = file_info
         mime = _mime_type(path)
-        parent = "video" if track.media_type == "video" else "audio"
+        parent = parent_id or ("video:all" if track.media_type == "video" else "audio:all")
         upnp_class = "object.item.videoItem" if track.media_type == "video" else "object.item.audioItem.musicTrack"
         url = f"{self.base_url}/media/{track.id}/{quote(path.name)}"
         attrs = f'protocolInfo="http-get:*:{escape(mime)}:*" size="{stat.st_size}"'
@@ -846,6 +896,29 @@ def _duration_text(seconds: float) -> str:
     return f"{hours}:{minutes:02d}:{secs:02d}.{millis:03d}"
 
 
+def _track_album_sort_key(track: Track) -> tuple[str, int, int, str]:
+    return (
+        (track.album or "Unknown Album").casefold(),
+        track.disc_no or 0,
+        track.track_no or 0,
+        track.title.casefold(),
+    )
+
+
+def _track_number_sort_key(track: Track) -> tuple[int, int, str]:
+    return (track.disc_no or 0, track.track_no or 0, track.title.casefold())
+
+
+def _track_library_sort_key(track: Track) -> tuple[str, str, int, int, str]:
+    return (
+        track.display_artist.casefold(),
+        (track.album or "Unknown Album").casefold(),
+        track.disc_no or 0,
+        track.track_no or 0,
+        track.title.casefold(),
+    )
+
+
 def _xml_text(root, local_name: str, default: str = "") -> str:
     for elem in root.iter():
         if elem.tag.rsplit("}", 1)[-1] == local_name:
@@ -912,10 +985,48 @@ def _search_query(criteria: str) -> str:
             in_quote = not in_quote
         elif in_quote:
             current.append(char)
-    values = [value for value in values if value and value != "*"]
+    values = [
+        value
+        for value in values
+        if value and value != "*" and not _is_upnp_class_value(value)
+    ]
     if values:
         return max(values, key=len)[:128]
+    if _search_media_type(criteria) is not None:
+        return ""
     return criteria[:128]
+
+
+def _search_media_type(criteria: str) -> str | None:
+    lowered = criteria.casefold()
+    if "object.item.audioitem" in lowered:
+        return "audio"
+    if "object.item.videoitem" in lowered:
+        return "video"
+    return None
+
+
+def _is_upnp_class_value(value: str) -> bool:
+    lowered = value.casefold()
+    return lowered.startswith("object.item.") or lowered.startswith("object.container.")
+
+
+def _container_media_type(object_id: str) -> str | None:
+    if object_id.startswith("audio") or object_id.startswith(("artist:", "album:", "genre:")):
+        return "audio"
+    if object_id.startswith("video"):
+        return "video"
+    return None
+
+
+def _track_parent_for_container(object_id: str, media_type: str | None) -> str | None:
+    if object_id in {"audio:all", "video:all"} or object_id.startswith(("artist:", "album:", "genre:")):
+        return object_id
+    if media_type == "audio":
+        return "audio:all"
+    if media_type == "video":
+        return "video:all"
+    return None
 
 
 def _parse_range(header: str | None, size: int) -> tuple[int, int] | None:

@@ -3,7 +3,7 @@ from __future__ import annotations
 from io import BytesIO
 from pathlib import Path
 
-from lyon.core.dlna_server import DlnaServer, _is_allowed_client
+from lyon.core.dlna_server import DlnaServer, _encode_object_value, _is_allowed_client
 from lyon.core.library import Library
 from lyon.core.settings import Settings
 
@@ -157,6 +157,70 @@ def test_dlna_search_filters_library_tracks(tmp_path):
     assert "Ocean Song" in body
     assert "Mountain Song" not in body
     assert "NumberReturned>1<" in body
+
+
+def test_dlna_search_upnp_audio_class_returns_music_tracks(tmp_path):
+    library = Library(tmp_path / "library.db")
+    _insert_track(library, tmp_path / "song.mp3")
+    video_id = _insert_track(library, tmp_path / "clip.mp4", media_type="video")
+    library.conn.execute(
+        "UPDATE tracks SET title = ? WHERE id = ?",
+        ("Sea Clip", video_id),
+    )
+    library.commit()
+    server = DlnaServer(library, Settings(music_root=str(tmp_path), dlna_port=0))
+    soap = b"""<?xml version="1.0"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
+  <s:Body>
+    <u:Search xmlns:u="urn:schemas-upnp-org:service:ContentDirectory:1">
+      <ContainerID>0</ContainerID>
+      <SearchCriteria>upnp:class derivedfrom "object.item.audioItem"</SearchCriteria>
+      <Filter>*</Filter>
+      <StartingIndex>0</StartingIndex>
+      <RequestedCount>0</RequestedCount>
+      <SortCriteria></SortCriteria>
+    </u:Search>
+    </s:Body>
+</s:Envelope>"""
+    try:
+        server._base_url = "http://127.0.0.1:8200"
+        body = server.handle_content_directory(soap).decode()
+    finally:
+        library.close()
+
+    assert "Ocean Song" in body
+    assert "object.item.audioItem.musicTrack" in body
+    assert "Sea Clip" not in body
+    assert "object.item.videoItem" not in body
+    assert "NumberReturned>1<" in body
+
+
+def test_dlna_browsed_music_tracks_keep_selected_container_parent(tmp_path):
+    library = Library(tmp_path / "library.db")
+    _insert_track(library, tmp_path / "song.mp3")
+    server = DlnaServer(library, Settings(music_root=str(tmp_path), dlna_port=0))
+    artist_id = f"artist:{_encode_object_value('Sea Artist')}"
+    soap = f"""<?xml version="1.0"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
+  <s:Body>
+    <u:Browse xmlns:u="urn:schemas-upnp-org:service:ContentDirectory:1">
+      <ObjectID>{artist_id}</ObjectID>
+      <BrowseFlag>BrowseDirectChildren</BrowseFlag>
+      <Filter>*</Filter>
+      <StartingIndex>0</StartingIndex>
+      <RequestedCount>0</RequestedCount>
+      <SortCriteria></SortCriteria>
+    </u:Browse>
+    </s:Body>
+</s:Envelope>""".encode()
+    try:
+        server._base_url = "http://127.0.0.1:8200"
+        body = server.handle_content_directory(soap).decode()
+    finally:
+        library.close()
+
+    assert "Ocean Song" in body
+    assert f'parentID="{artist_id}"' in body
 
 
 def test_dlna_media_endpoint_supports_byte_ranges(tmp_path):
