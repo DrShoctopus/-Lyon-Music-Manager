@@ -146,6 +146,61 @@ def test_all_albums_aggregates_tracks(view):
     assert view.tracks_model.rowCount() == 3  # 2 from First Album + 1 from Second
 
 
+def test_list_album_art_uses_async_loader(app, monkeypatch, tmp_path):
+    art_path = str(tmp_path / "cover.png")
+    library = FakeLibrary({
+        "Art Band": {
+            "First": [_track(10, "One", "Art Band", "First")],
+            "Second": [_track(11, "Two", "Art Band", "Second")],
+        },
+    })
+
+    def albums_for_artist(artist: str, _media=None):
+        assert artist == "Art Band"
+        return [("First", art_path), ("Second", art_path)]
+
+    library.albums_for_artist = albums_for_artist
+    started: list[object] = []
+    created: list[tuple[int, str, object]] = []
+
+    class FakePool:
+        def start(self, runnable):
+            started.append(runnable)
+
+    class FakeLoader:
+        def __init__(self, gen, path, signals):
+            self.gen = gen
+            self.path = path
+            self.signals = signals
+            created.append((gen, path, signals))
+
+    fake_pool = FakePool()
+    monkeypatch.setattr(
+        library_view_module.QThreadPool,
+        "globalInstance",
+        staticmethod(lambda: fake_pool),
+    )
+    monkeypatch.setattr(library_view_module, "_ArtLoader", FakeLoader)
+
+    view = LibraryView(library)
+    created.clear()
+    started.clear()
+
+    view._refresh_albums()
+
+    # One shared artwork path should queue one background loader and attach both
+    # album items to the result map. The old code decoded QPixmap synchronously
+    # for each row here.
+    assert len(created) == 1
+    assert len(started) == 1
+    assert started[0].path == art_path
+    gen, path, signals = created[0]
+    assert path == art_path
+    assert signals is view._art_signals
+    assert gen == view._grid_gen
+    assert [item.text() for item in view._grid_art_map[art_path]] == ["First", "Second"]
+
+
 def test_grid_albums_respect_show_videos_toggle(app):
     library = FakeLibrary({
         "Audio Artist": {
