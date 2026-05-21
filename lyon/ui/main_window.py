@@ -41,7 +41,6 @@ from .first_run_dialog import FirstRunDialog
 from .library_view import LibraryView
 from .now_playing import NowPlayingView, TransportBar
 from .queue_dialog import QueueDialog
-from .ripper_view import RipperView
 from .styles import apply_app_styles
 from .toast import Toast
 from .video_player_view import VideoPlayerView
@@ -142,6 +141,7 @@ class MainWindow(QMainWindow):
         self._radio_view = None
         self._youtube_view = None
         self._disc_view = None
+        self._ripper_view = None
         self._tab_placeholders: dict[str, QWidget] = {}
         # Debounce rapid library_updated signals (e.g. playlist downloads).
         self._library_refresh_timer = QTimer(self)
@@ -232,7 +232,6 @@ class MainWindow(QMainWindow):
         )
         self.video_player_view.apply_equalizer(self.settings.equalizer_enabled, self.settings.equalizer_bands, self.settings.equalizer_preamp)
         self._library_refresh_timer.timeout.connect(self.video_player_view.refresh_catalog)
-        self.ripper_view = RipperView(self.settings, self.library)
 
         # Build tab bar + stack together so indices always match _TAB_ORDER.
         _tab_views = {
@@ -242,7 +241,7 @@ class MainWindow(QMainWindow):
             "Radio": self._placeholder_page("Radio"),
             "Video": self.video_player_view,
             "Disc": self._placeholder_page("Disc"),
-            "Rip": self.ripper_view,
+            "Rip": self._placeholder_page("Rip"),
             "YouTube": self._placeholder_page("YouTube"),
         }
         self._tab_index: dict[str, int] = {}
@@ -299,8 +298,6 @@ class MainWindow(QMainWindow):
         self.now_playing.request_edit_metadata.connect(self.library_view.edit_track_metadata)
         self.video_player_view.request_diagnostics.connect(self.show_diagnostics)
         self.video_player_view.resume_available.connect(self._on_video_resume_available)
-        self.ripper_view.rip_completed.connect(self.library_view.refresh)
-        self.ripper_view.log.connect(lambda m: sb.showMessage(m, 4000))
         self._library_watcher.paths_changed.connect(self._on_watched_paths_changed)
         self._library_watcher.paths_deleted.connect(self._on_watched_paths_deleted)
         self._library_watcher.paths_moved.connect(self._on_watched_paths_moved)
@@ -425,6 +422,10 @@ class MainWindow(QMainWindow):
     def disc_view(self):
         return self._ensure_tab_view("Disc")
 
+    @property
+    def ripper_view(self):
+        return self._ensure_tab_view("Rip")
+
     def _placeholder_page(self, name: str) -> QWidget:
         page = QWidget()
         page.setObjectName(f"lazy{name.replace(' ', '')}Placeholder")
@@ -481,6 +482,15 @@ class MainWindow(QMainWindow):
                 view.status_message.connect(lambda m: self.show_toast(m, level="info"))
                 self._disc_view = self._replace_tab_widget(name, view)
             return self._disc_view
+        if name == "Rip":
+            if self._ripper_view is None:
+                from .ripper_view import RipperView
+
+                view = RipperView(self.settings, self.library)
+                view.rip_completed.connect(self.library_view.refresh)
+                view.log.connect(lambda m: self.statusBar().showMessage(m, 4000))
+                self._ripper_view = self._replace_tab_widget(name, view)
+            return self._ripper_view
         return self.stack.widget(self._tab_index[name])
 
     def _replace_tab_widget(self, name: str, view: QWidget) -> QWidget:
@@ -603,7 +613,7 @@ class MainWindow(QMainWindow):
 
     def _on_view_changed(self, _idx: int) -> None:
         current = self.stack.currentWidget()
-        is_rip = current is self.ripper_view
+        is_rip = self.stack.currentIndex() == self._tab_index["Rip"]
         is_video = current is self.video_player_view
         self.transport.setVisible(not is_rip and not is_video)
         if current is self.library_view:
@@ -929,7 +939,10 @@ class MainWindow(QMainWindow):
         self._watch_index_thread = None
 
     def _ripper_is_running(self) -> bool:
-        ripper = getattr(getattr(self, "ripper_view", None), "ripper", None)
+        ripper_view = self._ripper_view
+        if ripper_view is None:
+            return False
+        ripper = getattr(ripper_view, "ripper", None)
         if ripper is None:
             return False
         try:
@@ -1047,7 +1060,8 @@ class MainWindow(QMainWindow):
             self.settings = result_settings
             self.settings.save()
             metadata.reset_musicbrainz_useragent()
-            self.ripper_view.apply_settings(self.settings)
+            if self._ripper_view is not None:
+                self._ripper_view.apply_settings(self.settings)
             self.now_playing._settings = self.settings
             self.video_player_view.apply_settings(self.settings)
             if self._podcast_view is not None:
@@ -1104,7 +1118,8 @@ class MainWindow(QMainWindow):
             self.settings = result_settings
             self.settings.save()
             metadata.reset_musicbrainz_useragent()
-            self.ripper_view.apply_settings(self.settings)
+            if self._ripper_view is not None:
+                self._ripper_view.apply_settings(self.settings)
             self.now_playing._settings = self.settings
             self.video_player_view.apply_settings(self.settings)
             if self._podcast_view is not None:
@@ -1415,7 +1430,8 @@ class MainWindow(QMainWindow):
             self._youtube_view.shutdown()
         if self._disc_view is not None:
             self._disc_view.shutdown()
-        self.ripper_view.shutdown()
+        if self._ripper_view is not None:
+            self._ripper_view.shutdown()
         self.settings.last_volume = self.player.volume()
         queue = self.player.queue()
         library_queue = [t for t in queue if t.is_library_item]

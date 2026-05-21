@@ -77,6 +77,7 @@ def test_low_coupling_tabs_are_lazy_created_on_first_use(main_window):
     assert main_window._radio_view is None
     assert main_window._youtube_view is None
     assert main_window._disc_view is None
+    assert main_window._ripper_view is None
 
     main_window.tab_bar.setCurrentIndex(main_window._tab_index["Radio"])
 
@@ -85,6 +86,7 @@ def test_low_coupling_tabs_are_lazy_created_on_first_use(main_window):
     assert main_window._podcast_view is None
     assert main_window._youtube_view is None
     assert main_window._disc_view is None
+    assert main_window._ripper_view is None
 
     main_window.tab_bar.setCurrentIndex(main_window._tab_index["YouTube"])
 
@@ -92,11 +94,18 @@ def test_low_coupling_tabs_are_lazy_created_on_first_use(main_window):
     assert main_window.stack.currentWidget() is main_window.youtube_view
     assert main_window._podcast_view is None
     assert main_window._disc_view is None
+    assert main_window._ripper_view is None
 
     main_window.tab_bar.setCurrentIndex(main_window._tab_index["Disc"])
 
     assert main_window._disc_view is not None
     assert main_window.stack.currentWidget() is main_window.disc_view
+    assert main_window._ripper_view is None
+
+    main_window.tab_bar.setCurrentIndex(main_window._tab_index["Rip"])
+
+    assert main_window._ripper_view is not None
+    assert main_window.stack.currentWidget() is main_window.ripper_view
 
 
 def test_transport_visible_on_library_hidden_on_rip(main_window):
