@@ -3,13 +3,13 @@
 Constructs a real MainWindow with a stub Player backend (so no libVLC
 is needed) and asserts the cross-cutting wiring established across
 Phases 1–7 still holds together:
-- tab order matches the documented Library/Now Playing/Video/Disc/Rip/YouTube
+- tab order matches the documented Library/Now Playing/Podcasts/Radio/Video/Disc/Rip/YouTube
 - clicking a tab swaps the QStackedWidget page
 - transport bar hides on the rip + video tabs, shows elsewhere
 - entering the Video tab pauses music playback
 - show_toast creates a Toast and replaces any prior toast
 - scan progress indicator toggles visibility around _start_scan
-- Ctrl+1..5 shortcuts are wired to the View menu
+- Ctrl+1..7 preserve historical tab shortcuts, and Podcasts uses Ctrl+8
 - window icon is set from branding.app_icon()
 """
 from __future__ import annotations
@@ -57,7 +57,7 @@ def main_window(qapp, fake_backend, monkeypatch, tmp_path):
 
 
 def test_tab_bar_renders_documented_order(main_window):
-    expected = ("Library", "Now Playing", "Radio", "Video", "Disc", "Rip", "YouTube")
+    expected = ("Library", "Now Playing", "Podcasts", "Radio", "Video", "Disc", "Rip", "YouTube")
     actual = tuple(
         main_window.tab_bar.tabText(i)
         for i in range(main_window.tab_bar.count())
@@ -70,6 +70,64 @@ def test_clicking_a_tab_swaps_stack_page(main_window):
     assert main_window.stack.currentWidget() is main_window.ripper_view
     main_window.tab_bar.setCurrentIndex(main_window._tab_index["Library"])
     assert main_window.stack.currentWidget() is main_window.library_view
+
+
+def test_low_coupling_tabs_are_lazy_created_on_first_use(main_window):
+    assert main_window._now_playing_view is None
+    assert main_window._podcast_view is None
+    assert main_window._radio_view is None
+    assert main_window._youtube_view is None
+    assert main_window._disc_view is None
+    assert main_window._ripper_view is None
+    assert main_window._video_player_view is None
+
+    main_window.tab_bar.setCurrentIndex(main_window._tab_index["Now Playing"])
+
+    assert main_window._now_playing_view is not None
+    assert main_window.stack.currentWidget() is main_window.now_playing
+    assert main_window._radio_view is None
+    assert main_window._podcast_view is None
+    assert main_window._youtube_view is None
+    assert main_window._disc_view is None
+    assert main_window._ripper_view is None
+    assert main_window._video_player_view is None
+
+    main_window.tab_bar.setCurrentIndex(main_window._tab_index["Radio"])
+
+    assert main_window._radio_view is not None
+    assert main_window.stack.currentWidget() is main_window.radio_view
+    assert main_window._podcast_view is None
+    assert main_window._youtube_view is None
+    assert main_window._disc_view is None
+    assert main_window._ripper_view is None
+    assert main_window._video_player_view is None
+
+    main_window.tab_bar.setCurrentIndex(main_window._tab_index["YouTube"])
+
+    assert main_window._youtube_view is not None
+    assert main_window.stack.currentWidget() is main_window.youtube_view
+    assert main_window._podcast_view is None
+    assert main_window._disc_view is None
+    assert main_window._ripper_view is None
+    assert main_window._video_player_view is None
+
+    main_window.tab_bar.setCurrentIndex(main_window._tab_index["Disc"])
+
+    assert main_window._disc_view is not None
+    assert main_window.stack.currentWidget() is main_window.disc_view
+    assert main_window._ripper_view is None
+    assert main_window._video_player_view is None
+
+    main_window.tab_bar.setCurrentIndex(main_window._tab_index["Rip"])
+
+    assert main_window._ripper_view is not None
+    assert main_window.stack.currentWidget() is main_window.ripper_view
+    assert main_window._video_player_view is None
+
+    main_window.tab_bar.setCurrentIndex(main_window._tab_index["Video"])
+
+    assert main_window._video_player_view is not None
+    assert main_window.stack.currentWidget() is main_window.video_player_view
 
 
 def test_transport_visible_on_library_hidden_on_rip(main_window):
@@ -161,6 +219,38 @@ def test_audio_disc_handoff_reuses_disc_tab_read_on_rip_tab(main_window, monkeyp
     assert main_window.ripper_view.start_btn.isEnabled()
 
 
+def test_audio_disc_handoff_starts_artwork_lookup_for_reused_album(main_window, monkeypatch):
+    from lyon.core.cd_detect import DiscToc
+    from lyon.core.metadata import AlbumInfo, TrackInfo
+
+    toc = DiscToc(
+        drive="D:",
+        discid="disc-id",
+        toc_string="toc",
+        track_count=1,
+        track_offsets=[150],
+        sectors=15150,
+    )
+    album = AlbumInfo(
+        artist="Artist",
+        album="Album",
+        artwork_url="https://example.test/cover.jpg",
+        tracks=[TrackInfo(1, "Song")],
+    )
+    artwork_calls = []
+    monkeypatch.setattr(
+        main_window.ripper_view,
+        "_start_artwork_lookup",
+        lambda info: artwork_calls.append(info),
+    )
+    main_window.disc_view._on_audio_read(toc, album)
+
+    main_window._rip_disc_drive("D:")
+
+    assert main_window.stack.currentWidget() is main_window.ripper_view
+    assert artwork_calls == [album]
+
+
 def test_library_video_handoff_uses_video_tab(main_window, monkeypatch, qapp):
     from lyon.core.library import Track
 
@@ -210,6 +300,63 @@ def test_radio_play_request_uses_audio_player(main_window, monkeypatch):
         ("pause_video",),
         ("play_url", "https://radio.example.test/live", "Sea Radio"),
     ]
+
+
+def test_podcast_play_request_uses_audio_player(main_window, monkeypatch):
+    calls = []
+    monkeypatch.setattr(main_window.video_player_view, "pause_playback", lambda: calls.append(("pause_video",)))
+    monkeypatch.setattr(
+        main_window.player,
+        "play_url",
+        lambda url, title=None, options=(): calls.append(("play_url", url, title, options)),
+    )
+
+    main_window._play_podcast_episode("https://podcasts.example.test/episode.mp3", "Sea Stories - One")
+
+    assert calls == [
+        ("pause_video",),
+        (
+            "play_url",
+            "https://podcasts.example.test/episode.mp3",
+            "Sea Stories - One",
+            (
+                ":http-user-agent=Sea Lyon Media Manager/Podcast",
+                ":network-caching=1500",
+            ),
+        ),
+    ]
+
+
+def test_transport_controls_route_to_cast_controller_while_casting(main_window, monkeypatch):
+    calls = []
+    main_window.cast_controller._renderer = object()
+    monkeypatch.setattr(
+        main_window.cast_controller,
+        "toggle_play_pause",
+        lambda: calls.append("toggle_cast"),
+    )
+    monkeypatch.setattr(
+        main_window.cast_controller,
+        "previous_track",
+        lambda: calls.append("previous_cast"),
+    )
+    monkeypatch.setattr(
+        main_window.cast_controller,
+        "next_track",
+        lambda: calls.append("next_cast"),
+    )
+    monkeypatch.setattr(
+        main_window.cast_controller,
+        "stop_cast",
+        lambda: calls.append("stop_cast"),
+    )
+
+    main_window._on_transport_play_requested()
+    main_window._on_transport_previous_requested()
+    main_window._on_transport_next_requested()
+    main_window._on_transport_stop_requested()
+
+    assert calls == ["toggle_cast", "previous_cast", "next_cast", "stop_cast"]
 
 
 def test_video_disc_handoff_reports_unavailable_video_player(main_window, monkeypatch):
@@ -335,6 +482,7 @@ def test_ctrl_number_shortcuts_wired(main_window):
         "Disc":        "Ctrl+5",
         "Rip":         "Ctrl+6",
         "YouTube":     "Ctrl+7",
+        "Podcasts":    "Ctrl+8",
     }
     # Walk the menubar actions to find the View menu.
     view_menu = None
@@ -391,6 +539,26 @@ def test_close_event_waits_for_replaygain_scanner_to_stop(main_window):
     assert scanner.waited_ms == 3000
     assert event.ignored
     assert "ReplayGain scan is still stopping" in main_window._current_toast.message()
+
+
+def test_close_event_waits_for_podcast_refresh_to_stop(main_window, monkeypatch):
+    calls: list[bool] = []
+    monkeypatch.setattr(main_window.podcast_view, "shutdown", lambda: calls.append(True) or False)
+
+    class CloseEvent:
+        def __init__(self):
+            self.ignored = False
+
+        def ignore(self):
+            self.ignored = True
+
+    event = CloseEvent()
+
+    main_window.closeEvent(event)
+
+    assert calls == [True]
+    assert event.ignored is True
+    assert "Podcast refresh is still stopping" in main_window._current_toast.message()
 
 
 def test_watcher_events_are_filtered_to_current_library_roots(main_window, tmp_path):

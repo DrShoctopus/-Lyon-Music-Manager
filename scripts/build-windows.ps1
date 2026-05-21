@@ -18,7 +18,7 @@
         -SkipBinaries   Don't re-download ffmpeg / fpcalc / libdiscid / VLC if bin\ is already populated.
         -SkipZip        Build the bundle but don't zip it.
         -SkipInstaller  Skip the Inno Setup installer step (requires Inno Setup 6 on PATH or default install location).
-        -Clean          Wipe .venv, build\, dist\ before building.
+        -Clean          Wipe .venv, dist\, and generated PyInstaller build artefacts.
 
 .NOTES
     Requires Python 3.11 64-bit on PATH (or the py launcher: py -3.11 ...).
@@ -166,13 +166,18 @@ function Assert-FpcalcVersion {
 # 0. Optional clean -----------------------------------------------------------
 if ($Clean) {
     Write-Host "==> Cleaning previous build artefacts" -ForegroundColor Yellow
-    foreach ($p in '.venv', 'build', 'dist') {
+    foreach ($p in '.venv', 'dist', 'build\build', 'build\dist') {
         $full = Join-Path $Root $p
         if (Test-Path $full) {
             Write-Host "    Removing $p"
             Remove-Item $full -Recurse -Force
         }
     }
+    Get-ChildItem -Path (Join-Path $Root 'build') -Filter '*.toc' -ErrorAction SilentlyContinue |
+        ForEach-Object {
+            Write-Host "    Removing build\$($_.Name)"
+            Remove-Item $_.FullName -Force
+        }
 }
 
 # 1. Locate Python 3.11 -------------------------------------------------------
@@ -206,10 +211,8 @@ if (-not (Test-Path $venvPython)) { throw "venv python not found at $venvPython"
 Write-Host "==> Installing dependencies" -ForegroundColor Cyan
 & $venvPython -m pip install --upgrade pip --quiet
 if ($LASTEXITCODE -ne 0) { throw "pip upgrade failed" }
-& $venvPython -m pip install -r requirements.txt --quiet
-if ($LASTEXITCODE -ne 0) { throw "pip install -r requirements.txt failed" }
-& $venvPython -m pip install pyinstaller --quiet
-if ($LASTEXITCODE -ne 0) { throw "pyinstaller install failed" }
+& $venvPython -m pip install -r requirements-build.txt --quiet
+if ($LASTEXITCODE -ne 0) { throw "pip install -r requirements-build.txt failed" }
 
 # 4. Fetch ffmpeg.exe + fpcalc.exe + libdiscid.dll + VLC runtime into bin\ -----
 $bin = Join-Path $Root 'bin'
@@ -331,7 +334,7 @@ if ($SkipBinaries) {
 
     if ($needVlc) {
         Write-Host "==> Downloading VLC runtime (Windows x64)" -ForegroundColor Cyan
-        $vlcVersion = '3.0.23'
+        $vlcVersion = '3.0.21'
         $tmp = Join-Path $env:TEMP "lyon-vlc.zip"
         $extract = Join-Path $env:TEMP 'lyon-vlc-extract'
         if (Test-Path $extract) { Remove-Item $extract -Recurse -Force }

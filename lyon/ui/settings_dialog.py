@@ -35,9 +35,7 @@ _RIP_FORMATS = [
 ]
 _LOSSY_FORMATS = {"mp3", "aac", "opus", "ogg", "wma"}
 _FLAC_FORMAT = "flac"
-_DIALOG_DEFAULT_WIDTH = 900
 _DIALOG_DEFAULT_HEIGHT = 460
-_DIALOG_MIN_WIDTH = 760
 
 
 class SettingsDialog(QDialog):
@@ -52,8 +50,6 @@ class SettingsDialog(QDialog):
     ):
         super().__init__(parent)
         self.setWindowTitle("Settings")
-        self.setMinimumWidth(_DIALOG_MIN_WIDTH)
-        self.resize(_DIALOG_DEFAULT_WIDTH, _DIALOG_DEFAULT_HEIGHT)
         self.result_settings = replace(settings)
         self.result_settings.library_paths = normalize_library_paths(settings.library_paths)
         self._initial_music_root = settings.music_root.strip()
@@ -80,8 +76,17 @@ class SettingsDialog(QDialog):
         bb.accepted.connect(self._accept)
         bb.rejected.connect(self.reject)
         layout.addWidget(bb)
+        self._fit_width_to_tabs(tabs)
 
     # ------------------------------------------------------------------ tabs
+
+    def _fit_width_to_tabs(self, tabs: QTabWidget) -> None:
+        """Open the dialog no wider than the complete top tab strip."""
+        margins = self.layout().contentsMargins()
+        tab_width = tabs.tabBar().sizeHint().width()
+        dialog_width = tab_width + margins.left() + margins.right()
+        self.setMinimumWidth(dialog_width)
+        self.resize(dialog_width, _DIALOG_DEFAULT_HEIGHT)
 
     def _build_library_tab(self, settings: Settings) -> QWidget:
         w = QWidget()

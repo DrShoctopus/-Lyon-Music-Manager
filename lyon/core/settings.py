@@ -35,6 +35,7 @@ _STREAM_URL_SCHEMES = {
 }
 _MAX_RECENT_STREAM_URLS = 25
 _MAX_RADIO_STATIONS = 200
+_MAX_PODCAST_SUBSCRIPTIONS = 500
 
 
 def _default_music_root() -> Path:
@@ -177,6 +178,41 @@ def normalize_radio_stations(stations: object, *, limit: int = _MAX_RADIO_STATIO
     return normalized
 
 
+def normalize_podcast_subscriptions(
+    subscriptions: object,
+    *,
+    limit: int = _MAX_PODCAST_SUBSCRIPTIONS,
+) -> list[dict[str, object]]:
+    """Return saved podcast subscriptions with valid feed URLs and stable keys."""
+    if not isinstance(subscriptions, list | tuple):
+        return []
+
+    normalized: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for value in subscriptions:
+        if not isinstance(value, dict):
+            continue
+        url = str(value.get("url") or "").strip()
+        parsed = urlparse(url)
+        if parsed.scheme.casefold() not in {"http", "https"} or not parsed.netloc:
+            continue
+        key = url.casefold()
+        if key in seen:
+            continue
+        title = str(value.get("title") or "").strip() or url
+        normalized.append({
+            "title": title,
+            "url": url,
+            "homepage": str(value.get("homepage") or "").strip(),
+            "description": str(value.get("description") or "").strip(),
+            "artwork_url": str(value.get("artwork_url") or "").strip(),
+        })
+        seen.add(key)
+        if len(normalized) >= limit:
+            break
+    return normalized
+
+
 @dataclass
 class Settings:
     music_root: str = field(default_factory=lambda: str(_default_music_root()))
@@ -226,7 +262,9 @@ class Settings:
     dlna_enabled: bool = False
     dlna_port: int = 8200
     dlna_friendly_name: str = "Sea Lyon Media Manager"
+    last_cast_renderer: str = ""
     radio_stations: list[dict[str, object]] = field(default_factory=list)
+    podcast_subscriptions: list[dict[str, object]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.rip_format = str(self.rip_format or "flac").lower()
@@ -257,7 +295,9 @@ class Settings:
         self.dlna_enabled = _bool_value(self.dlna_enabled, False)
         self.dlna_port = _clamp_int(self.dlna_port, 8200, 0, 65535)
         self.dlna_friendly_name = str(self.dlna_friendly_name or "").strip() or "Sea Lyon Media Manager"
+        self.last_cast_renderer = str(self.last_cast_renderer or "").strip()
         self.radio_stations = normalize_radio_stations(self.radio_stations)
+        self.podcast_subscriptions = normalize_podcast_subscriptions(self.podcast_subscriptions)
         self.yt_audio_format = str(self.yt_audio_format or "flac").lower()
         if self.yt_audio_format not in _YT_AUDIO_FORMATS:
             self.yt_audio_format = "flac"
@@ -311,6 +351,27 @@ class Settings:
             combined["url"] = station["url"]
             merged[key] = combined
         self.radio_stations = normalize_radio_stations(list(merged.values()))
+
+    def add_podcast_subscriptions(self, subscriptions: list[dict[str, object]]) -> None:
+        """Append or update saved podcast subscriptions by feed URL."""
+        merged: dict[str, dict[str, object]] = {
+            str(subscription["url"]).casefold(): dict(subscription)
+            for subscription in normalize_podcast_subscriptions(self.podcast_subscriptions)
+        }
+        for subscription in normalize_podcast_subscriptions(subscriptions):
+            key = str(subscription["url"]).casefold()
+            existing = merged.get(key)
+            if existing is None:
+                merged[key] = subscription
+                continue
+            combined = dict(existing)
+            for field_name in ("title", "homepage", "description", "artwork_url"):
+                incoming = subscription.get(field_name)
+                if incoming:
+                    combined[field_name] = incoming
+            combined["url"] = subscription["url"]
+            merged[key] = combined
+        self.podcast_subscriptions = normalize_podcast_subscriptions(list(merged.values()))
 
     @classmethod
     def load(cls) -> "Settings":

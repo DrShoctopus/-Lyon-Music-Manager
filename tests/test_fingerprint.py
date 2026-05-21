@@ -231,6 +231,24 @@ class TestLibraryFingerprintMethods:
         without = lib.tracks_without_acoustid()
         assert any(t.path == path for t in without)
 
+    def test_tracks_without_acoustid_count_and_paged_iterator(self, tmp_path):
+        from lyon.core.library import Library
+        lib = Library(str(tmp_path / "test.db"))
+        paths = [str(tmp_path / f"track-{i}.flac") for i in range(5)]
+        for path in paths:
+            _add_track(lib, path)
+        tracks = lib.tracks_without_acoustid()
+        lib.update_acoustid(tracks[0].id, "known-id")
+
+        assert lib.count_tracks(media_type="audio") == 5
+        assert lib.count_tracks_without_acoustid() == 4
+        paged = list(lib.iter_tracks_without_acoustid(batch_size=2))
+        assert len(paged) == 4
+        assert tracks[0].id not in {track.id for track in paged}
+        assert [track.id for track in lib.tracks_without_acoustid()] == [
+            track.id for track in paged
+        ]
+
     def test_update_acoustid_removes_from_without_list(self, tmp_path):
         from lyon.core.library import Library
         lib = Library(str(tmp_path / "test.db"))

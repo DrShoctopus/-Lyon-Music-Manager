@@ -21,7 +21,11 @@ ACOUSTID_API_KEY: str = ""
 
 def api_key() -> str:
     """Return the configured AcoustID API key, preferring the environment."""
-    return (os.environ.get("ACOUSTID_API_KEY") or ACOUSTID_API_KEY).strip()
+    return (
+        os.environ.get("LYON_ACOUSTID_API_KEY")
+        or os.environ.get("ACOUSTID_API_KEY")
+        or ACOUSTID_API_KEY
+    ).strip()
 
 
 def is_lookup_configured() -> bool:

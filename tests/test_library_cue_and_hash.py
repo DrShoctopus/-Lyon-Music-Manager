@@ -43,6 +43,22 @@ def _write_image(tmp_path: Path, name: str = "album.flac") -> Path:
     return p
 
 
+def _patch_basic_audio_metadata(monkeypatch) -> None:
+    class _FakeInfo:
+        length = 60.0
+        bitrate = 320000
+        sample_rate = 44100
+
+    class _FakeAudio(dict):
+        info = _FakeInfo()
+        def get(self, key):  # noqa: D102
+            return {"title": ["Song"], "artist": ["A"], "albumartist": ["A"],
+                    "album": ["B"], "tracknumber": ["1"], "discnumber": ["1"],
+                    "date": ["2024"], "genre": ["Rock"]}.get(key)
+
+    monkeypatch.setattr(library_module, "MutagenFile", lambda *a, **k: _FakeAudio())
+
+
 # ===========================================================================
 # 2.6 — file_hash helpers
 # ===========================================================================
@@ -81,10 +97,10 @@ def test_compute_file_hash_missing_file_returns_none(tmp_path):
 
 
 # ===========================================================================
-# 2.6 — file_hash stored during index_file
+# 2.6 — file_hash deferred during index_file
 # ===========================================================================
 
-def test_index_file_stores_hash_for_audio(tmp_path, monkeypatch):
+def test_index_file_defers_hash_for_audio(tmp_path, monkeypatch):
     audio = tmp_path / "song.flac"
     audio.write_bytes(b"FLAC" + b"\x00" * 60)
 
@@ -107,8 +123,46 @@ def test_index_file_stores_hash_for_audio(tmp_path, monkeypatch):
     row = library.conn.execute(
         "SELECT file_hash FROM tracks WHERE path = ?", (str(audio),)
     ).fetchone()
-    expected = _compute_file_hash(str(audio))
-    assert row["file_hash"] == expected
+    assert row["file_hash"] is None
+
+
+def test_index_file_preserves_hash_for_forced_unchanged_rescan(tmp_path, monkeypatch):
+    audio = tmp_path / "song.flac"
+    audio.write_bytes(b"FLAC" + b"\x00" * 60)
+
+    class _FakeInfo:
+        length = 60.0
+        bitrate = 320000
+        sample_rate = 44100
+
+    class _FakeAudio(dict):
+        info = _FakeInfo()
+        def get(self, key):  # noqa: D102
+            return {"title": ["Song"], "artist": ["A"], "albumartist": ["A"],
+                    "album": ["B"], "tracknumber": ["1"], "discnumber": ["1"],
+                    "date": ["2024"], "genre": ["Rock"]}.get(key)
+
+    monkeypatch.setattr(library_module, "MutagenFile", lambda *a, **k: _FakeAudio())
+    monkeypatch.setattr(
+        library_module,
+        "_compute_file_hash",
+        lambda *a, **k: pytest.fail("index_file should not hash unchanged audio"),
+    )
+    library = Library(tmp_path / "lib.db")
+    library.index_file(str(audio))
+    library.conn.execute(
+        "UPDATE tracks SET file_hash = 'cafebabe', acoustid_id = 'acoustid-1' WHERE path = ?",
+        (str(audio),),
+    )
+    library.conn.commit()
+
+    library.index_file(str(audio), force=True)
+
+    row = library.conn.execute(
+        "SELECT file_hash, acoustid_id FROM tracks WHERE path = ?", (str(audio),)
+    ).fetchone()
+    assert row["file_hash"] == "cafebabe"
+    assert row["acoustid_id"] == "acoustid-1"
 
 
 def test_index_file_no_hash_for_video(tmp_path, monkeypatch):
@@ -123,6 +177,55 @@ def test_index_file_no_hash_for_video(tmp_path, monkeypatch):
         "SELECT file_hash FROM tracks WHERE path = ?", (str(video),)
     ).fetchone()
     assert row is None or row["file_hash"] is None
+
+
+def test_index_file_clears_stale_hash_when_audio_changes(tmp_path, monkeypatch):
+    audio = tmp_path / "song.flac"
+    audio.write_bytes(b"FLAC" + b"\x00" * 60)
+    _patch_basic_audio_metadata(monkeypatch)
+
+    library = Library(tmp_path / "lib.db")
+    library.index_file(str(audio))
+    library.conn.execute(
+        "UPDATE tracks SET file_hash = 'cafebabe', acoustid_id = 'acoustid-1' WHERE path = ?",
+        (str(audio),),
+    )
+    library.conn.commit()
+
+    audio.write_bytes(b"FLAC" + b"\x01" * 61)
+    library.index_file(str(audio), force=True)
+
+    row = library.conn.execute(
+        "SELECT file_hash, acoustid_id FROM tracks WHERE path = ?", (str(audio),)
+    ).fetchone()
+    assert row["file_hash"] is None
+    assert row["acoustid_id"] is None
+
+
+def test_index_file_preserves_acoustid_when_file_hash_is_null(tmp_path, monkeypatch):
+    """Regression: acoustid must survive a rescan even when file_hash is still NULL."""
+    audio = tmp_path / "song.flac"
+    audio.write_bytes(b"FLAC" + b"\x00" * 60)
+    _patch_basic_audio_metadata(monkeypatch)
+
+    library = Library(tmp_path / "lib.db")
+    library.index_file(str(audio))
+
+    # Simulate fingerprinting: acoustid set but file_hash still NULL (deferred hashing).
+    library.conn.execute(
+        "UPDATE tracks SET acoustid_id = 'test-acoustid-uuid' WHERE path = ?",
+        (str(audio),),
+    )
+    library.conn.commit()
+
+    # Rescan the unchanged file — acoustid must not be erased.
+    library.index_file(str(audio), force=True)
+
+    row = library.conn.execute(
+        "SELECT file_hash, acoustid_id FROM tracks WHERE path = ?", (str(audio),)
+    ).fetchone()
+    assert row["file_hash"] is None, "hash should remain NULL (deferred)"
+    assert row["acoustid_id"] == "test-acoustid-uuid", "acoustid must be preserved on unchanged rescan"
 
 
 # ===========================================================================
@@ -146,6 +249,100 @@ def test_find_duplicates_by_hash_finds_exact_copies(tmp_path):
     assert len(groups[0]) == 2
     paths = {t.path for t in groups[0]}
     assert paths == {"/music/copy_a.flac", "/music/copy_b.flac"}
+
+
+def test_find_duplicates_by_hash_backfills_indexed_audio(tmp_path, monkeypatch):
+    a = tmp_path / "copy_a.flac"
+    b = tmp_path / "copy_b.flac"
+    payload = b"FLAC" + b"\x01" * 200_000
+    a.write_bytes(payload)
+    b.write_bytes(payload)
+    _patch_basic_audio_metadata(monkeypatch)
+
+    library = Library(tmp_path / "lib.db")
+    library.index_file(str(a))
+    library.index_file(str(b))
+
+    rows = library.conn.execute(
+        "SELECT file_hash FROM tracks ORDER BY path"
+    ).fetchall()
+    assert [row["file_hash"] for row in rows] == [None, None]
+
+    groups = library.find_duplicates_by_hash()
+
+    assert len(groups) == 1
+    assert {track.path for track in groups[0]} == {str(a), str(b)}
+    hashes = library.conn.execute(
+        "SELECT DISTINCT file_hash FROM tracks ORDER BY file_hash"
+    ).fetchall()
+    assert [row["file_hash"] for row in hashes] == [_compute_file_hash(str(a))]
+
+
+def test_find_duplicates_by_hash_reuses_backfilled_hash_after_reopen(tmp_path, monkeypatch):
+    a = tmp_path / "copy_a.flac"
+    b = tmp_path / "copy_b.flac"
+    payload = b"FLAC" + b"\x02" * 200_000
+    a.write_bytes(payload)
+    b.write_bytes(payload)
+    _patch_basic_audio_metadata(monkeypatch)
+    db_path = tmp_path / "lib.db"
+
+    library = Library(db_path)
+    library.index_file(str(a))
+    library.index_file(str(b))
+    assert len(library.find_duplicates_by_hash()) == 1
+    library.close()
+
+    monkeypatch.setattr(
+        library_module,
+        "_compute_file_hash",
+        lambda *a, **k: pytest.fail("existing hashes should not be recomputed"),
+    )
+    reopened = Library(db_path)
+    try:
+        groups = reopened.find_duplicates_by_hash()
+    finally:
+        reopened.close()
+
+    assert len(groups) == 1
+    assert {track.path for track in groups[0]} == {str(a), str(b)}
+
+
+def test_backfill_does_not_overwrite_hash_set_concurrently(tmp_path, monkeypatch):
+    """Regression: backfill UPDATE must not stomp a hash written by a concurrent index_file."""
+    audio = tmp_path / "song.flac"
+    audio.write_bytes(b"FLAC" + b"\x00" * 60)
+    _patch_basic_audio_metadata(monkeypatch)
+
+    library = Library(tmp_path / "lib.db")
+    library.index_file(str(audio))
+
+    track_id = library.conn.execute(
+        "SELECT id FROM tracks WHERE path = ?", (str(audio),)
+    ).fetchone()["id"]
+
+    sentinel = "hash-set-by-concurrent-index"
+
+    # Wrap _compute_file_hash to also simulate a concurrent index setting the hash first.
+    original_compute = library_module._compute_file_hash
+
+    def _compute_and_inject(path):
+        # Simulate a concurrent index_file winning the race and writing the hash.
+        library.conn.execute(
+            "UPDATE tracks SET file_hash = ? WHERE id = ?",
+            (sentinel, track_id),
+        )
+        library.conn.commit()
+        return original_compute(path)
+
+    monkeypatch.setattr(library_module, "_compute_file_hash", _compute_and_inject)
+
+    library._backfill_missing_hashes()
+
+    row = library.conn.execute(
+        "SELECT file_hash FROM tracks WHERE id = ?", (track_id,)
+    ).fetchone()
+    assert row["file_hash"] == sentinel, "backfill must not overwrite a concurrently-written hash"
 
 
 def test_find_duplicates_by_hash_ignores_null_hash(tmp_path):
@@ -211,6 +408,60 @@ def test_index_cue_file_creates_track_rows(tmp_path):
         "SELECT * FROM tracks WHERE media_type = 'cue_track'"
     ).fetchall()
     assert len(rows) == 3
+
+
+def test_index_cue_file_defers_commit_by_default(tmp_path):
+    _write_image(tmp_path)
+    cue = _write_cue(tmp_path, ["Track One"])
+    db_path = tmp_path / "lib.db"
+    library = Library(db_path)
+    try:
+        library._index_cue_file(str(cue))
+        same_connection_count = library.conn.execute(
+            "SELECT COUNT(*) FROM tracks WHERE media_type='cue_track'"
+        ).fetchone()[0]
+        assert same_connection_count == 1
+
+        observer = Library(db_path)
+        try:
+            committed_count = observer.conn.execute(
+                "SELECT COUNT(*) FROM tracks WHERE media_type='cue_track'"
+            ).fetchone()[0]
+            assert committed_count == 0
+        finally:
+            observer.close()
+
+        library.conn.commit()
+        observer = Library(db_path)
+        try:
+            committed_count = observer.conn.execute(
+                "SELECT COUNT(*) FROM tracks WHERE media_type='cue_track'"
+            ).fetchone()[0]
+            assert committed_count == 1
+        finally:
+            observer.close()
+    finally:
+        library.close()
+
+
+def test_index_cue_file_commit_option_persists_immediately(tmp_path):
+    _write_image(tmp_path)
+    cue = _write_cue(tmp_path, ["Track One"])
+    db_path = tmp_path / "lib.db"
+    library = Library(db_path)
+    try:
+        library._index_cue_file(str(cue), commit=True)
+
+        observer = Library(db_path)
+        try:
+            committed_count = observer.conn.execute(
+                "SELECT COUNT(*) FROM tracks WHERE media_type='cue_track'"
+            ).fetchone()[0]
+            assert committed_count == 1
+        finally:
+            observer.close()
+    finally:
+        library.close()
 
 
 def test_index_cue_file_track_paths_use_double_colon(tmp_path):

@@ -211,18 +211,24 @@ class LibraryIndexThread(QThread):
                     )
                 )
 
-            for old_path, new_path in list(self.batch.moved_paths.items()):
+            moved_paths = list(self.batch.moved_paths.items())
+            self._wait_for_stable_batch(new_path for _old_path, new_path in moved_paths)
+            for old_path, new_path in moved_paths:
                 if self._should_cancel():
                     break
-                self._wait_for_stable_file(new_path)
                 summary.add_result(self.library.move_path(old_path, new_path, commit=False))
 
-            for path in sorted(self.batch.deleted_paths):
+            deleted_paths = sorted(self.batch.deleted_paths)
+            self._wait_for_stable_batch(
+                path
+                for path in deleted_paths
+                if _is_indexable(path) and Path(path).exists()
+            )
+            for path in deleted_paths:
                 if self._should_cancel():
                     break
                 if _is_indexable(path):
                     if Path(path).exists():
-                        self._wait_for_stable_file(path)
                         summary.add_result(self.library.index_file(path, force=True))
                         continue
                     summary.removed += self.library.remove_path(path, commit=False)
@@ -249,10 +255,11 @@ class LibraryIndexThread(QThread):
                     )
                 )
 
-            for path in sorted(self.batch.changed_paths):
+            changed_paths = sorted(self.batch.changed_paths)
+            self._wait_for_stable_batch(changed_paths)
+            for path in changed_paths:
                 if self._should_cancel():
                     break
-                self._wait_for_stable_file(path)
                 summary.add_result(self.library.index_file(path))
 
             self.library.commit()
@@ -263,21 +270,29 @@ class LibraryIndexThread(QThread):
     def _should_cancel(self) -> bool:
         return self._cancel or self.isInterruptionRequested()
 
-    def _wait_for_stable_file(self, path: str) -> None:
-        if self.settle_ms <= 0 or not _is_indexable(path):
+    def _wait_for_stable_batch(self, paths) -> None:
+        if self.settle_ms <= 0:
             return
-        first = _stat_signature(path)
-        if first is None:
+        pending = {
+            str(path): signature
+            for path in paths
+            if _is_indexable(str(path))
+            for signature in (_stat_signature(str(path)),)
+            if signature is not None
+        }
+        if not pending:
             return
         slept = 0
         step = min(100, self.settle_ms)
-        while slept < self.settle_ms and not self._should_cancel():
+        while slept < self.settle_ms and pending and not self._should_cancel():
             time.sleep(step / 1000)
             slept += step
-            current = _stat_signature(path)
-            if current is not None and current == first:
-                return
-            first = current
+            changed: dict[str, tuple[int, int]] = {}
+            for path, first in pending.items():
+                current = _stat_signature(path)
+                if current is not None and current != first:
+                    changed[path] = current
+            pending = changed
 
 
 def coalesce_batch(target: WatchBatch, incoming: WatchBatch) -> None:

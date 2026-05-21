@@ -5,7 +5,7 @@
 # Sea Lyon Media Manager
 
 Sea Lyon Media Manager is a Windows focused desktop media manager for local music,
-audio CD ripping, video playback, YouTube search/download, and library
+podcasts, internet radio, audio CD ripping, video playback, YouTube search/download, and library
 organization. It is written in Python with PySide6 and uses SQLite, Mutagen,
 libVLC, ffmpeg, yt-dlp, CUETools DB, MusicBrainz, TheAudioDB, Cover Art Archive,
 LRCLIB and libdiscid.
@@ -71,6 +71,15 @@ assets.
 - macOS media-key hook when the optional platform support is available.
 - Playback-unavailable fallback so the app can still open when VLC/libVLC is
   missing.
+
+### Podcasts And Radio
+
+- First-class Podcasts tab for saved RSS/Atom podcast feeds.
+- Add individual podcast feeds or import OPML subscription lists.
+- Background podcast refresh with searchable episode catalog.
+- Podcast episode playback uses the same libVLC stream pipeline as the main
+  audio player.
+- Internet Radio tab for saved live streams and imported M3U/PLS playlists.
 
 ### Equalizer And Now Playing
 
@@ -143,16 +152,18 @@ assets.
 pip install -r requirements.txt
 ```
 
-Pinned packages currently include:
+Pinned runtime packages currently include:
 
-- `PySide6` and `PySide6-Addons` for the Qt desktop runtime.
+- `PySide6-Essentials` for the Qt desktop runtime.
 - `mutagen` for media tag reading/writing.
 - `musicbrainzngs`, `requests`, and `defusedxml` for metadata lookups.
-- `Pillow` for image handling.
 - `python-vlc` for audio/video playback and audible equalizer support.
 - `discid` on Windows for MusicBrainz disc IDs.
 - `yt-dlp` for YouTube search and downloads.
 - `watchdog` for recursive library-folder monitoring.
+
+Build machines should install `requirements-build.txt`, which layers
+PyInstaller and build-only icon tooling on top of the runtime dependencies.
 
 ### Native Runtime Files
 
@@ -408,6 +419,6 @@ artifact.
 
 Sea Lyon Media Manager uses Qt/PySide6, libVLC, ffmpeg/libcdio, libdiscid,
 CUETools DB, MusicBrainz, TheAudioDB, Cover Art Archive, yt-dlp, Mutagen,
-Pillow, requests, and defusedxml. Respect MusicBrainz access policies by setting
+requests, and defusedxml. Respect MusicBrainz access policies by setting
 an appropriate app/contact value before distributing builds or performing heavy
 metadata lookups.

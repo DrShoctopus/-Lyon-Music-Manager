@@ -44,6 +44,25 @@ class _DiscReadThread(QThread):
         self.finished_with.emit(toc, album)
 
 
+class _VideoProbeThread(QThread):
+    finished_with = Signal(object)  # VideoDiscSource
+
+    def __init__(self, drive: str, kind: DiscKind | None = None, parent=None):
+        super().__init__(parent)
+        self.drive = drive
+        self.kind = kind
+        self._cancelled = False
+
+    def cancel(self) -> None:
+        self._cancelled = True
+
+    def run(self) -> None:
+        source = probe_video_disc(self.drive, self.kind)
+        if self._cancelled:
+            return
+        self.finished_with.emit(source)
+
+
 class DiscView(QWidget):
     """Drive selector and controls for Audio CD, DVD, and VCD/SVCD playback."""
 
@@ -61,6 +80,8 @@ class DiscView(QWidget):
         self._audio_toc: cd_detect.DiscToc | None = None
         self._audio_album: AlbumInfo | None = None
         self._reader: _DiscReadThread | None = None
+        self._video_probe: _VideoProbeThread | None = None
+        self._video_probe_autoplay = False
         self._video_source: VideoDiscSource | None = None
 
         self.setObjectName("discView")
@@ -222,8 +243,7 @@ class DiscView(QWidget):
         self._set_busy(True)
         requested = self.kind_combo.currentData()
         if requested in (DiscKind.DVD, DiscKind.VCD):
-            self._show_video_source(probe_video_disc(drive, requested))
-            self._set_busy(False)
+            self._start_video_probe(drive, requested)
             return
         self.status_label.setText(f"Reading disc in {drive}...")
         self._reader = _DiscReadThread(drive, self.settings, self)
@@ -238,8 +258,9 @@ class DiscView(QWidget):
                 self.status_label.setText("No readable Audio CD was found.")
                 self.stack.setCurrentIndex(0)
                 return
-            source = probe_video_disc(self._selected_drive())
-            self._show_video_source(source)
+            drive = self._selected_drive()
+            if drive:
+                self._start_video_probe(drive)
             return
         self._audio_toc = toc
         self._audio_album = album
@@ -253,6 +274,38 @@ class DiscView(QWidget):
 
     def _clear_reader(self) -> None:
         self._reader = None
+        if self._video_probe is None:
+            self._set_busy(False)
+
+    def _start_video_probe(
+        self,
+        drive: str,
+        kind: DiscKind | None = None,
+        *,
+        autoplay: bool = False,
+    ) -> None:
+        if not drive:
+            self._set_busy(False)
+            return
+        if self._video_probe is not None and self._video_probe.isRunning():
+            self.status_label.setText(f"Checking video disc in {drive}...")
+            return
+        self._set_busy(True)
+        self.status_label.setText(f"Checking video disc in {drive}...")
+        self._video_probe_autoplay = autoplay
+        self._video_probe = _VideoProbeThread(drive, kind, self)
+        self._video_probe.finished_with.connect(self._on_video_probe_finished)
+        self._video_probe.finished.connect(self._clear_video_probe)
+        self._video_probe.start()
+
+    def _on_video_probe_finished(self, source: VideoDiscSource) -> None:
+        self._show_video_source(source)
+        if self._video_probe_autoplay:
+            self.play_video_disc.emit(source)
+
+    def _clear_video_probe(self) -> None:
+        self._video_probe = None
+        self._video_probe_autoplay = False
         self._set_busy(False)
 
     def _show_video_source(self, source: VideoDiscSource) -> None:
@@ -309,7 +362,12 @@ class DiscView(QWidget):
 
     def _play_video(self) -> None:
         if self._video_source is None:
-            self._show_video_source(probe_video_disc(self._selected_drive(), self.kind_combo.currentData()))
+            self._start_video_probe(
+                self._selected_drive(),
+                self.kind_combo.currentData(),
+                autoplay=True,
+            )
+            return
         if self._video_source is not None:
             self.play_video_disc.emit(self._video_source)
 
@@ -347,11 +405,17 @@ class DiscView(QWidget):
 
     def shutdown(self) -> None:
         if self._reader is not None:
-            reader = self._reader
-            reader.cancel()
-            reader.requestInterruption()
-            reader.quit()
-            if not reader.wait(3000):
-                reader.terminate()
-                reader.wait(2000)
+            self._shutdown_thread(self._reader)
             self._reader = None
+        if self._video_probe is not None:
+            self._shutdown_thread(self._video_probe)
+            self._video_probe = None
+
+    @staticmethod
+    def _shutdown_thread(thread) -> None:
+        thread.cancel()
+        thread.requestInterruption()
+        thread.quit()
+        if not thread.wait(3000):
+            thread.terminate()
+            thread.wait(2000)
