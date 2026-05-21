@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
 from pathlib import Path
-from urllib.parse import urljoin, urlparse
+from urllib.parse import quote, urljoin, urlparse, urlunparse
 from urllib.request import Request, urlopen
 
 try:
@@ -21,7 +21,7 @@ _ATOM_NS = "http://www.w3.org/2005/Atom"
 _MEDIA_NS = "http://search.yahoo.com/mrss/"
 _AUDIO_MIME_PREFIXES = ("audio/", "video/")
 _ENCLOSURE_REL_VALUES = {"enclosure", "http://www.iana.org/assignments/relation/enclosure"}
-_USER_AGENT = "Sea Lyon Media Manager/Podcast"
+PODCAST_USER_AGENT = "Sea Lyon Media Manager/Podcast"
 
 
 @dataclass(frozen=True)
@@ -80,7 +80,7 @@ def fetch_feed(url: str, *, timeout: int = 15) -> PodcastFeed:
     clean_url = _clean_url(url)
     if not _is_http_url(clean_url):
         raise ValueError("Podcast feed URL must be HTTP or HTTPS.")
-    request = Request(clean_url, headers={"User-Agent": _USER_AGENT})
+    request = Request(clean_url, headers={"User-Agent": PODCAST_USER_AGENT})
     with urlopen(request, timeout=timeout) as response:  # noqa: S310 - user-supplied podcast URLs are expected.
         data = response.read()
     text = data.decode("utf-8-sig", errors="replace")
@@ -294,12 +294,26 @@ def _parse_xml(text: str, label: str) -> ET.Element:
 def _resolve_url(value: str, base_url: str) -> str:
     url = _clean_url(value)
     if base_url and url:
-        return urljoin(base_url, url)
-    return url
+        return _quote_url(urljoin(base_url, url))
+    return _quote_url(url)
 
 
 def _clean_url(value: str) -> str:
     return value.strip().strip('"').strip("'")
+
+
+def _quote_url(url: str) -> str:
+    parsed = urlparse(url)
+    if not parsed.scheme or not parsed.netloc:
+        return url
+    return urlunparse((
+        parsed.scheme,
+        parsed.netloc,
+        quote(parsed.path, safe="/:%@!$&'()*+,;=-._~%"),
+        parsed.params,
+        quote(parsed.query, safe="=&?/:@!$'()*+,;%-._~"),
+        quote(parsed.fragment, safe="=&?/:@!$'()*+,;%-._~"),
+    ))
 
 
 def _is_http_url(url: str) -> bool:

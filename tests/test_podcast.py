@@ -44,6 +44,24 @@ def test_parse_rss_feed_reads_show_metadata_and_audio_enclosures():
     assert episode.duration == "1:02:03"
 
 
+def test_parse_rss_feed_quotes_spaces_in_episode_urls():
+    feed = parse_feed_text(
+        """<rss version="2.0">
+          <channel>
+            <title>Sea Stories</title>
+            <item>
+              <title>Launch Day</title>
+              <enclosure url="/audio/launch day.mp3?token=one two" type="audio/mpeg" />
+            </item>
+          </channel>
+        </rss>
+        """,
+        source_url="https://podcasts.example.test/feed.xml",
+    )
+
+    assert feed.episodes[0].url == "https://podcasts.example.test/audio/launch%20day.mp3?token=one%20two"
+
+
 def test_parse_atom_feed_reads_enclosure_links():
     feed = parse_feed_text(
         """<feed xmlns="http://www.w3.org/2005/Atom">

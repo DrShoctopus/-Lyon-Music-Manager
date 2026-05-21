@@ -26,6 +26,7 @@ from ..core.library_watcher import (
     coalesce_batch,
 )
 from ..core.playback_backend import close_dll_handles
+from ..core.podcast import PODCAST_USER_AGENT
 from ..core.player import Player
 from ..core.replaygain import ReplayGainScanner
 from ..core.scrobbler import ScrobblerService
@@ -759,7 +760,14 @@ class MainWindow(QMainWindow):
 
     def _play_podcast_episode(self, url: str, title: str) -> None:
         self._pause_video_playback_if_loaded()
-        self.player.play_url(url, title=title)
+        self.player.play_url(
+            url,
+            title=title,
+            options=(
+                f":http-user-agent={PODCAST_USER_AGENT}",
+                ":network-caching=1500",
+            ),
+        )
         self.show_toast(f"Playing podcast: {title}", level="info")
 
     def _on_video_resume_available(self, message: str, callback: object) -> None:

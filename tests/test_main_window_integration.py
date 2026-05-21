@@ -308,14 +308,22 @@ def test_podcast_play_request_uses_audio_player(main_window, monkeypatch):
     monkeypatch.setattr(
         main_window.player,
         "play_url",
-        lambda url, title=None: calls.append(("play_url", url, title)),
+        lambda url, title=None, options=(): calls.append(("play_url", url, title, options)),
     )
 
     main_window._play_podcast_episode("https://podcasts.example.test/episode.mp3", "Sea Stories - One")
 
     assert calls == [
         ("pause_video",),
-        ("play_url", "https://podcasts.example.test/episode.mp3", "Sea Stories - One"),
+        (
+            "play_url",
+            "https://podcasts.example.test/episode.mp3",
+            "Sea Stories - One",
+            (
+                ":http-user-agent=Sea Lyon Media Manager/Podcast",
+                ":network-caching=1500",
+            ),
+        ),
     ]
 
 
