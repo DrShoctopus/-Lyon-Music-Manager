@@ -2,14 +2,12 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 import os
 import time
-import urllib.parse
-import urllib.request
 from typing import TYPE_CHECKING
 
+import requests
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal
 
 if TYPE_CHECKING:
@@ -26,6 +24,7 @@ _LASTFM_API_SECRET: str = (os.environ.get("LYON_LASTFM_API_SECRET") or "").strip
 _LASTFM_API_URL = "https://ws.audioscrobbler.com/2.0/"
 _LASTFM_AUTH_URL = "https://www.last.fm/api/auth/"
 _LBZ_SUBMIT_URL = "https://api.listenbrainz.org/1/submit-listens"
+_SESSION = requests.Session()
 
 _MIN_TRACK_DURATION_S = 30   # Last.fm requires >= 30 s
 _SCROBBLE_CAP_S = 240        # scrobble at 4 min if track is longer than 8 min
@@ -40,24 +39,27 @@ def _lastfm_sign(params: dict[str, str]) -> str:
 def _lastfm_post(params: dict[str, str]) -> dict:
     params["format"] = "json"
     params["api_sig"] = _lastfm_sign(params)
-    data = urllib.parse.urlencode(params).encode()
-    req = urllib.request.Request(_LASTFM_API_URL, data=data, method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            return json.loads(resp.read().decode())
+        resp = _SESSION.post(_LASTFM_API_URL, data=params, timeout=10)
+        return resp.json()
     except Exception as exc:
         LOG.debug("Last.fm POST failed: %s", exc)
         return {"error": -1, "message": str(exc)}
 
 
 def _lbz_post(payload: dict, token: str) -> bool:
-    data = json.dumps(payload).encode()
-    req = urllib.request.Request(_LBZ_SUBMIT_URL, data=data, method="POST")
-    req.add_header("Authorization", f"Token {token}")
-    req.add_header("Content-Type", "application/json")
+    headers = {
+        "Authorization": f"Token {token}",
+        "Content-Type": "application/json",
+    }
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            return resp.status == 200
+        resp = _SESSION.post(
+            _LBZ_SUBMIT_URL,
+            json=payload,
+            headers=headers,
+            timeout=10,
+        )
+        return resp.status_code == 200
     except Exception as exc:
         LOG.debug("ListenBrainz POST failed: %s", exc)
         return False
