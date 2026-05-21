@@ -152,16 +152,18 @@ assets.
 pip install -r requirements.txt
 ```
 
-Pinned packages currently include:
+Pinned runtime packages currently include:
 
-- `PySide6` and `PySide6-Addons` for the Qt desktop runtime.
+- `PySide6-Essentials` for the Qt desktop runtime.
 - `mutagen` for media tag reading/writing.
 - `musicbrainzngs`, `requests`, and `defusedxml` for metadata lookups.
-- `Pillow` for image handling.
 - `python-vlc` for audio/video playback and audible equalizer support.
 - `discid` on Windows for MusicBrainz disc IDs.
 - `yt-dlp` for YouTube search and downloads.
 - `watchdog` for recursive library-folder monitoring.
+
+Build machines should install `requirements-build.txt`, which layers
+PyInstaller and build-only icon tooling on top of the runtime dependencies.
 
 ### Native Runtime Files
 
@@ -417,6 +419,6 @@ artifact.
 
 Sea Lyon Media Manager uses Qt/PySide6, libVLC, ffmpeg/libcdio, libdiscid,
 CUETools DB, MusicBrainz, TheAudioDB, Cover Art Archive, yt-dlp, Mutagen,
-Pillow, requests, and defusedxml. Respect MusicBrainz access policies by setting
+requests, and defusedxml. Respect MusicBrainz access policies by setting
 an appropriate app/contact value before distributing builds or performing heavy
 metadata lookups.

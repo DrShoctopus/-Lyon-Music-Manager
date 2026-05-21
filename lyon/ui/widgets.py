@@ -1,6 +1,10 @@
 """Reusable widgets used across views."""
 from __future__ import annotations
 
+import os
+from collections import OrderedDict
+from typing import Any
+
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPixmap
 from PySide6.QtWidgets import QLabel, QWidget
@@ -23,12 +27,38 @@ def placeholder_cover(size: int = 96, text: str = "?") -> QPixmap:
     return pm
 
 
+_COVER_CACHE_MAX = 64
+_cover_cache: "OrderedDict[tuple[Any, ...], QPixmap]" = OrderedDict()
+
+
+def _cover_source_state(path: str) -> tuple[int, int]:
+    try:
+        st = os.stat(path)
+    except OSError:
+        return (-1, -1)
+    return (st.st_mtime_ns, st.st_size)
+
+
 def cover_pixmap(path: str | None, size: int = 96, fallback_text: str = "?") -> QPixmap:
-    if path:
-        pm = QPixmap(path)
-        if not pm.isNull():
-            return pm.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-    return placeholder_cover(size, fallback_text)
+    if not path:
+        return placeholder_cover(size, fallback_text)
+
+    key = (path, size, fallback_text, _cover_source_state(path))
+    cached = _cover_cache.get(key)
+    if cached is not None:
+        _cover_cache.move_to_end(key)
+        return cached
+
+    pm = QPixmap(path)
+    if not pm.isNull():
+        result = pm.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+    else:
+        result = placeholder_cover(size, fallback_text)
+    _cover_cache[key] = result
+    _cover_cache.move_to_end(key)
+    if len(_cover_cache) > _COVER_CACHE_MAX:
+        _cover_cache.popitem(last=False)
+    return result
 
 
 class ElidedLabel(QLabel):

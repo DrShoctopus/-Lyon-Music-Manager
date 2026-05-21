@@ -215,6 +215,12 @@ class Library:
         self.conn.row_factory = sqlite3.Row
         with self._lock:
             self.conn.execute("PRAGMA foreign_keys = ON")
+            # WAL improves reader/writer concurrency; NORMAL is the usual
+            # durability tradeoff for WAL, and busy_timeout avoids immediate
+            # lock failures during scanner/UI contention.
+            self.conn.execute("PRAGMA journal_mode = WAL")
+            self.conn.execute("PRAGMA synchronous = NORMAL")
+            self.conn.execute("PRAGMA busy_timeout = 5000")
             self.conn.executescript(_SCHEMA_V0)
             self._migrate()
             self.conn.commit()

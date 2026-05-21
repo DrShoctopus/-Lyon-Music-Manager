@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import time
 import urllib.parse
 import urllib.request
@@ -17,9 +18,10 @@ if TYPE_CHECKING:
 
 LOG = logging.getLogger(__name__)
 
-# Register your app at https://www.last.fm/api/account/create and fill these in.
-_LASTFM_API_KEY: str = ""
-_LASTFM_API_SECRET: str = ""
+# Register your app at https://www.last.fm/api/account/create.
+# Supply credentials through environment variables; never commit secrets.
+_LASTFM_API_KEY: str = (os.environ.get("LYON_LASTFM_API_KEY") or "").strip()
+_LASTFM_API_SECRET: str = (os.environ.get("LYON_LASTFM_API_SECRET") or "").strip()
 
 _LASTFM_API_URL = "https://ws.audioscrobbler.com/2.0/"
 _LASTFM_AUTH_URL = "https://www.last.fm/api/auth/"

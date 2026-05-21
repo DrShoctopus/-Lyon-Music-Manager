@@ -15,9 +15,6 @@ try:
 except ImportError:  # defusedxml is an optional hardening layer
     import xml.etree.ElementTree as ET  # type: ignore[no-redef]
 
-import musicbrainzngs
-import requests
-
 from . import settings as _settings
 
 
@@ -36,11 +33,11 @@ METADATA_DIAGNOSTICS_LOG_NAME = "metadata-diagnostics.log"
 
 LOG = logging.getLogger(__name__)
 _metadata_file_handler: logging.Handler | None = None
-_DEFAULT_REQUESTS_GET = requests.get
+_DEFAULT_REQUESTS_GET: Any = None
 _DEFAULT_SETTINGS_LOAD = getattr(_settings.Settings.load, "__func__", _settings.Settings.load)
 
 # Shared HTTP session — reuses TCP connections and avoids repeated TLS handshakes.
-_http_session: requests.Session | None = None
+_http_session: "requests.Session | None" = None
 _http_session_lock = threading.Lock()
 
 # Guards the one-time musicbrainzngs useragent initialisation.
@@ -51,6 +48,22 @@ _last_musicbrainz_useragent: tuple[str, str, str] | None = None
 # MusicBrainz API ToS requires ≤1 request per second.
 _mb_rate_limit_lock = threading.Lock()
 _mb_last_request_time: float = 0.0
+
+
+def __getattr__(name: str) -> Any:
+    """Lazily expose optional provider modules for tests and legacy callers."""
+    if name == "musicbrainzngs":
+        import musicbrainzngs
+
+        return musicbrainzngs
+    if name == "requests":
+        global _DEFAULT_REQUESTS_GET
+        import requests
+
+        if _DEFAULT_REQUESTS_GET is None:
+            _DEFAULT_REQUESTS_GET = requests.get
+        return requests
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 @dataclass
@@ -95,17 +108,24 @@ class ArtistInfo:
     metadata_source: str = "theaudiodb"
 
 
-def _get_http_session() -> requests.Session:
+def _get_http_session() -> "requests.Session":
     global _http_session
     if _http_session is None:
+        import requests
+
         with _http_session_lock:
             if _http_session is None:
                 _http_session = requests.Session()
     return _http_session
 
 
-def _http_get(url: str, **kwargs: Any) -> requests.Response:
+def _http_get(url: str, **kwargs: Any) -> "requests.Response":
     """Use the shared session unless tests replace the module-level requests hook."""
+    global _DEFAULT_REQUESTS_GET
+    import requests
+
+    if _DEFAULT_REQUESTS_GET is None:
+        _DEFAULT_REQUESTS_GET = requests.get
     if requests.get is not _DEFAULT_REQUESTS_GET:
         return requests.get(url, **kwargs)
     return _get_http_session().get(url, **kwargs)
@@ -126,6 +146,8 @@ def _init() -> None:
     if _initialised and _last_musicbrainz_useragent == useragent:
         return
     with _init_lock:
+        import musicbrainzngs
+
         s = _settings.get_cached_settings()
         useragent = (s.musicbrainz_app, s.musicbrainz_version, s.musicbrainz_contact)
         if _initialised and _last_musicbrainz_useragent == useragent:
@@ -219,6 +241,8 @@ def lookup_disc_with_fallback(
 
 def lookup_musicbrainz_disc(discid_str: str, toc: str | None = None) -> Optional[AlbumInfo]:
     """Look up an album by MusicBrainz disc ID."""
+    import musicbrainzngs
+
     if not discid_str:
         return None
     _init()
@@ -290,6 +314,8 @@ def lookup_ctdb_disc(toc: str | None, *, fuzzy: bool = False) -> Optional[AlbumI
 
 def lookup_cuetools_db_layout(ctdb_toc: str | None, *, fuzzy: bool = False) -> Optional[AlbumInfo]:
     """Look up album metadata from a CUETools-style CTDB TOC layout."""
+    import requests
+
     layout = sanitize_ctdb_layout(ctdb_toc)
     if not layout:
         _log_metadata_diagnostic(
@@ -397,6 +423,8 @@ def fetch_artwork(album: AlbumInfo) -> bytes | None:
 
 def search_musicbrainz_album(artist: str, album: str) -> Optional[AlbumInfo]:
     """Search MusicBrainz release metadata by artist and album title."""
+    import musicbrainzngs
+
     _init()
     _mb_rate_limit()
     try:
@@ -437,6 +465,8 @@ def search_musicbrainz_album(artist: str, album: str) -> Optional[AlbumInfo]:
 
 def search_musicbrainz_releases(artist: str, album: str, limit: int = 5) -> list[AlbumInfo]:
     """Search MusicBrainz and return up to *limit* release candidates (basic info only)."""
+    import musicbrainzngs
+
     _init()
     _mb_rate_limit()
     try:
@@ -464,6 +494,8 @@ def search_musicbrainz_releases(artist: str, album: str, limit: int = 5) -> list
 
 def fetch_musicbrainz_release(mbid: str) -> Optional[AlbumInfo]:
     """Fetch a full MusicBrainz release (with track listing) by release ID."""
+    import musicbrainzngs
+
     if not mbid:
         return None
     _init()
@@ -911,6 +943,8 @@ def _merge_album_info(primary: AlbumInfo, fallback: AlbumInfo) -> AlbumInfo:
 
 
 def _fetch_artwork_url(url: str) -> bytes | None:
+    import requests
+
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         _log_metadata_diagnostic("Artwork request skipped for unsupported URL: %s", url)
@@ -974,6 +1008,8 @@ def _get_json(
     params: dict[str, str] | None = None,
     headers: dict[str, str] | None = None,
 ) -> dict[str, Any]:
+    import requests
+
     try:
         response = _http_get(
             url, params=params, headers=headers, timeout=HTTP_TIMEOUT_SECONDS
