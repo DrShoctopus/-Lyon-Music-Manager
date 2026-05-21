@@ -72,6 +72,25 @@ def test_clicking_a_tab_swaps_stack_page(main_window):
     assert main_window.stack.currentWidget() is main_window.library_view
 
 
+def test_low_coupling_tabs_are_lazy_created_on_first_use(main_window):
+    assert main_window._podcast_view is None
+    assert main_window._radio_view is None
+    assert main_window._youtube_view is None
+
+    main_window.tab_bar.setCurrentIndex(main_window._tab_index["Radio"])
+
+    assert main_window._radio_view is not None
+    assert main_window.stack.currentWidget() is main_window.radio_view
+    assert main_window._podcast_view is None
+    assert main_window._youtube_view is None
+
+    main_window.tab_bar.setCurrentIndex(main_window._tab_index["YouTube"])
+
+    assert main_window._youtube_view is not None
+    assert main_window.stack.currentWidget() is main_window.youtube_view
+    assert main_window._podcast_view is None
+
+
 def test_transport_visible_on_library_hidden_on_rip(main_window):
     # isHidden() reflects explicit setVisible(False) calls regardless of
     # whether the parent window has been .show()n yet.
