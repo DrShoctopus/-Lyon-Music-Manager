@@ -483,7 +483,13 @@ class Library:
                 (int(stat.st_size), int(stat.st_mtime_ns), time.time(), error, path),
             )
 
-    def _index_cue_file(self, cue_path_str: str, *, force: bool = False) -> ScanSummary:
+    def _index_cue_file(
+        self,
+        cue_path_str: str,
+        *,
+        force: bool = False,
+        commit: bool = False,
+    ) -> ScanSummary:
         """Parse a CUE sheet and upsert one library row per audio track it describes."""
         from .cue_parser import parse_cue
         summary = ScanSummary()
@@ -595,7 +601,8 @@ class Library:
                     self.conn.execute("DELETE FROM tracks WHERE path = ?", (orphan_path,))
                     summary.removed += 1
 
-            self.conn.commit()
+            if commit:
+                self.conn.commit()
 
         return summary
 

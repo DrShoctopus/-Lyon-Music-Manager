@@ -213,6 +213,60 @@ def test_index_cue_file_creates_track_rows(tmp_path):
     assert len(rows) == 3
 
 
+def test_index_cue_file_defers_commit_by_default(tmp_path):
+    _write_image(tmp_path)
+    cue = _write_cue(tmp_path, ["Track One"])
+    db_path = tmp_path / "lib.db"
+    library = Library(db_path)
+    try:
+        library._index_cue_file(str(cue))
+        same_connection_count = library.conn.execute(
+            "SELECT COUNT(*) FROM tracks WHERE media_type='cue_track'"
+        ).fetchone()[0]
+        assert same_connection_count == 1
+
+        observer = Library(db_path)
+        try:
+            committed_count = observer.conn.execute(
+                "SELECT COUNT(*) FROM tracks WHERE media_type='cue_track'"
+            ).fetchone()[0]
+            assert committed_count == 0
+        finally:
+            observer.close()
+
+        library.conn.commit()
+        observer = Library(db_path)
+        try:
+            committed_count = observer.conn.execute(
+                "SELECT COUNT(*) FROM tracks WHERE media_type='cue_track'"
+            ).fetchone()[0]
+            assert committed_count == 1
+        finally:
+            observer.close()
+    finally:
+        library.close()
+
+
+def test_index_cue_file_commit_option_persists_immediately(tmp_path):
+    _write_image(tmp_path)
+    cue = _write_cue(tmp_path, ["Track One"])
+    db_path = tmp_path / "lib.db"
+    library = Library(db_path)
+    try:
+        library._index_cue_file(str(cue), commit=True)
+
+        observer = Library(db_path)
+        try:
+            committed_count = observer.conn.execute(
+                "SELECT COUNT(*) FROM tracks WHERE media_type='cue_track'"
+            ).fetchone()[0]
+            assert committed_count == 1
+        finally:
+            observer.close()
+    finally:
+        library.close()
+
+
 def test_index_cue_file_track_paths_use_double_colon(tmp_path):
     _write_image(tmp_path)
     cue = _write_cue(tmp_path, ["A", "B"])
