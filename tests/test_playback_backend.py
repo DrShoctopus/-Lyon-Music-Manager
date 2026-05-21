@@ -174,6 +174,61 @@ def test_vlc_backend_uses_location_media_and_options(qapp):
         backend.cleanup()
 
 
+def test_vlc_backend_stops_position_timer_while_paused(qapp):
+    class Player:
+        def __init__(self):
+            self.calls = []
+
+        def play(self):
+            self.calls.append("play")
+
+        def pause(self):
+            self.calls.append("pause")
+
+        def audio_set_volume(self, _value): pass
+        def audio_set_mute(self, _value): pass
+        def set_equalizer(self, _value): pass
+        def stop(self): pass
+        def release(self): pass
+
+    class Vlc:
+        class State:
+            Ended = object()
+            Playing = object()
+            Paused = object()
+            Stopped = object()
+            Error = object()
+
+        def __init__(self):
+            self.player = Player()
+
+        def Instance(self):
+            return self
+
+        def media_player_new(self):
+            return self.player
+
+        def release(self): pass
+
+        def AudioEqualizer(self):
+            return object()
+
+    vlc = Vlc()
+    backend = VlcPlaybackBackend(vlc)
+    try:
+        assert backend._timer.interval() == 500
+        assert not backend._timer.isActive()
+
+        backend.play()
+        assert backend._timer.isActive()
+
+        backend.pause()
+        assert not backend._timer.isActive()
+        assert vlc.player.calls == ["play", "pause"]
+    finally:
+        backend.cleanup()
+
+
 def test_vlc_backend_lists_audio_outputs_from_pointer_list(qapp):
     class Player:
         def stop(self): pass

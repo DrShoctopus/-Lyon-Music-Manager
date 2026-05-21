@@ -263,7 +263,7 @@ class VlcPlaybackBackend(PlaybackBackend):
         self._eq_fade_timer.timeout.connect(self._eq_fade_step)
 
         self._timer = QTimer(self)
-        self._timer.setInterval(200)
+        self._timer.setInterval(500)
         self._timer.timeout.connect(self._poll)
 
     def set_source(
@@ -298,6 +298,7 @@ class VlcPlaybackBackend(PlaybackBackend):
 
     def pause(self) -> None:
         self._player.pause()
+        self._timer.stop()
         self._emit_state("paused")
 
     def stop(self) -> None:
