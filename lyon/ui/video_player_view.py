@@ -143,6 +143,28 @@ def _cache_thumb(key: tuple[Any, ...], pixmap: QPixmap) -> None:
 # Catalog sidebar card
 # ---------------------------------------------------------------------------
 
+def _video_card_signature(track: Any) -> tuple[Any, ...]:
+    title = track.title or Path(track.path).stem
+    sources: list[str] = []
+    artwork_path = track.artwork_path or None
+    if artwork_path:
+        sources.append(artwork_path)
+    parent = Path(track.path).parent
+    stem = Path(track.path).stem
+    for ext in (".jpg", ".jpeg", ".webp", ".png"):
+        sidecar = parent / (stem + ext)
+        if sidecar.exists():
+            sources.append(str(sidecar))
+            break
+    return (
+        track.path,
+        title,
+        float(track.duration or 0.0),
+        artwork_path,
+        tuple(_thumb_source_state(src) for src in sources),
+    )
+
+
 class _VideoCard(QFrame):
     """Clickable thumbnail card representing one catalogued video."""
 
@@ -151,6 +173,7 @@ class _VideoCard(QFrame):
     def __init__(self, track: Any, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._path = track.path
+        self._signature = _video_card_signature(track)
         self._search_key = (track.title or Path(track.path).stem).lower()
         self.setObjectName("videoCard")
         self.setCursor(Qt.PointingHandCursor)
@@ -185,6 +208,14 @@ class _VideoCard(QFrame):
         info.addWidget(dur_lbl)
         info.addStretch()
         row.addLayout(info, 1)
+
+    @property
+    def path(self) -> str:
+        return self._path
+
+    @property
+    def signature(self) -> tuple[Any, ...]:
+        return self._signature
 
     def matches(self, query: str) -> bool:
         return not query or query in self._search_key
@@ -353,6 +384,7 @@ class VideoPlayerView(QWidget):
         self._eq_controller: VlcEqualizerController | None = None
         self._catalog_pending_tracks: list[Any] = []
         self._catalog_total = 0
+        self._catalog_card_by_path: dict[str, _VideoCard] = {}
         self._video_output_generation = 0
         self._current_track_id: int | None = None
         self._current_is_location = False
@@ -698,11 +730,6 @@ class VideoPlayerView(QWidget):
             return
         self._catalog_build_timer.stop()
 
-        for card in self._catalog_cards:
-            self._catalog_layout.removeWidget(card)
-            card.deleteLater()
-        self._catalog_cards.clear()
-
         try:
             all_videos = list(self._library.all_tracks(media_type="video"))
         except sqlite3.ProgrammingError:
@@ -712,8 +739,29 @@ class VideoPlayerView(QWidget):
         for track_id in missing_ids:
             self._library.delete_track(track_id)
 
-        self._catalog_pending_tracks = [t for t in all_videos if t.id not in missing_ids]
-        self._catalog_total = len(self._catalog_pending_tracks)
+        desired_tracks = [t for t in all_videos if t.id not in missing_ids]
+        desired_by_path = {track.path: track for track in desired_tracks}
+        desired_signatures = {
+            path: _video_card_signature(track)
+            for path, track in desired_by_path.items()
+        }
+
+        for path, card in list(self._catalog_card_by_path.items()):
+            if path not in desired_signatures or card.signature != desired_signatures[path]:
+                self._catalog_layout.removeWidget(card)
+                card.deleteLater()
+                self._catalog_card_by_path.pop(path, None)
+
+        self._catalog_cards = [
+            card for card in self._catalog_cards
+            if card.path in self._catalog_card_by_path
+        ]
+
+        self._catalog_pending_tracks = [
+            track for track in desired_tracks
+            if track.path not in self._catalog_card_by_path
+        ]
+        self._catalog_total = len(desired_tracks)
         self._update_catalog_count()
         self._append_catalog_batch()
         if self._catalog_pending_tracks:
@@ -733,6 +781,7 @@ class VideoPlayerView(QWidget):
             # Insert before the trailing stretch
             self._catalog_layout.insertWidget(self._catalog_layout.count() - 1, card)
             self._catalog_cards.append(card)
+            self._catalog_card_by_path[track.path] = card
             if query and not card.matches(query):
                 card.hide()
 

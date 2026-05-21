@@ -179,11 +179,18 @@ def _first_output_attach_index(operations: list[object]) -> int:
     )
 
 
-def _video_track(path: str, *, track_id: int = 1, resume_position: int = 0) -> Track:
+def _video_track(
+    path: str,
+    *,
+    track_id: int = 1,
+    resume_position: int = 0,
+    title: str = "Clip",
+    duration: float = 120.0,
+) -> Track:
     return Track(
         id=track_id,
         path=path,
-        title="Clip",
+        title=title,
         artist="Videos",
         album_artist="Videos",
         album="Videos",
@@ -191,7 +198,7 @@ def _video_track(path: str, *, track_id: int = 1, resume_position: int = 0) -> T
         disc_no=1,
         year=0,
         genre="",
-        duration=120.0,
+        duration=duration,
         media_type="video",
         resume_position=resume_position,
     )
@@ -213,6 +220,20 @@ class _ResumeLibrary:
         return []
 
 
+class _CatalogLibrary:
+    def __init__(self, tracks: list[Track]) -> None:
+        self.tracks = tracks
+        self.deleted: list[int] = []
+
+    def all_tracks(self, media_type: str | None = None):
+        assert media_type == "video"
+        return list(self.tracks)
+
+    def delete_track(self, track_id: int) -> None:
+        self.deleted.append(track_id)
+        self.tracks = [track for track in self.tracks if track.id != track_id]
+
+
 def test_thumbnail_cache_not_stale_when_sidecar_appears(qapp, tmp_path):
     from lyon.ui import video_player_view as video_mod
 
@@ -232,6 +253,128 @@ def test_thumbnail_cache_not_stale_when_sidecar_appears(qapp, tmp_path):
     assert color.red() > 200
     assert color.green() < 60
     assert color.blue() < 60
+
+
+def test_video_catalog_noop_refresh_reuses_cards(qapp, tmp_path, monkeypatch):
+    from lyon.ui import video_player_view as video_mod
+
+    player = _FakeVlcPlayer()
+    _install_fake_vlc(monkeypatch, player)
+    monkeypatch.setattr(video_mod, "_configure_vlc_runtime_path", lambda: None)
+    one = tmp_path / "one.mp4"
+    two = tmp_path / "two.mp4"
+    one.write_bytes(b"video-1")
+    two.write_bytes(b"video-2")
+    library = _CatalogLibrary([
+        _video_track(str(one), track_id=1, title="One"),
+        _video_track(str(two), track_id=2, title="Two"),
+    ])
+
+    view = video_mod.VideoPlayerView(library=library)
+    try:
+        view.refresh_catalog()
+        card_ids = [id(card) for card in view._catalog_cards]
+
+        view.refresh_catalog()
+
+        assert [id(card) for card in view._catalog_cards] == card_ids
+        assert set(view._catalog_card_by_path) == {str(one), str(two)}
+    finally:
+        view.cleanup()
+        view.deleteLater()
+
+
+def test_video_catalog_refresh_adds_only_new_card(qapp, tmp_path, monkeypatch):
+    from lyon.ui import video_player_view as video_mod
+
+    player = _FakeVlcPlayer()
+    _install_fake_vlc(monkeypatch, player)
+    monkeypatch.setattr(video_mod, "_configure_vlc_runtime_path", lambda: None)
+    one = tmp_path / "one.mp4"
+    two = tmp_path / "two.mp4"
+    one.write_bytes(b"video-1")
+    two.write_bytes(b"video-2")
+    library = _CatalogLibrary([
+        _video_track(str(one), track_id=1, title="One"),
+    ])
+
+    view = video_mod.VideoPlayerView(library=library)
+    try:
+        view.refresh_catalog()
+        first_card_ids = [id(card) for card in view._catalog_cards]
+        library.tracks.append(_video_track(str(two), track_id=2, title="Two"))
+
+        view.refresh_catalog()
+
+        assert len(view._catalog_cards) == 2
+        assert [id(card) for card in view._catalog_cards[:1]] == first_card_ids
+        assert str(two) in view._catalog_card_by_path
+    finally:
+        view.cleanup()
+        view.deleteLater()
+
+
+def test_video_catalog_refresh_removes_missing_card(qapp, tmp_path, monkeypatch):
+    from lyon.ui import video_player_view as video_mod
+
+    player = _FakeVlcPlayer()
+    _install_fake_vlc(monkeypatch, player)
+    monkeypatch.setattr(video_mod, "_configure_vlc_runtime_path", lambda: None)
+    one = tmp_path / "one.mp4"
+    two = tmp_path / "two.mp4"
+    one.write_bytes(b"video-1")
+    two.write_bytes(b"video-2")
+    library = _CatalogLibrary([
+        _video_track(str(one), track_id=1, title="One"),
+        _video_track(str(two), track_id=2, title="Two"),
+    ])
+
+    view = video_mod.VideoPlayerView(library=library)
+    try:
+        view.refresh_catalog()
+        kept_card_id = id(view._catalog_card_by_path[str(two)])
+        one.unlink()
+
+        view.refresh_catalog()
+
+        assert library.deleted == [1]
+        assert [card.path for card in view._catalog_cards] == [str(two)]
+        assert id(view._catalog_card_by_path[str(two)]) == kept_card_id
+        assert str(one) not in view._catalog_card_by_path
+    finally:
+        view.cleanup()
+        view.deleteLater()
+
+
+def test_video_catalog_refresh_rebuilds_changed_card(qapp, tmp_path, monkeypatch):
+    from lyon.ui import video_player_view as video_mod
+
+    player = _FakeVlcPlayer()
+    _install_fake_vlc(monkeypatch, player)
+    monkeypatch.setattr(video_mod, "_configure_vlc_runtime_path", lambda: None)
+    one = tmp_path / "one.mp4"
+    two = tmp_path / "two.mp4"
+    one.write_bytes(b"video-1")
+    two.write_bytes(b"video-2")
+    library = _CatalogLibrary([
+        _video_track(str(one), track_id=1, title="One"),
+        _video_track(str(two), track_id=2, title="Two"),
+    ])
+
+    view = video_mod.VideoPlayerView(library=library)
+    try:
+        view.refresh_catalog()
+        first_one_card = id(view._catalog_card_by_path[str(one)])
+        first_two_card = id(view._catalog_card_by_path[str(two)])
+        library.tracks[0] = _video_track(str(one), track_id=1, title="One Updated")
+
+        view.refresh_catalog()
+
+        assert id(view._catalog_card_by_path[str(one)]) != first_one_card
+        assert id(view._catalog_card_by_path[str(two)]) == first_two_card
+    finally:
+        view.cleanup()
+        view.deleteLater()
 
 
 def test_fullscreen_handoff_rebuilds_vlc_output_before_resuming(qapp, monkeypatch):
