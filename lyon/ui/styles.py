@@ -165,14 +165,39 @@ QPushButton#viewModeBtn:checked:hover {
 }
 
 /* Inputs */
-QLineEdit, QComboBox, QSpinBox {
+QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
     background: #070a0f;
     border: 1px solid #27313b;
     border-radius: 5px;
     padding: 4px 6px;
     selection-background-color: #1976d2;
 }
-/* QLineEdit/QComboBox/QSpinBox :focus rules consolidated below with the
+QSpinBox::up-button, QDoubleSpinBox::up-button,
+QSpinBox::down-button, QDoubleSpinBox::down-button {
+    subcontrol-origin: border;
+    width: 24px;
+    background: #070a0f;
+    border-left: 1px solid #27313b;
+}
+QSpinBox::up-button, QDoubleSpinBox::up-button {
+    subcontrol-position: top right;
+    border-top-right-radius: 5px;
+}
+QSpinBox::down-button, QDoubleSpinBox::down-button {
+    subcontrol-position: bottom right;
+    border-top: 1px solid #27313b;
+    border-bottom-right-radius: 5px;
+}
+QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover,
+QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {
+    background: #14202b;
+    border-left: 1px solid #58eaff;
+}
+QSpinBox::up-button:pressed, QDoubleSpinBox::up-button:pressed,
+QSpinBox::down-button:pressed, QDoubleSpinBox::down-button:pressed {
+    background: #0d141b;
+}
+/* QLineEdit/QComboBox/QSpinBox/QDoubleSpinBox :focus rules consolidated below with the
    broader slider/button focus block. */
 
 /* Sliders (transport bar, volume, preamp, EQ bands) */
@@ -231,7 +256,7 @@ QSlider::handle:vertical:hover {
 QSlider:focus {
     outline: none;
 }
-QLineEdit:focus, QComboBox:focus, QSpinBox:focus {
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus {
     border: 1px solid #79fbff;
 }
 

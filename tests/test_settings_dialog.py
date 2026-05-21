@@ -6,6 +6,8 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 QtWidgets = pytest.importorskip("PySide6.QtWidgets", exc_type=ImportError)
+QtCore = pytest.importorskip("PySide6.QtCore", exc_type=ImportError)
+QtTest = pytest.importorskip("PySide6.QtTest", exc_type=ImportError)
 if not hasattr(QtWidgets, "QCheckBox"):
     pytest.skip("PySide6 QtWidgets is incomplete in this environment", allow_module_level=True)
 
@@ -76,6 +78,38 @@ def test_settings_dialog_opens_wide_enough_for_top_tabs(app):
 
         assert dialog.width() >= needed_width
         assert dialog.minimumWidth() >= needed_width
+        assert dialog.width() <= needed_width + 4
+    finally:
+        app.setStyleSheet(previous_stylesheet)
+
+
+def test_settings_dialog_spinbox_up_buttons_increment(app):
+    previous_stylesheet = app.styleSheet()
+    app.setStyleSheet(WMP_QSS)
+    try:
+        dialog = SettingsDialog(Settings(crossfade_seconds=3, replaygain_preamp_db=0.0), None)
+        dialog.show()
+        app.processEvents()
+
+        for spinbox, expected in ((dialog.crossfade_seconds, 4), (dialog.rg_preamp, 0.5)):
+            option = QtWidgets.QStyleOptionSpinBox()
+            spinbox.initStyleOption(option)
+            up_button = spinbox.style().subControlRect(
+                QtWidgets.QStyle.CC_SpinBox,
+                option,
+                QtWidgets.QStyle.SC_SpinBoxUp,
+                spinbox,
+            )
+            assert up_button.isValid()
+
+            QtTest.QTest.mouseClick(
+                spinbox,
+                QtCore.Qt.LeftButton,
+                QtCore.Qt.NoModifier,
+                up_button.center(),
+            )
+            app.processEvents()
+            assert spinbox.value() == expected
     finally:
         app.setStyleSheet(previous_stylesheet)
 
