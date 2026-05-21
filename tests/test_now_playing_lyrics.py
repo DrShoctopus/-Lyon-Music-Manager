@@ -10,6 +10,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 QtCore = pytest.importorskip("PySide6.QtCore", exc_type=ImportError)
+QtGui = pytest.importorskip("PySide6.QtGui", exc_type=ImportError)
 QtWidgets = pytest.importorskip("PySide6.QtWidgets", exc_type=ImportError)
 
 from lyon.core.library import Track
@@ -272,6 +273,36 @@ def test_now_playing_side_panel_and_tabs_are_wide(player):
         tab.sizePolicy().horizontalPolicy() == QtWidgets.QSizePolicy.Policy.Expanding
         for tab in tabs
     )
+
+
+def test_now_playing_resize_debounces_background_blur(player, app):
+    view = NowPlayingView(player, settings=Settings())
+    try:
+        view.resize(500, 300)
+        source = QtGui.QPixmap(20, 20)
+        source.fill(QtGui.QColor("#336699"))
+        cached = QtGui.QPixmap(50, 30)
+        cached.fill(QtGui.QColor("#112233"))
+        view._bg_pixmap = source
+        view._bg_cache = cached
+        view._bg_cache_size = (50, 30)
+
+        event = QtGui.QResizeEvent(
+            QtCore.QSize(800, 600),
+            QtCore.QSize(500, 300),
+        )
+        view.resizeEvent(event)
+
+        assert view._bg_cache is cached
+        assert view._blur_timer.isActive()
+
+        view._blur_timer.stop()
+        view._rebuild_blur()
+
+        assert view._bg_cache is None
+    finally:
+        view.close()
+        view.deleteLater()
 
 
 def test_now_playing_artist_ready_renders_artist_panel(player):

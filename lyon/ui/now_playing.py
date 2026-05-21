@@ -357,6 +357,10 @@ class NowPlayingView(QWidget):
         self._bg_pixmap: QPixmap | None = None
         self._bg_cache: QPixmap | None = None   # blurred result, invalidated on resize/track change
         self._bg_cache_size: tuple[int, int] = (0, 0)
+        self._blur_timer = QTimer(self)
+        self._blur_timer.setSingleShot(True)
+        self._blur_timer.setInterval(80)
+        self._blur_timer.timeout.connect(self._rebuild_blur)
         self._current_track: Track | None = None
         self._lyrics_task_id: int = 0   # track.id of the in-flight LRCLIB request; 0 = none
         # track.id → (synced_lrc, plain_text); empty strings mean "we asked LRCLIB and got nothing".
@@ -508,22 +512,29 @@ class NowPlayingView(QWidget):
     def resizeEvent(self, ev) -> None:
         super().resizeEvent(ev)
         if self._bg_pixmap is not None:
-            self._bg_cache = None  # invalidate so paintEvent rebuilds at new size
+            self._blur_timer.start()
             self.update()
 
     def paintEvent(self, ev) -> None:
         if self._bg_pixmap is not None and not self._bg_pixmap.isNull():
             size = (self.width(), self.height())
-            if self._bg_cache is None or self._bg_cache_size != size:
+            if self._bg_cache is None:
                 self._bg_cache = _blur_pixmap(self._bg_pixmap, size[0], size[1])
                 self._bg_cache_size = size
             p = QPainter(self)
-            p.drawPixmap(0, 0, self._bg_cache)
+            p.drawPixmap(self.rect(), self._bg_cache)
             p.end()
         else:
             super().paintEvent(ev)
 
+    def _rebuild_blur(self) -> None:
+        if self._bg_pixmap is None:
+            return
+        self._bg_cache = None
+        self.update()
+
     def _update_background(self, artwork_path: str | None) -> None:
+        self._blur_timer.stop()
         if artwork_path:
             pm = QPixmap(artwork_path)
             self._bg_pixmap = pm if not pm.isNull() else None
