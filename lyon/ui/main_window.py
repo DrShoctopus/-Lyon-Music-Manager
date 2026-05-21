@@ -34,7 +34,6 @@ from ..core.settings import Settings
 from .about import COPYRIGHT_NOTICE, THIRD_PARTY_NOTICE
 from .branding import app_icon
 from .diagnostics_dialog import DiagnosticsDialog
-from .disc_view import DiscView
 from .duplicate_dialog import DuplicateDialog
 from .cast_dialog import CastDialog
 from .equalizer_dialog import EqualizerDialog
@@ -142,6 +141,7 @@ class MainWindow(QMainWindow):
         self._podcast_view = None
         self._radio_view = None
         self._youtube_view = None
+        self._disc_view = None
         self._tab_placeholders: dict[str, QWidget] = {}
         # Debounce rapid library_updated signals (e.g. playlist downloads).
         self._library_refresh_timer = QTimer(self)
@@ -232,7 +232,6 @@ class MainWindow(QMainWindow):
         )
         self.video_player_view.apply_equalizer(self.settings.equalizer_enabled, self.settings.equalizer_bands, self.settings.equalizer_preamp)
         self._library_refresh_timer.timeout.connect(self.video_player_view.refresh_catalog)
-        self.disc_view = DiscView(self.settings)
         self.ripper_view = RipperView(self.settings, self.library)
 
         # Build tab bar + stack together so indices always match _TAB_ORDER.
@@ -242,7 +241,7 @@ class MainWindow(QMainWindow):
             "Podcasts": self._placeholder_page("Podcasts"),
             "Radio": self._placeholder_page("Radio"),
             "Video": self.video_player_view,
-            "Disc": self.disc_view,
+            "Disc": self._placeholder_page("Disc"),
             "Rip": self.ripper_view,
             "YouTube": self._placeholder_page("YouTube"),
         }
@@ -300,12 +299,6 @@ class MainWindow(QMainWindow):
         self.now_playing.request_edit_metadata.connect(self.library_view.edit_track_metadata)
         self.video_player_view.request_diagnostics.connect(self.show_diagnostics)
         self.video_player_view.resume_available.connect(self._on_video_resume_available)
-        self.disc_view.play_audio_tracks.connect(self._play_disc_audio_tracks)
-        self.disc_view.enqueue_audio_tracks.connect(self._enqueue_disc_audio_tracks)
-        self.disc_view.play_video_disc.connect(self._play_video_disc)
-        self.disc_view.stop_video_disc.connect(self.video_player_view.stop_playback)
-        self.disc_view.rip_drive_requested.connect(self._rip_disc_drive)
-        self.disc_view.status_message.connect(lambda m: self.show_toast(m, level="info"))
         self.ripper_view.rip_completed.connect(self.library_view.refresh)
         self.ripper_view.log.connect(lambda m: sb.showMessage(m, 4000))
         self._library_watcher.paths_changed.connect(self._on_watched_paths_changed)
@@ -428,6 +421,10 @@ class MainWindow(QMainWindow):
     def youtube_view(self):
         return self._ensure_tab_view("YouTube")
 
+    @property
+    def disc_view(self):
+        return self._ensure_tab_view("Disc")
+
     def _placeholder_page(self, name: str) -> QWidget:
         page = QWidget()
         page.setObjectName(f"lazy{name.replace(' ', '')}Placeholder")
@@ -471,6 +468,19 @@ class MainWindow(QMainWindow):
                 view.download_requested.connect(self._on_yt_download)
                 self._youtube_view = self._replace_tab_widget(name, view)
             return self._youtube_view
+        if name == "Disc":
+            if self._disc_view is None:
+                from .disc_view import DiscView
+
+                view = DiscView(self.settings)
+                view.play_audio_tracks.connect(self._play_disc_audio_tracks)
+                view.enqueue_audio_tracks.connect(self._enqueue_disc_audio_tracks)
+                view.play_video_disc.connect(self._play_video_disc)
+                view.stop_video_disc.connect(self.video_player_view.stop_playback)
+                view.rip_drive_requested.connect(self._rip_disc_drive)
+                view.status_message.connect(lambda m: self.show_toast(m, level="info"))
+                self._disc_view = self._replace_tab_widget(name, view)
+            return self._disc_view
         return self.stack.widget(self._tab_index[name])
 
     def _replace_tab_widget(self, name: str, view: QWidget) -> QWidget:
@@ -1000,7 +1010,11 @@ class MainWindow(QMainWindow):
         if drive:
             self.settings.cd_drive = drive
             self.ripper_view.drive_combo.setCurrentText(drive)
-        toc, album = self.disc_view.current_audio_disc()
+        toc, album = (
+            self._disc_view.current_audio_disc()
+            if self._disc_view is not None
+            else (None, None)
+        )
         if toc is not None and (not drive or toc.drive == drive):
             self.ripper_view.load_detected_disc(toc, album)
         self.tab_bar.setCurrentIndex(self._tab_index["Rip"])
@@ -1399,7 +1413,8 @@ class MainWindow(QMainWindow):
         self.dlna_server.stop()
         if self._youtube_view is not None:
             self._youtube_view.shutdown()
-        self.disc_view.shutdown()
+        if self._disc_view is not None:
+            self._disc_view.shutdown()
         self.ripper_view.shutdown()
         self.settings.last_volume = self.player.volume()
         queue = self.player.queue()
