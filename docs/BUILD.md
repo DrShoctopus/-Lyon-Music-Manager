@@ -75,7 +75,7 @@ source or packaged environment before troubleshooting individual features.
 
 ## 6. VLC playback backend packaging
 
-Sea Lyon now prefers libVLC for local music playback so the existing six-band EQ
+Sea Lyon now prefers libVLC for local music playback so the existing 10-band EQ
 controls can drive VLC's real `AudioEqualizer`. Source installs need both the
 Python binding from `requirements.txt` and a VLC runtime discoverable by
 python-vlc.

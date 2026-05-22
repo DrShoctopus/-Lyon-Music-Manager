@@ -18,7 +18,7 @@
 
 Sea Lyon is a Windows-first desktop media manager built on Python 3.11 + PySide6 6.11, libVLC 3.0.21, and SQLite. Its core value proposition is an all-in-one experience covering CD ripping with multi-provider metadata, local library management, audio/video playback, and YouTube integration — no plugins required.
 
-At v0.8.0-dev the product is **approximately 98% complete** for its stated scope. All major systems are functional. Phases 1 (Audio Quality), 2 (Library & Metadata Parity), and 3 (Connectivity & Discovery) are now complete. The only remaining work is Phase 4 platform hardening (macOS/Linux CD detection, MTP/USB device sync, podcast support, accessibility audit).
+At v0.8.0-dev the product is **approximately 98% complete** for its stated scope. All major systems are functional. Phases 1 (Audio Quality), 2 (Library & Metadata Parity), and 3 (Connectivity & Discovery) are now complete. The only remaining work is Phase 4 platform hardening (macOS/Linux CD detection, MTP/USB device sync, accessibility audit).
 
 **Genuine competitive advantages over any single rival:**
 - CUETools DB AccurateRip v1 verification (unique among GUI apps without plugins)
@@ -52,10 +52,10 @@ At v0.8.0-dev the product is **approximately 98% complete** for its stated scope
 | **Optical Disc Playback** | 100% | Audio CD, DVD, VCD/SVCD via VLC MRL |
 | **Library Browsing UI** | 97% | List/grid/simple modes, async art grid, M3U export, playlist import, Identify Track |
 | **Internet Radio** | 90% | M3U/PLS/HLS parser, station browser, genre filter, bitrate display; no community station feed |
-| **DLNA / UPnP Server** | 88% | SSDP announce, ContentDirectory browse/search, HTTP track serving; no renderer support |
+| **DLNA / UPnP Server + Cast** | 95% | SSDP announce, ContentDirectory browse/search, HTTP track serving; one-way cast to DLNA/UPnP MediaRenderer via AVTransport SOAP (no seek, no remote volume) |
 | **Now Playing / Lyrics** | 98% | Synced LRC, LRCLIB fetch, queue preview, info panel, artist bio/discovery panel |
 | **Transport** | 100% | Custom-painted glyphs, all states, both audio and video players |
-| **Ripper UI** | 85% | Track table, metadata lookup, progress; no multi-disc, no retry-failed |
+| **Ripper UI** | 90% | Track table, metadata lookup, progress, retry failed tracks; no multi-disc |
 | **Video Player UI** | 96% | Catalog sidebar, variable speed, audio/subtitle track select, screenshots, resume, subtitle delay, Open URL |
 | **Settings** | 97% | 8 tabs, Scrobbling + DLNA tabs, radio station management, 35+ fields |
 | **Disc View UI** | 85% | Audio CD + DVD/VCD playback; no track previews, no disc bookmarking |
@@ -106,7 +106,7 @@ At v0.8.0-dev the product is **approximately 98% complete** for its stated scope
 - **Metadata:** Embedded via tagger.py; cover art saved as `cover.jpg`
 - **Verification:** CUETools DB AccurateRip v1 CRC (streaming PCM via bounded queue, 64 KB chunks); FLAC-only; opt-in
 - **Progress:** Per-track signal, cancellable, failure log written to output folder
-- **Gap:** No multi-disc album support; ripper view does not expose a "Retry failed tracks" button
+- **Gap:** No multi-disc album support
 
 #### Metadata Pipeline (`lyon/core/metadata.py` — 1,103 lines)
 - **Disc lookup order:** CUETools DB TOC → MusicBrainz disc ID → TheAudioDB enrichment
@@ -167,7 +167,7 @@ At v0.8.0-dev the product is **approximately 98% complete** for its stated scope
 - **HTTP serving:** Threaded `http.server`; MIME detection; `Content-Length` + `transferMode.dlna.org` headers for renderer compatibility
 - **Local IP discovery:** connect-to-8.8.8.8 trick with `getaddrinfo` hostname fallback for air-gapped LANs; last resort 127.0.0.1
 - **Settings:** Enable toggle, port, friendly name in DLNA settings tab
-- **Gap:** No UPnP renderer (playback control); no AV Transport service; no DLNA renderer discovery
+- **Cast (one-way):** UPnP AVTransport cast to a discovered DLNA MediaRenderer (smart TV / AV receiver); `RendererDiscovery` via SSDP M-SEARCH; `SetAVTransportURI` + `Play` / `Pause` / `Stop` transport; all SOAP runs off the UI thread on a serialized worker queue. Limitations: no renderer state polling, no seek, no remote volume control.
 
 #### Smart Playlists (`lyon/core/smart_playlist.py`, `lyon/ui/smart_playlist_dialog.py`)
 - **Fields:** title, artist, album, genre, year, rating, play_count, bitrate, duration, liked
@@ -252,7 +252,7 @@ At v0.8.0-dev the product is **approximately 98% complete** for its stated scope
 | Last.fm scrobbling | ✅ | ✅ | ✅ | via plugin | ✅ |
 | ListenBrainz scrobbling | ✅ | via plugin | ❌ | via plugin | ❌ |
 | Internet radio | ✅ | ✅ | ✅ | via plugin | ❌ |
-| Podcast support | ❌ | ✅ | ❌ | ❌ | ❌ |
+| Podcast support | ✅ | ✅ | ❌ | ❌ | ❌ |
 
 #### YouTube & Web
 
@@ -269,7 +269,7 @@ At v0.8.0-dev the product is **approximately 98% complete** for its stated scope
 |---------|:---:|:---:|:---:|:---:|:---:|
 | MTP/USB device sync | ❌ | ✅ | ✅ | ❌ | ❌ |
 | DLNA/UPnP server | ✅ | ✅ | ✅ | ❌ | ✅ |
-| DLNA/UPnP renderer | ❌ | ✅ | ✅ | ❌ | ✅ |
+| DLNA/UPnP renderer (send-to) | ✅ | ✅ | ✅ | ❌ | ✅ |
 | AirPlay output | ❌ | ❌ | ❌ | ❌ | ✅ |
 | Network stream playback (URL) | ✅ | ❌ | ❌ | ✅ | ✅ |
 | Streaming service integration | ❌ | ❌ | ❌ | ❌ | ✅ |
@@ -561,7 +561,7 @@ v1.0                                                                       ■
 *Phase 4 complete. Production-grade cross-platform release.*
 - [ ] macOS + Linux CD detection
 - [ ] MTP/USB device sync
-- [ ] Podcast support
+- [x] Podcast support
 - [ ] Accessibility audit complete
 - [ ] macOS code-signed + notarized DMG
 
