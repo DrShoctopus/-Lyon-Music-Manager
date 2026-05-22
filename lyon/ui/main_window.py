@@ -1125,6 +1125,7 @@ class MainWindow(QMainWindow):
             self.settings = result_settings
             self.settings.save()
             metadata.reset_musicbrainz_useragent()
+            metadata.clear_metadata_cache()   # evict stale entries if API key changed
             if self._ripper_view is not None:
                 self._ripper_view.apply_settings(self.settings)
             if self._now_playing_view is not None:
@@ -1184,6 +1185,7 @@ class MainWindow(QMainWindow):
             self.settings = result_settings
             self.settings.save()
             metadata.reset_musicbrainz_useragent()
+            metadata.clear_metadata_cache()   # evict stale entries if API key changed
             if self._ripper_view is not None:
                 self._ripper_view.apply_settings(self.settings)
             if self._now_playing_view is not None:

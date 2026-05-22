@@ -351,7 +351,7 @@ class SettingsDialog(QDialog):
         self.contact.textChanged.connect(self._check_contact)
 
         self.audiodb_key = QLineEdit(settings.theaudiodb_api_key)
-        self.audiodb_key.setPlaceholderText("123")
+        self.audiodb_key.setPlaceholderText("e.g. 123 (free tier)")
         form.addRow("TheAudioDB API key:", self.audiodb_key)
 
         return w
@@ -712,7 +712,7 @@ class SettingsDialog(QDialog):
         self.result_settings.fetch_lyrics_online = self.fetch_lyrics_online.isChecked()
         self.result_settings.ctdb_verify_rips = self.ctdb_verify.isChecked()
         self.result_settings.musicbrainz_contact = self.contact.text().strip() or self.result_settings.musicbrainz_contact
-        self.result_settings.theaudiodb_api_key = self.audiodb_key.text().strip() or "123"
+        self.result_settings.theaudiodb_api_key = self.audiodb_key.text().strip()
         self.result_settings.yt_audio_format = self.yt_audio_fmt.currentText()
         self.result_settings.yt_video_format = self.yt_video_fmt.currentText()
         self.result_settings.yt_output_dir = self.yt_save_dir.text().strip()

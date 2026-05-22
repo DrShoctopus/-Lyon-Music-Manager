@@ -223,7 +223,7 @@ class Settings:
     musicbrainz_app: str = "LyonMusicManager"
     musicbrainz_version: str = field(default_factory=_app_version)
     musicbrainz_contact: str = "https://example.invalid/lyon"
-    theaudiodb_api_key: str = "123"
+    theaudiodb_api_key: str = ""    # blank → TheAudioDB disabled; enter "123" for free tier
     eject_after_rip: bool = True
     auto_lookup_metadata: bool = True
     cuetools_db_metadata_enabled: bool = True
