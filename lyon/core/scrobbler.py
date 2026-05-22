@@ -155,8 +155,10 @@ class ScrobblerService(QObject):
             return
         delta_ms = pos_ms - self._last_position_ms
         self._last_position_ms = pos_ms
-        if 0 < delta_ms <= _MAX_LISTENED_DELTA_MS:
-            self._listened_ms += delta_ms
+        if delta_ms < 0:
+            self._listened_ms = 0  # backward seek — reset so threshold can't fire from stale time
+        elif 0 < delta_ms:
+            self._listened_ms += min(delta_ms, _MAX_LISTENED_DELTA_MS)
         threshold_ms = min(total_ms // 2, _SCROBBLE_CAP_S * 1000)
         if self._listened_ms >= threshold_ms:
             self._scrobbled = True

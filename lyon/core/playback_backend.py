@@ -296,8 +296,11 @@ class VlcPlaybackBackend(PlaybackBackend):
 
     def play(self) -> bool:
         ok = self._player.play() != -1
-        self._timer.start()
-        self._emit_state("playing")
+        if ok:
+            self._timer.start()
+            self._emit_state("playing")
+        else:
+            self._emit_state("stopped")
         return ok
 
     def pause(self) -> None:

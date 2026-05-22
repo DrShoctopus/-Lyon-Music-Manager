@@ -208,8 +208,8 @@ class Player(QObject):
         return self._backend.is_playing()
 
     # --------------------------------------------------------------- transport
-    def play_index(self, idx: int) -> None:
-        self._play_index(idx)
+    def play_index(self, idx: int) -> bool:
+        return self._play_index(idx)
 
     def _play_index(self, idx: int, *, record_history: bool = True) -> bool:
         if not (0 <= idx < len(self._queue)):
@@ -327,9 +327,12 @@ class Player(QObject):
         if self._shuffle:
             while self._play_history:
                 idx = self._play_history.pop()
-                if 0 <= idx < len(self._queue) and idx != self._index:
+                if not (0 <= idx < len(self._queue)):
+                    continue  # stale entry from a removed track — discard
+                if idx != self._index:
                     self._play_index(idx, record_history=False)
                     return
+                break  # history points at current track — stop here
             return
         if self._index > 0:
             self.play_index(self._index - 1)
@@ -573,6 +576,9 @@ class Player(QObject):
                 if i != self._index and i not in played
             ]
             if not candidates and self._repeat == RepeatMode.ALL:
+                self._shuffle_played.clear()
+                if 0 <= self._index < len(self._queue):
+                    self._shuffle_played.add(self._index)
                 candidates = [i for i in range(len(self._queue)) if i != self._index]
             if not candidates:
                 return self._index if self._repeat == RepeatMode.ALL else None
@@ -801,20 +807,19 @@ class Player(QObject):
             self.next()
             return
         muted = self._backend.is_muted()
+        previous_index = self._index
         old_backend = self._backend
         self._disconnect_backend(old_backend)
         self._backend = backend
         self._connect_backend(backend)
-        self._index = idx
         track = self._queue[idx]
         self._rg_multiplier = self._rg_multiplier_for_track(track)
         backend.set_muted(muted)
         backend.set_volume(self._rg_applied_vol(self._user_volume, self._rg_multiplier))
         backend.play()
-        self._active_source_key = self._track_source_key(track)
         old_backend.stop()
         self._dispose_transient_backend(old_backend)
-        self.track_changed.emit(track)
+        self._commit_track_index(idx, previous_index)
 
     def _cancel_gapless_prebuffer(self) -> None:
         backend = self._gapless_prebuffer_backend

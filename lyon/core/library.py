@@ -550,7 +550,8 @@ class Library:
                 if track.end_sectors is not None:
                     duration = (track.end_sectors - track.start_sectors) / 75.0
                 elif image_duration is not None:
-                    duration = max(0.0, image_duration - (track.start_sectors / 75.0))
+                    computed = image_duration - (track.start_sectors / 75.0)
+                    duration = computed if computed >= 0.5 else 0.0
                 else:
                     duration = 0.0  # last track: length unknown without decoding
 
