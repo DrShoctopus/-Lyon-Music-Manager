@@ -35,6 +35,7 @@ from ..core.settings import Settings
 from .about import COPYRIGHT_NOTICE, THIRD_PARTY_NOTICE
 from .branding import app_icon
 from .diagnostics_dialog import DiagnosticsDialog
+from .library_stats_dialog import LibraryStatsDialog
 from .duplicate_dialog import DuplicateDialog
 from .cast_dialog import CastDialog
 from .equalizer_dialog import EqualizerDialog
@@ -391,6 +392,7 @@ class MainWindow(QMainWindow):
         settings_menu.addAction(settings_act)
 
         help_menu = m.addMenu("&Help")
+        help_menu.addAction(QAction("Library Statistics", self, triggered=self.show_library_stats))
         help_menu.addAction(QAction("Runtime Diagnostics", self, triggered=self.show_diagnostics))
         about_act = QAction("About", self, triggered=self.show_about)
         about_act.setMenuRole(QAction.MenuRole.AboutRole)
@@ -1206,6 +1208,13 @@ class MainWindow(QMainWindow):
                 self._start_scan(self.settings.library_paths, "Scanned")
             self._restart_library_watcher()
             self.show_toast("Setup saved.", level="success")
+
+    def show_library_stats(self) -> None:
+        dlg = LibraryStatsDialog(self.library, parent=self)
+        try:
+            dlg.exec()
+        finally:
+            dlg.deleteLater()
 
     def show_diagnostics(self) -> None:
         dlg = DiagnosticsDialog(parent=self)

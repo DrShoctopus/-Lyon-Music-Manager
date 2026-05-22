@@ -958,6 +958,29 @@ class Library:
             ).fetchone()
         return (row["a"], row["b"]) if row else None
 
+    def library_stats(self) -> dict:
+        """Return aggregate statistics for the entire library."""
+        with self._lock:
+            row = self.conn.execute(
+                f"""SELECT
+                        COUNT(DISTINCT {DISPLAY_ARTIST_SQL}) AS artist_count,
+                        COUNT(*) AS track_count,
+                        COALESCE(SUM(duration), 0) AS total_duration,
+                        COALESCE(SUM(file_size), 0) AS total_file_size
+                    FROM tracks""",
+            ).fetchone()
+            album_count = self.conn.execute(
+                f"""SELECT COUNT(*) FROM
+                        (SELECT DISTINCT {DISPLAY_ARTIST_SQL}, {DISPLAY_ALBUM_SQL} FROM tracks)""",
+            ).fetchone()[0]
+        return {
+            "artist_count": int(row["artist_count"]),
+            "album_count": int(album_count),
+            "track_count": int(row["track_count"]),
+            "total_duration": float(row["total_duration"]),
+            "total_file_size": int(row["total_file_size"]),
+        }
+
     def update_track(self, track_id: int, fields: dict) -> None:
         allowed = {"title", "artist", "album_artist", "album", "track_no", "disc_no", "year", "genre", "grouping", "artwork_path"}
         safe = {k: v for k, v in fields.items() if k in allowed}
