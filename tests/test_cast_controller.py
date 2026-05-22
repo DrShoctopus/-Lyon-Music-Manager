@@ -302,6 +302,7 @@ def test_start_cast_emits_cast_started(qapp):
     try:
         with patch("lyon.core.cast_controller.requests.post", return_value=mock_resp):
             ctrl.start_cast(renderer, player, dlna)
+            _drain(ctrl, qapp)
 
         assert received == ["Living Room TV"]
     finally:
@@ -373,7 +374,9 @@ def test_start_cast_emits_error_on_soap_failure(qapp):
 
     ctrl = CastController()
     errors = []
+    started = []
     ctrl.cast_error.connect(errors.append)
+    ctrl.cast_started.connect(started.append)
 
     try:
         with patch("lyon.core.cast_controller.requests.post", side_effect=Exception("timeout")):
@@ -381,6 +384,8 @@ def test_start_cast_emits_error_on_soap_failure(qapp):
             _drain(ctrl, qapp)
 
         assert errors
+        assert not started
+        assert not ctrl.is_casting
     finally:
         ctrl.shutdown()
 
@@ -635,11 +640,62 @@ def test_cast_next_does_not_pause_renderer(qapp):
 
 
 # ---------------------------------------------------------------------------
+# CAST-5: stale async jobs do not resurrect stopped sessions
+# ---------------------------------------------------------------------------
+
+def test_stale_start_completion_after_stop_is_ignored(qapp):
+    renderer = _make_renderer()
+    track = _make_track()
+    player = _make_player(track=track)
+    dlna = _make_dlna()
+
+    ctrl = CastController()
+    states: list[str] = []
+    ctrl.cast_playback_state_changed.connect(states.append)
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+
+    try:
+        with patch("lyon.core.cast_controller.requests.post", return_value=mock_resp):
+            ctrl.start_cast(renderer, player, dlna)
+            session_id = ctrl._session_id
+            ctrl.stop_cast()
+
+        states.clear()
+        ctrl._on_job_done(
+            _SoapJob(
+                "start",
+                [],
+                on_success_state="playing",
+                session_id=session_id,
+                renderer_name=renderer.friendly_name,
+            ),
+            None,
+        )
+
+        assert not ctrl.is_casting
+        assert not ctrl._remote_playing
+        assert states == []
+    finally:
+        ctrl.shutdown()
+
+
+# ---------------------------------------------------------------------------
 # CAST-1: shutdown joins the worker
 # ---------------------------------------------------------------------------
 
 def test_shutdown_joins_worker(qapp):
     ctrl = CastController()
-    assert ctrl._thread.isRunning()
-    ctrl.shutdown()
-    assert not ctrl._thread.isRunning()
+    try:
+        assert not ctrl._thread.isRunning()
+        ctrl._submit_job(_SoapJob("noop", [], session_id=ctrl._session_id, report_errors=False))
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline and not ctrl._thread.isRunning():
+            qapp.processEvents()
+            time.sleep(0.01)
+        assert ctrl._thread.isRunning()
+        ctrl.shutdown()
+        assert not ctrl._thread.isRunning()
+    finally:
+        ctrl.shutdown()

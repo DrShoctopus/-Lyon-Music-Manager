@@ -27,10 +27,22 @@ _AV_TRANSPORT_NS = "urn:schemas-upnp-org:service:AVTransport:1"
 class _SoapJob:
     """One ordered unit of renderer work: a sequence of SOAP calls + a label."""
 
-    def __init__(self, label: str, calls: list, on_success_state: str | None = None):
+    def __init__(
+        self,
+        label: str,
+        calls: list,
+        on_success_state: str | None = None,
+        *,
+        session_id: int = 0,
+        renderer_name: str = "",
+        report_errors: bool = True,
+    ):
         self.label = label                    # e.g. "start", "track-change", "Play"
         self.calls = calls                    # list[tuple[url, service, action, args]]
         self.on_success_state = on_success_state  # "playing"/"paused"/"stopped"/None
+        self.session_id = session_id
+        self.renderer_name = renderer_name
+        self.report_errors = report_errors
 
 
 class _SoapWorker(QObject):
@@ -86,13 +98,19 @@ class CastController(QObject):
         self._dlna: DlnaServer | None = None
         self._remote_playing = False
         self._suppress_state_mirror = False
+        self._session_id = 0
 
         self._thread = QThread()
         self._worker = _SoapWorker()
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
         self._worker.job_done.connect(self._on_job_done)  # auto queued → GUI thread
-        self._thread.start()
+
+    def __del__(self) -> None:
+        try:
+            self.shutdown()
+        except RuntimeError:
+            pass
 
     # ------------------------------------------------------------------
     # Public API
@@ -142,6 +160,8 @@ class CastController(QObject):
             self.cast_error.emit("Cannot cast this track — file not found in library.")
             return
 
+        self._session_id += 1
+        session_id = self._session_id
         self._renderer = renderer
         self._player = player
         self._dlna = dlna_server
@@ -154,7 +174,7 @@ class CastController(QObject):
         player.state_changed.connect(self._on_state_changed)
         player.track_changed.connect(self._on_track_changed)
 
-        self._worker.submit(_SoapJob("start", [
+        self._submit_job(_SoapJob("start", [
             (renderer.av_transport_url, _AV_TRANSPORT_NS, "SetAVTransportURI", {
                 "InstanceID": "0",
                 "CurrentURI": escape(media_url),
@@ -164,11 +184,7 @@ class CastController(QObject):
                 "InstanceID": "0",
                 "Speed": "1",
             }),
-        ], on_success_state="playing"))
-
-        # Optimistic UI update — _on_job_done corrects on failure.
-        self.cast_started.emit(renderer.friendly_name)
-        self.cast_playback_state_changed.emit("playing")
+        ], on_success_state="playing", session_id=session_id, renderer_name=renderer.friendly_name))
 
     def stop_cast(self) -> None:
         """Stop the active cast session and send Stop to the renderer."""
@@ -177,6 +193,8 @@ class CastController(QObject):
 
         renderer = self._renderer
         player = self._player
+        session_id = self._session_id
+        self._session_id += 1
 
         self._renderer = None
         self._dlna = None
@@ -191,11 +209,11 @@ class CastController(QObject):
                 pass
 
         # State is cleared above; worker only needs the captured renderer URL.
-        self._worker.submit(_SoapJob("stop", [
+        self._submit_job(_SoapJob("stop", [
             (renderer.av_transport_url, _AV_TRANSPORT_NS, "Stop", {
                 "InstanceID": "0",
             }),
-        ]))
+        ], session_id=session_id, report_errors=False))
 
         self.cast_stopped.emit()
         self.cast_playback_state_changed.emit("stopped")
@@ -279,15 +297,15 @@ class CastController(QObject):
         if self._renderer is None or self._suppress_state_mirror:
             return
         if state == "playing":
-            self._worker.submit(_SoapJob("Play", [
+            self._submit_job(_SoapJob("Play", [
                 (self._renderer.av_transport_url, _AV_TRANSPORT_NS, "Play",
                  {"InstanceID": "0", "Speed": "1"}),
-            ], on_success_state="playing"))
+            ], on_success_state="playing", session_id=self._session_id))
         elif state == "paused":
-            self._worker.submit(_SoapJob("Pause", [
+            self._submit_job(_SoapJob("Pause", [
                 (self._renderer.av_transport_url, _AV_TRANSPORT_NS, "Pause",
                  {"InstanceID": "0"}),
-            ], on_success_state="paused"))
+            ], on_success_state="paused", session_id=self._session_id))
         elif state == "stopped":
             # Local player stopped → end the cast session entirely.
             # stop_cast() sends Stop, clears renderer state, disconnects
@@ -301,10 +319,10 @@ class CastController(QObject):
         if not isinstance(track, Track):
             self._remote_playing = False
             self.cast_playback_state_changed.emit("stopped")
-            self._worker.submit(_SoapJob("stop-non-track", [
+            self._submit_job(_SoapJob("stop-non-track", [
                 (self._renderer.av_transport_url, _AV_TRANSPORT_NS, "Stop",
                  {"InstanceID": "0"}),
-            ]))
+            ], session_id=self._session_id, report_errors=False))
             return
 
         media_url = _media_url(self._dlna, track)
@@ -313,7 +331,7 @@ class CastController(QObject):
             self.stop_cast()
             return
 
-        self._worker.submit(_SoapJob("track-change", [
+        self._submit_job(_SoapJob("track-change", [
             (self._renderer.av_transport_url, _AV_TRANSPORT_NS, "SetAVTransportURI", {
                 "InstanceID": "0",
                 "CurrentURI": escape(media_url),
@@ -323,7 +341,7 @@ class CastController(QObject):
                 "InstanceID": "0",
                 "Speed": "1",
             }),
-        ], on_success_state="playing"))
+        ], on_success_state="playing", session_id=self._session_id))
 
     def _send_transport_action(
         self,
@@ -334,17 +352,49 @@ class CastController(QObject):
     ) -> None:
         if self._renderer is None:
             return
-        self._worker.submit(_SoapJob(action, [
+        self._submit_job(_SoapJob(action, [
             (self._renderer.av_transport_url, _AV_TRANSPORT_NS, action, args),
-        ], on_success_state=state))
+        ], on_success_state=state, session_id=self._session_id))
+
+    def _submit_job(self, job: _SoapJob) -> None:
+        if not self._thread.isRunning():
+            self._thread.start()
+        self._worker.submit(job)
+
+    def _clear_session_state(self, session_id: int | None = None) -> bool:
+        if session_id is not None and session_id != self._session_id:
+            return False
+        player = self._player
+        self._session_id += 1
+        self._renderer = None
+        self._dlna = None
+        self._player = None
+        self._remote_playing = False
+        if player is not None:
+            try:
+                player.state_changed.disconnect(self._on_state_changed)
+                player.track_changed.disconnect(self._on_track_changed)
+            except RuntimeError:
+                pass
+        return True
 
     def _on_job_done(self, job: object, err: object) -> None:
         if not isinstance(job, _SoapJob):
             return
+        if job.session_id != self._session_id:
+            return
         if err is not None:
             LOG.warning("Cast %s failed: %s", job.label, err)
-            self.cast_error.emit(f"Lost connection to renderer: {err}")
+            if job.report_errors:
+                prefix = "Cast failed" if job.label == "start" else "Lost connection to renderer"
+                self.cast_error.emit(f"{prefix}: {err}")
+            if self._clear_session_state(job.session_id):
+                if job.label != "start":
+                    self.cast_stopped.emit()
+                self.cast_playback_state_changed.emit("stopped")
             return
+        if job.label == "start" and job.renderer_name:
+            self.cast_started.emit(job.renderer_name)
         if job.on_success_state is not None:
             self._remote_playing = job.on_success_state == "playing"
             self.cast_playback_state_changed.emit(job.on_success_state)

@@ -87,12 +87,12 @@ class DuplicateDialog(QDialog):
         layout.addWidget(self._tree, 1)
 
         controls = QHBoxLayout()
-        keep_best_btn = QPushButton("Keep Highest Quality (Remove Others)")
-        keep_best_btn.clicked.connect(self._keep_best)
+        self._keep_best_btn = QPushButton("Keep Highest Quality (Remove Others)")
+        self._keep_best_btn.clicked.connect(self._keep_best)
         keep_all_btn = QPushButton("Keep All")
         keep_all_btn.setToolTip("Close without making any changes")
         keep_all_btn.clicked.connect(self.accept)
-        controls.addWidget(keep_best_btn)
+        controls.addWidget(self._keep_best_btn)
         controls.addWidget(keep_all_btn)
         controls.addStretch(1)
         layout.addLayout(controls)
@@ -140,6 +140,7 @@ class DuplicateDialog(QDialog):
         """Run the hash backfill + duplicate scan off the UI thread (disk I/O)."""
         self._hash_scan_token += 1
         token = self._hash_scan_token
+        self._groups = []
         self._set_hash_scan_busy(True)
         library = self.library
         signals = _HashScanSignals(self)
@@ -163,6 +164,7 @@ class DuplicateDialog(QDialog):
 
     def _set_hash_scan_busy(self, busy: bool) -> None:
         self._mode_combo.setEnabled(not busy)
+        self._keep_best_btn.setEnabled(not busy)
         if busy:
             self._tree.clear()
             self._summary_label.setText("Computing file hashes — this may take a moment…")

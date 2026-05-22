@@ -432,11 +432,6 @@ def test_dlna_rejects_track_outside_configured_library_roots(tmp_path):
         assert track is not None
         assert server.media_url_for_track(track) is None
 
-        # Note: after the P2 SQL GROUP BY refactor, _artist_counts queries all
-        # indexed rows (no on-disk filter), so the artist container appears in
-        # Browse results. The per-track serve guard (404) is the authoritative
-        # security boundary. Browsing into the artist container yields 0 tracks
-        # because _track_file rejects files outside the music root.
         soap = b"""<?xml version="1.0"?>
 <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
   <s:Body>
@@ -472,7 +467,8 @@ def test_dlna_rejects_track_outside_configured_library_roots(tmp_path):
     finally:
         library.close()
 
-    # No playable track items in the drill-down (file is outside root).
+    assert "Sea Artist" not in artists_body
+    # No playable track items in the drill-down either (file is outside root).
     assert "NumberReturned>0<" in drill_body
 
 

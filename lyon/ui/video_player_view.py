@@ -144,11 +144,23 @@ def _cache_thumb(key: tuple[Any, ...], pixmap: QPixmap) -> None:
 # ---------------------------------------------------------------------------
 
 def _video_card_signature(track: Any) -> tuple[Any, ...]:
+    sources: list[str] = []
+    artwork_path = track.artwork_path or None
+    if artwork_path:
+        sources.append(artwork_path)
+    parent = Path(track.path).parent
+    stem = Path(track.path).stem
+    for ext in (".jpg", ".jpeg", ".webp", ".png"):
+        sidecar = parent / (stem + ext)
+        if sidecar.exists():
+            sources.append(str(sidecar))
+            break
     return (
         track.path,
         track.title or Path(track.path).stem,
         float(track.duration or 0.0),
         track.artwork_path or None,
+        tuple(_thumb_source_state(src) for src in sources),
     )
 
 

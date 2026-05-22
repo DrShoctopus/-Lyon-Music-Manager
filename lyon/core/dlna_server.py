@@ -528,13 +528,29 @@ class DlnaServer:
         ]
 
     def _artist_counts(self, media_type: str) -> dict[str, int]:
-        return {a: n for a, n in self.library.media_counts_by_artist(media_type)}
+        counts: dict[str, int] = {}
+        for track in self._tracks(media_type):
+            counts[track.display_artist] = counts.get(track.display_artist, 0) + 1
+        return dict(sorted(counts.items(), key=lambda item: item[0].casefold()))
 
     def _album_counts(self, media_type: str) -> dict[tuple[str, str], int]:
-        return {(a, b): n for a, b, n in self.library.media_counts_by_album(media_type)}
+        counts: dict[tuple[str, str], int] = {}
+        for track in self._tracks(media_type):
+            key = (track.display_artist, track.album or "Unknown Album")
+            counts[key] = counts.get(key, 0) + 1
+        return dict(
+            sorted(
+                counts.items(),
+                key=lambda item: (item[0][0].casefold(), item[0][1].casefold()),
+            )
+        )
 
     def _genre_counts(self, media_type: str) -> dict[str, int]:
-        return {g: n for g, n in self.library.media_counts_by_genre(media_type)}
+        counts: dict[str, int] = {}
+        for track in self._tracks(media_type):
+            if track.genre:
+                counts[track.genre] = counts.get(track.genre, 0) + 1
+        return dict(sorted(counts.items(), key=lambda item: item[0].casefold()))
 
     def _track_file_path(self, track: Track, roots: tuple[Path, ...] | None = None) -> Path | None:
         path = _track_file_path(track)

@@ -414,6 +414,21 @@ def test_video_catalog_changed_card_does_not_move_to_end(qapp, tmp_path, monkeyp
         view.deleteLater()
 
 
+def test_video_card_signature_tracks_sidecar_thumbnail_state(tmp_path):
+    from lyon.ui import video_player_view as video_mod
+
+    video = tmp_path / "clip.mp4"
+    video.write_bytes(b"video")
+    track = _video_track(str(video))
+
+    before = video_mod._video_card_signature(track)
+    sidecar = tmp_path / "clip.jpg"
+    sidecar.write_bytes(b"thumbnail")
+    after = video_mod._video_card_signature(track)
+
+    assert before != after
+
+
 def test_fullscreen_handoff_rebuilds_vlc_output_before_resuming(qapp, monkeypatch):
     from lyon.ui import video_player_view as video_mod
 
