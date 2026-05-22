@@ -787,7 +787,9 @@ class VideoPlayerView(QWidget):
         for track in batch:
             card = _VideoCard(track)
             card.load_requested.connect(self.load_path)
-            # Insert before the trailing stretch
+            # Catalog is ordered by tracks.id (see Library.all_tracks); genuinely new
+            # videos always have a higher id than existing cards, so appending before
+            # the trailing stretch keeps the catalog correctly sorted.
             self._catalog_layout.insertWidget(self._catalog_layout.count() - 1, card)
             self._catalog_cards.append(card)
             self._catalog_card_by_path[track.path] = card

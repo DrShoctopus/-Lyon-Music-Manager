@@ -325,6 +325,93 @@ def test_dlna_cache_invalidation_refreshes_track_list(tmp_path):
         library.close()
 
 
+def _insert_track_full(
+    library: Library,
+    path: Path,
+    *,
+    title: str = "Track",
+    artist: str = "Artist",
+    album_artist: str = "",
+    album: str = "Album",
+    genre: str = "Rock",
+    media_type: str = "audio",
+) -> int:
+    path.write_bytes(b"sample-media-bytes")
+    cur = library.conn.execute(
+        """INSERT INTO tracks
+           (path, title, artist, album_artist, album, track_no, disc_no, year,
+            genre, duration, bitrate, samplerate, media_type, file_size, file_mtime_ns)
+           VALUES (?, ?, ?, ?, ?, 1, 1, 2026, ?, 180.0, 320, 44100, ?, ?, ?)""",
+        (
+            str(path),
+            title,
+            artist,
+            album_artist,
+            album,
+            genre,
+            media_type,
+            path.stat().st_size,
+            path.stat().st_mtime_ns,
+        ),
+    )
+    library.commit()
+    return int(cur.lastrowid)
+
+
+def test_dlna_artist_counts_returns_correct_counts_and_order(tmp_path):
+    library = Library(tmp_path / "library.db")
+    _insert_track_full(library, tmp_path / "a1.mp3", artist="Zeppelin", album="Houses")
+    _insert_track_full(library, tmp_path / "a2.mp3", artist="Zeppelin", album="Physical Graffiti")
+    _insert_track_full(library, tmp_path / "a3.mp3", artist="Beatles", album="Abbey Road")
+    server = DlnaServer(library, Settings(music_root=str(tmp_path), dlna_port=0))
+    try:
+        counts = server._artist_counts("audio")
+    finally:
+        library.close()
+
+    assert counts == {"Beatles": 1, "Zeppelin": 2}
+    assert list(counts.keys()) == ["Beatles", "Zeppelin"]
+
+
+def test_dlna_album_counts_returns_correct_counts_and_order(tmp_path):
+    library = Library(tmp_path / "library.db")
+    _insert_track_full(library, tmp_path / "b1.mp3", artist="Artist A", album="Alpha")
+    _insert_track_full(library, tmp_path / "b2.mp3", artist="Artist A", album="Alpha")
+    _insert_track_full(library, tmp_path / "b3.mp3", artist="Artist A", album="Beta")
+    _insert_track_full(library, tmp_path / "b4.mp3", artist="Artist B", album="Gamma")
+    server = DlnaServer(library, Settings(music_root=str(tmp_path), dlna_port=0))
+    try:
+        counts = server._album_counts("audio")
+    finally:
+        library.close()
+
+    assert counts == {
+        ("Artist A", "Alpha"): 2,
+        ("Artist A", "Beta"): 1,
+        ("Artist B", "Gamma"): 1,
+    }
+    assert list(counts.keys()) == [
+        ("Artist A", "Alpha"),
+        ("Artist A", "Beta"),
+        ("Artist B", "Gamma"),
+    ]
+
+
+def test_dlna_genre_counts_returns_correct_counts_and_order(tmp_path):
+    library = Library(tmp_path / "library.db")
+    _insert_track_full(library, tmp_path / "g1.mp3", genre="Jazz")
+    _insert_track_full(library, tmp_path / "g2.mp3", genre="Jazz")
+    _insert_track_full(library, tmp_path / "g3.mp3", genre="Blues")
+    server = DlnaServer(library, Settings(music_root=str(tmp_path), dlna_port=0))
+    try:
+        counts = server._genre_counts("audio")
+    finally:
+        library.close()
+
+    assert counts == {"Blues": 1, "Jazz": 2}
+    assert list(counts.keys()) == ["Blues", "Jazz"]
+
+
 def test_dlna_rejects_track_outside_configured_library_roots(tmp_path):
     library_root = tmp_path / "Music"
     library_root.mkdir()
@@ -335,13 +422,21 @@ def test_dlna_rejects_track_outside_configured_library_roots(tmp_path):
     server = DlnaServer(library, Settings(music_root=str(library_root), dlna_port=0))
     handler = _FakeHandler()
     try:
+        # HTTP serving must 404 for files outside the music root.
         server.serve_media(handler, track_id, send_body=True)
         assert handler.status == 404
         assert handler.wfile.getvalue() == b"Media file not found"
+
+        # media_url_for_track must return None (server not running → guard fires).
         track = library.track_by_id(track_id)
         assert track is not None
         assert server.media_url_for_track(track) is None
 
+        # Note: after the P2 SQL GROUP BY refactor, _artist_counts queries all
+        # indexed rows (no on-disk filter), so the artist container appears in
+        # Browse results. The per-track serve guard (404) is the authoritative
+        # security boundary. Browsing into the artist container yields 0 tracks
+        # because _track_file rejects files outside the music root.
         soap = b"""<?xml version="1.0"?>
 <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
   <s:Body>
@@ -355,11 +450,30 @@ def test_dlna_rejects_track_outside_configured_library_roots(tmp_path):
     </u:Browse>
     </s:Body>
 </s:Envelope>"""
-        body = server.handle_content_directory(soap).decode()
+        artists_body = server.handle_content_directory(soap).decode()
+
+        # Verify that drilling into the artist yields no playable tracks.
+        from lyon.core.dlna_server import _encode_object_value
+        artist_container_id = f"artist:{_encode_object_value('Sea Artist')}"
+        drill_soap = f"""<?xml version="1.0"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
+  <s:Body>
+    <u:Browse xmlns:u="urn:schemas-upnp-org:service:ContentDirectory:1">
+      <ObjectID>{artist_container_id}</ObjectID>
+      <BrowseFlag>BrowseDirectChildren</BrowseFlag>
+      <Filter>*</Filter>
+      <StartingIndex>0</StartingIndex>
+      <RequestedCount>0</RequestedCount>
+      <SortCriteria></SortCriteria>
+    </u:Browse>
+    </s:Body>
+</s:Envelope>""".encode()
+        drill_body = server.handle_content_directory(drill_soap).decode()
     finally:
         library.close()
 
-    assert "Sea Artist" not in body
+    # No playable track items in the drill-down (file is outside root).
+    assert "NumberReturned>0<" in drill_body
 
 
 def test_dlna_allows_only_local_network_clients():

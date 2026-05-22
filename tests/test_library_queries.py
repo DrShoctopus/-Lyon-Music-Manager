@@ -221,6 +221,115 @@ def test_video_file_uses_folder_art_when_no_same_stem_thumbnail(tmp_path):
     assert track.artwork_path == str(folder_cover)
 
 
+def _add_track_with_genre(
+    library: Library,
+    path: str,
+    *,
+    artist: str = "",
+    album_artist: str = "",
+    album: str = "",
+    genre: str | None = None,
+    media_type: str = "audio",
+) -> None:
+    library.conn.execute(
+        """INSERT INTO tracks
+           (path, title, artist, album_artist, album, track_no, disc_no, year,
+            genre, duration, bitrate, samplerate, media_type)
+           VALUES (?, ?, ?, ?, ?, 1, 1, 0, ?, 60.0, 320000, 48000, ?)""",
+        (path, Path(path).stem, artist, album_artist, album, genre, media_type),
+    )
+    library.conn.commit()
+
+
+def test_media_counts_by_artist_returns_sorted_pairs(tmp_path):
+    library = Library(tmp_path / "library.db")
+    _add_track_with_genre(library, "/music/z1.flac", artist="Zeppelin")
+    _add_track_with_genre(library, "/music/z2.flac", artist="Zeppelin")
+    _add_track_with_genre(library, "/music/b1.flac", artist="Beatles")
+
+    result = library.media_counts_by_artist()
+
+    assert result == [("Beatles", 1), ("Zeppelin", 2)]
+
+
+def test_media_counts_by_artist_filters_by_media_type(tmp_path):
+    library = Library(tmp_path / "library.db")
+    _add_track_with_genre(library, "/music/a.flac", artist="Audio Artist", media_type="audio")
+    _add_track_with_genre(library, "/video/v.mp4", artist="Video Artist", media_type="video")
+
+    audio_counts = library.media_counts_by_artist("audio")
+    video_counts = library.media_counts_by_artist("video")
+
+    assert audio_counts == [("Audio Artist", 1)]
+    assert video_counts == [("Video Artist", 1)]
+
+
+def test_media_counts_by_album_collapses_empty_album_to_unknown(tmp_path):
+    library = Library(tmp_path / "library.db")
+    _add_track_with_genre(library, "/music/a.flac", artist="Artist", album="")
+    _add_track_with_genre(library, "/music/b.flac", artist="Artist", album="")
+
+    result = library.media_counts_by_album()
+
+    assert result == [("Artist", "Unknown Album", 2)]
+
+
+def test_media_counts_by_album_returns_sorted_triples(tmp_path):
+    library = Library(tmp_path / "library.db")
+    _add_track_with_genre(library, "/music/a1.flac", artist="Artist A", album="Alpha")
+    _add_track_with_genre(library, "/music/a2.flac", artist="Artist A", album="Alpha")
+    _add_track_with_genre(library, "/music/a3.flac", artist="Artist A", album="Beta")
+    _add_track_with_genre(library, "/music/b1.flac", artist="Artist B", album="Gamma")
+
+    result = library.media_counts_by_album()
+
+    assert result == [
+        ("Artist A", "Alpha", 2),
+        ("Artist A", "Beta", 1),
+        ("Artist B", "Gamma", 1),
+    ]
+
+
+def test_media_counts_by_album_filters_by_media_type(tmp_path):
+    library = Library(tmp_path / "library.db")
+    _add_track_with_genre(library, "/music/a.flac", artist="Audio Artist", album="Album A", media_type="audio")
+    _add_track_with_genre(library, "/video/v.mp4", artist="Video Artist", album="Album V", media_type="video")
+
+    assert library.media_counts_by_album("audio") == [("Audio Artist", "Album A", 1)]
+    assert library.media_counts_by_album("video") == [("Video Artist", "Album V", 1)]
+
+
+def test_media_counts_by_genre_excludes_null_and_empty_genre(tmp_path):
+    library = Library(tmp_path / "library.db")
+    _add_track_with_genre(library, "/music/a.flac", genre="Jazz")
+    _add_track_with_genre(library, "/music/b.flac", genre=None)
+    _add_track_with_genre(library, "/music/c.flac", genre="")
+
+    result = library.media_counts_by_genre()
+
+    assert result == [("Jazz", 1)]
+
+
+def test_media_counts_by_genre_returns_sorted_pairs(tmp_path):
+    library = Library(tmp_path / "library.db")
+    _add_track_with_genre(library, "/music/j1.flac", genre="Jazz")
+    _add_track_with_genre(library, "/music/j2.flac", genre="Jazz")
+    _add_track_with_genre(library, "/music/b1.flac", genre="Blues")
+
+    result = library.media_counts_by_genre()
+
+    assert result == [("Blues", 1), ("Jazz", 2)]
+
+
+def test_media_counts_by_genre_filters_by_media_type(tmp_path):
+    library = Library(tmp_path / "library.db")
+    _add_track_with_genre(library, "/music/a.flac", genre="Rock", media_type="audio")
+    _add_track_with_genre(library, "/video/v.mp4", genre="Documentary", media_type="video")
+
+    assert library.media_counts_by_genre("audio") == [("Rock", 1)]
+    assert library.media_counts_by_genre("video") == [("Documentary", 1)]
+
+
 def test_aiff_rip_outputs_are_scannable_audio_files(tmp_path, monkeypatch):
     class FakeInfo:
         length = 42.0

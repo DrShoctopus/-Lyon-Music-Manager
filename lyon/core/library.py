@@ -1014,6 +1014,49 @@ class Library:
             ).fetchall()
         return [r["g"] for r in rows]
 
+    def media_counts_by_artist(self, media_type: str | None = None) -> list[tuple[str, int]]:
+        """Return (display_artist, track_count) pairs, artist-sorted, via SQL GROUP BY."""
+        filter_sql = "" if media_type is None else "WHERE media_type = ?"
+        params: tuple = () if media_type is None else (media_type,)
+        with self._lock:
+            rows = self.conn.execute(
+                f"""SELECT {DISPLAY_ARTIST_SQL} AS a, COUNT(*) AS n
+                    FROM tracks {filter_sql}
+                    GROUP BY a
+                    ORDER BY a COLLATE NOCASE""",
+                params,
+            ).fetchall()
+        return [(r["a"], int(r["n"])) for r in rows]
+
+    def media_counts_by_album(self, media_type: str | None = None) -> list[tuple[str, str, int]]:
+        """Return (display_artist, display_album, track_count) triples, sorted."""
+        filter_sql = "" if media_type is None else "WHERE media_type = ?"
+        params: tuple = () if media_type is None else (media_type,)
+        with self._lock:
+            rows = self.conn.execute(
+                f"""SELECT {DISPLAY_ARTIST_SQL} AS a, {DISPLAY_ALBUM_SQL} AS b, COUNT(*) AS n
+                    FROM tracks {filter_sql}
+                    GROUP BY a, b
+                    ORDER BY a COLLATE NOCASE, b COLLATE NOCASE""",
+                params,
+            ).fetchall()
+        return [(r["a"], r["b"], int(r["n"])) for r in rows]
+
+    def media_counts_by_genre(self, media_type: str | None = None) -> list[tuple[str, int]]:
+        """Return (genre, track_count) pairs for non-empty genres, sorted."""
+        filter_sql = "" if media_type is None else "AND media_type = ?"
+        params: tuple = () if media_type is None else (media_type,)
+        with self._lock:
+            rows = self.conn.execute(
+                f"""SELECT genre AS g, COUNT(*) AS n
+                    FROM tracks
+                    WHERE genre IS NOT NULL AND genre != '' {filter_sql}
+                    GROUP BY g
+                    ORDER BY g COLLATE NOCASE""",
+                params,
+            ).fetchall()
+        return [(r["g"], int(r["n"])) for r in rows]
+
     def tracks_for_genre(self, genre: str, media_type: str | None = None) -> list[Track]:
         filter_sql = "" if media_type is None else "AND media_type = ?"
         params: tuple = (genre, media_type) if media_type is not None else (genre,)

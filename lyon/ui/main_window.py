@@ -40,7 +40,7 @@ from .cast_dialog import CastDialog
 from .equalizer_dialog import EqualizerDialog
 from .first_run_dialog import FirstRunDialog
 from .library_view import LibraryView
-from .now_playing import TransportBar
+from .transport_bar import TransportBar
 from .queue_dialog import QueueDialog
 from .styles import apply_app_styles
 from .toast import Toast

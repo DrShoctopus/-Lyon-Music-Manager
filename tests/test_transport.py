@@ -10,7 +10,8 @@ QtWidgets = pytest.importorskip("PySide6.QtWidgets", exc_type=ImportError)
 
 from lyon.core.library import Track
 from lyon.core.player import Player, RepeatMode
-from lyon.ui.now_playing import NowPlayingView, TransportBar
+from lyon.ui.now_playing import NowPlayingView
+from lyon.ui.transport_bar import TransportBar
 from lyon.ui.transport import (
     HeartButton,
     NextButton, PlayPauseButton, PlayPauseSideButton, PrevButton,
