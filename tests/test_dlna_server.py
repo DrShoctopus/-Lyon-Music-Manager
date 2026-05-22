@@ -242,10 +242,15 @@ def test_dlna_media_endpoint_supports_byte_ranges(tmp_path):
 
 
 def test_dlna_media_url_for_track_matches_servable_media(tmp_path):
+    from unittest.mock import MagicMock
     library = Library(tmp_path / "library.db")
     track_id = _insert_track(library, tmp_path / "My Song.mp3")
     server = DlnaServer(library, Settings(music_root=str(tmp_path), dlna_port=0))
     server._base_url = "http://127.0.0.1:8200"
+    # Simulate a running server so the CAST-2 guard passes.
+    server._httpd = MagicMock()
+    server._thread = MagicMock()
+    server._thread.is_alive.return_value = True
     try:
         track = library.track_by_id(track_id)
         assert track is not None
@@ -253,6 +258,39 @@ def test_dlna_media_url_for_track_matches_servable_media(tmp_path):
             server.media_url_for_track(track)
             == f"http://127.0.0.1:8200/media/{track_id}/My%20Song.mp3"
         )
+    finally:
+        library.close()
+
+
+def test_dlna_media_url_returns_none_when_server_not_running(tmp_path):
+    """CAST-2: media_url_for_track must return None when the DLNA server is stopped."""
+    library = Library(tmp_path / "library.db")
+    track_id = _insert_track(library, tmp_path / "song.mp3")
+    server = DlnaServer(library, Settings(music_root=str(tmp_path), dlna_port=0))
+    # Server not started: running is False and _base_url is "".
+    try:
+        track = library.track_by_id(track_id)
+        assert track is not None
+        assert server.media_url_for_track(track) is None
+    finally:
+        library.close()
+
+
+def test_dlna_media_url_returns_none_when_base_url_empty(tmp_path):
+    """CAST-2: media_url_for_track must return None when _base_url is cleared."""
+    from unittest.mock import MagicMock
+    library = Library(tmp_path / "library.db")
+    track_id = _insert_track(library, tmp_path / "song.mp3")
+    server = DlnaServer(library, Settings(music_root=str(tmp_path), dlna_port=0))
+    # Simulate server stopped mid-cast: thread alive but base_url cleared.
+    server._httpd = MagicMock()
+    server._thread = MagicMock()
+    server._thread.is_alive.return_value = True
+    server._base_url = ""
+    try:
+        track = library.track_by_id(track_id)
+        assert track is not None
+        assert server.media_url_for_track(track) is None
     finally:
         library.close()
 

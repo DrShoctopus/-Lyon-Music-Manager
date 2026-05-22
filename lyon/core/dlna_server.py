@@ -83,6 +83,8 @@ class DlnaServer:
 
     def media_url_for_track(self, track: Track) -> str | None:
         """Return a playable media URL for a library track, or None if unavailable."""
+        if not self.running or not self._base_url:
+            return None
         if not track.is_library_item:
             return None
         stored = self.library.track_by_id(track.id)

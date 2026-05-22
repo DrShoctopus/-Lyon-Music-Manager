@@ -1491,6 +1491,7 @@ class MainWindow(QMainWindow):
             ev.ignore()
             return
         self.cast_controller.stop_cast()
+        self.cast_controller.shutdown()
         self.player.stop()
         self.dlna_server.stop()
         if self._youtube_view is not None:
