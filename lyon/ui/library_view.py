@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections import OrderedDict
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QModelIndex, QObject, QRect, QRunnable, QSize, Qt, QThreadPool, QTimer, QUrl, Signal
+from PySide6.QtCore import QAbstractTableModel, QEvent, QMimeData, QModelIndex, QObject, QRect, QRunnable, QSize, QSortFilterProxyModel, Qt, QThreadPool, QTimer, QUrl, Signal
 from PySide6.QtGui import (
     QColor, QDesktopServices, QIcon, QImage, QKeySequence, QPainter, QPixmap, QShortcut,
     QStandardItem, QStandardItemModel,
@@ -101,24 +101,164 @@ def _exec_dialog(dialog: QDialog) -> int:
         dialog.deleteLater()
 
 
-class _TrackListModel(QStandardItemModel):
-    """QStandardItemModel that embeds track IDs in drag MIME data."""
+
+class _TrackTableModel(QAbstractTableModel):
+    """Lightweight QAbstractTableModel for the tracks table.
+
+    Stores tracks in a plain ``list[Track]``; no per-cell ``QStandardItem``
+    overhead.  The ▶ playing indicator is rendered via ``data()`` rather than
+    mutating item text.  Sorting is delegated to a ``QSortFilterProxyModel``
+    (sortRole = Qt.UserRole).
+
+    Column 0, role ``_TRACK_REF_ROLE`` returns the ``Track`` reference.
+    """
+
+    _HEADERS = ["#", "Title", "Artist", "Album", "Time", "Rating", "Format", "Group"]
+
+    def __init__(self, tooltip_fn=None, parent=None) -> None:
+        super().__init__(parent)
+        self._tracks: list[Track] = []
+        self._playing_row: int = -1          # source-model row that shows ▶
+        self._tooltip_fn = tooltip_fn        # Optional[Callable[[Track], str]]
+
+    # -- QAbstractTableModel interface ----------------------------------------
+
+    def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:  # type: ignore[override]
+        return 0 if parent.isValid() else len(self._tracks)
+
+    def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:  # type: ignore[override]
+        return 0 if parent.isValid() else _NUM_COLS
+
+    def headerData(self, section: int, orientation, role=Qt.DisplayRole):
+        if orientation == Qt.Horizontal and role == Qt.DisplayRole:
+            if 0 <= section < len(self._HEADERS):
+                return self._HEADERS[section]
+        return None
+
+    def data(self, index: QModelIndex, role=Qt.DisplayRole):
+        if not index.isValid():
+            return None
+        row, col = index.row(), index.column()
+        if row < 0 or row >= len(self._tracks):
+            return None
+        tr = self._tracks[row]
+
+        if role == _TRACK_REF_ROLE:
+            return tr if col == _COL_NUM else None
+
+        if role == Qt.DisplayRole:
+            return self._display(tr, row, col)
+
+        if role == Qt.UserRole:
+            return self._sort_key(tr, col)
+
+        if role == Qt.ToolTipRole and self._tooltip_fn:
+            return self._tooltip_fn(tr)
+
+        if role == Qt.TextAlignmentRole and col in (_COL_NUM, _COL_TIME):
+            return int(Qt.AlignRight | Qt.AlignVCenter)
+
+        return None
+
+    def setData(self, index: QModelIndex, value, role=Qt.EditRole) -> bool:  # type: ignore[override]
+        """Support in-place rating updates from _StarDelegate."""
+        if not index.isValid():
+            return False
+        if role == Qt.UserRole and index.column() == _COL_RATING:
+            row = index.row()
+            if 0 <= row < len(self._tracks):
+                self._tracks[row].rating = value
+                self.dataChanged.emit(index, index, [Qt.UserRole])
+                return True
+        return False
+
+    def flags(self, index: QModelIndex):
+        if not index.isValid():
+            return Qt.NoItemFlags
+        return Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsDragEnabled
+
+    # -- Internal helpers -------------------------------------------------------
+
+    def _display(self, tr: "Track", row: int, col: int):
+        if col == _COL_NUM:
+            return _PLAYING_GLYPH if row == self._playing_row else str(tr.track_no or "")
+        if col == _COL_TITLE:
+            return tr.title
+        if col == _COL_ARTIST:
+            return tr.artist
+        if col == _COL_ALBUM:
+            return tr.album
+        if col == _COL_TIME:
+            return format_duration(tr.duration)
+        if col == _COL_RATING:
+            return ""
+        if col == _COL_FORMAT:
+            return Path(tr.path).suffix.lstrip(".").upper() or ""
+        if col == _COL_GROUPING:
+            return tr.grouping or ""
+        return None
+
+    def _sort_key(self, tr: "Track", col: int):
+        if col == _COL_NUM:
+            return int(tr.track_no or 0)
+        if col == _COL_TITLE:
+            return (tr.title or "").lower()
+        if col == _COL_ARTIST:
+            return (tr.artist or "").lower()
+        if col == _COL_ALBUM:
+            return (tr.album or "").lower()
+        if col == _COL_TIME:
+            return int(tr.duration or 0)
+        if col == _COL_RATING:
+            return int(tr.rating or 0)
+        if col == _COL_FORMAT:
+            return Path(tr.path).suffix.lstrip(".").lower()
+        if col == _COL_GROUPING:
+            return (tr.grouping or "").lower()
+        return None
+
+    # -- Public mutation API ---------------------------------------------------
+
+    def reset_tracks(self, tracks: list["Track"]) -> None:
+        """Replace the entire track list atomically."""
+        self.beginResetModel()
+        self._tracks = list(tracks)
+        self._playing_row = -1
+        self.endResetModel()
+
+    def set_playing_row(self, row: int) -> None:
+        """Mark which source-model row shows the ▶ glyph; pass -1 to clear."""
+        old = self._playing_row
+        self._playing_row = row
+        for r in (old, row):
+            if 0 <= r < len(self._tracks):
+                idx = self.index(r, _COL_NUM)
+                self.dataChanged.emit(idx, idx, [Qt.DisplayRole])
+
+    def track_at(self, row: int) -> "Track | None":
+        """Return the Track at the given source-model row, or None."""
+        if 0 <= row < len(self._tracks):
+            return self._tracks[row]
+        return None
+
+    def track_count(self) -> int:
+        return len(self._tracks)
+
+    # -- Drag-and-drop ---------------------------------------------------------
 
     def mimeTypes(self) -> list[str]:
-        return [_TRACK_MIME_TYPE, *super().mimeTypes()]
+        return [_TRACK_MIME_TYPE]
 
-    def mimeData(self, indexes):
-        mime = super().mimeData(indexes)
+    def mimeData(self, indexes) -> QMimeData:
+        mime = QMimeData()
         seen: set[int] = set()
         ids: list[str] = []
         for idx in indexes:
             if idx.column() == _COL_NUM and idx.row() not in seen:
                 seen.add(idx.row())
-                item = self.item(idx.row(), _COL_NUM)
-                if item:
-                    track = item.data(_TRACK_REF_ROLE)
-                    if isinstance(track, Track):
-                        ids.append(str(track.id))
+                tr = self.track_at(idx.row())
+                if isinstance(tr, Track):
+                    ids.append(str(tr.id))
         if ids:
             mime.setData(_TRACK_MIME_TYPE, ",".join(ids).encode())
         return mime
@@ -200,16 +340,16 @@ class _StarDelegate(QStyledItemDelegate):
     def editorEvent(
         self,
         event: QEvent,
-        model: QStandardItemModel,
+        model,
         option: QStyleOptionViewItem,
         index: QModelIndex,
     ) -> bool:
         if event.type() != QEvent.MouseButtonPress:
             return False
-        track_item = model.item(index.row(), _COL_NUM)
-        if track_item is None:
+        col0 = index.sibling(index.row(), _COL_NUM)
+        if not col0.isValid():
             return False
-        track = track_item.data(_TRACK_REF_ROLE)
+        track = col0.data(_TRACK_REF_ROLE)
         if not isinstance(track, Track):
             return False
         fm = self.parent().fontMetrics() if self.parent() else option.widget.fontMetrics()
@@ -467,14 +607,16 @@ class LibraryView(QWidget):
         self.tracks.customContextMenuRequested.connect(self._show_track_context_menu)
         self.tracks.verticalHeader().setVisible(False)
 
-        self.tracks_model = _TrackListModel(0, _NUM_COLS)
-        self.tracks_model.setHorizontalHeaderLabels(
-            ["#", "Title", "Artist", "Album", "Time", "Rating", "Format", "Group"]
+        self.tracks_model = _TrackTableModel(
+            tooltip_fn=lambda tr: LibraryView._track_tooltip(tr, format_duration(tr.duration)),
+            parent=self,
         )
-        # Sort using a dedicated UserRole key so # / Time / Rating sort numerically and
-        # text columns collate case-insensitively.
-        self.tracks_model.setSortRole(Qt.UserRole)
-        self.tracks.setModel(self.tracks_model)
+        # Sort via a proxy so # / Time / Rating sort numerically and text columns
+        # collate case-insensitively (Qt.UserRole carries the sort key).
+        self._tracks_proxy = QSortFilterProxyModel(self)
+        self._tracks_proxy.setSourceModel(self.tracks_model)
+        self._tracks_proxy.setSortRole(Qt.UserRole)
+        self.tracks.setModel(self._tracks_proxy)
         self.tracks.setSortingEnabled(True)
         self.tracks.sortByColumn(0, Qt.AscendingOrder)
 
@@ -795,7 +937,7 @@ class LibraryView(QWidget):
             self._browser_stack.setCurrentIndex(0)
             self.artists_model.clear()
             self.albums_model.clear()
-            self.tracks_model.removeRows(0, self.tracks_model.rowCount())
+            self._clear_tracks_model()
             self._current_tracks = []
             self._update_footer()
 
@@ -805,7 +947,7 @@ class LibraryView(QWidget):
                 # Playlist was deleted — clear stale state
                 self._active_playlist_id = None
                 self._current_tracks = []
-                self.tracks_model.removeRows(0, self.tracks_model.rowCount())
+                self._clear_tracks_model()
                 self._update_footer()
 
     def _refresh_artists(self) -> None:
@@ -844,7 +986,7 @@ class LibraryView(QWidget):
         idx = self.artists.currentIndex()
         if not idx.isValid():
             self._current_tracks = []
-            self.tracks_model.removeRows(0, self.tracks_model.rowCount())
+            self._clear_tracks_model()
             self._update_footer()
             return
         artist_key = idx.data(Qt.UserRole)
@@ -884,7 +1026,7 @@ class LibraryView(QWidget):
             self.albums.setCurrentIndex(self.albums_model.index(0, 0))
         else:
             self._current_tracks = []
-            self.tracks_model.removeRows(0, self.tracks_model.rowCount())
+            self._clear_tracks_model()
             self._update_footer()
 
     def _populate_virtual_collection(self, key: str) -> None:
@@ -1229,7 +1371,7 @@ class LibraryView(QWidget):
         bi = self.albums.currentIndex()
         if not ai.isValid() or not bi.isValid():
             self._current_tracks = []
-            self.tracks_model.removeRows(0, self.tracks_model.rowCount())
+            self._clear_tracks_model()
             self._update_footer()
             return
         artist = ai.data(Qt.DisplayRole)
@@ -1241,49 +1383,13 @@ class LibraryView(QWidget):
             self._current_tracks = self.library.tracks_for_album(artist, album, self._media_type_filter)
         self._populate_tracks(self._current_tracks)
 
+    def _clear_tracks_model(self) -> None:
+        """Clear the tracks table atomically (no rows, no selection)."""
+        self.tracks_model.reset_tracks([])
+
     def _populate_tracks(self, tracks: list[Track]) -> None:
-        # Disable sorting while filling so the view doesn't re-sort per insert.
-        self.tracks.setSortingEnabled(False)
-        self.tracks_model.removeRows(0, self.tracks_model.rowCount())
-        for tr in tracks:
-            duration = format_duration(tr.duration)
-            tooltip = self._track_tooltip(tr, duration)
-
-            n_item = QStandardItem(str(tr.track_no or ""))
-            n_item.setData(int(tr.track_no or 0), Qt.UserRole)
-            n_item.setData(tr, _TRACK_REF_ROLE)
-            n_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-
-            title_item = QStandardItem(tr.title)
-            title_item.setData((tr.title or "").lower(), Qt.UserRole)
-
-            artist_item = QStandardItem(tr.artist)
-            artist_item.setData((tr.artist or "").lower(), Qt.UserRole)
-
-            album_item = QStandardItem(tr.album)
-            album_item.setData((tr.album or "").lower(), Qt.UserRole)
-
-            time_item = QStandardItem(duration)
-            time_item.setData(int(tr.duration or 0), Qt.UserRole)
-            time_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-
-            rating_item = QStandardItem("")
-            rating_item.setData(int(tr.rating or 0), Qt.UserRole)
-
-            fmt = Path(tr.path).suffix.lstrip(".").upper() or ""
-            format_item = QStandardItem(fmt)
-            format_item.setData(fmt.lower(), Qt.UserRole)
-
-            grouping_item = QStandardItem(tr.grouping or "")
-            grouping_item.setData((tr.grouping or "").lower(), Qt.UserRole)
-
-            for it in (n_item, title_item, artist_item, album_item, time_item, rating_item, format_item, grouping_item):
-                it.setEditable(False)
-                it.setToolTip(tooltip)
-            self.tracks_model.appendRow(
-                [n_item, title_item, artist_item, album_item, time_item, rating_item, format_item, grouping_item]
-            )
-        self.tracks.setSortingEnabled(True)
+        # reset_tracks uses beginResetModel/endResetModel — no need to toggle sorting.
+        self.tracks_model.reset_tracks(tracks)
         self._refresh_playing_indicator()
         self._update_footer()
 
@@ -1304,16 +1410,19 @@ class LibraryView(QWidget):
         self._footer_label.setText(f"{count} {plural} — {duration_str}")
 
     # ------------------------------------------------------------------ row lookup
-    def _track_at_row(self, row: int) -> Track | None:
-        item = self.tracks_model.item(row, 0)
-        if item is None:
+    def _track_at_row(self, proxy_row: int) -> Track | None:
+        """Return the Track visible at *proxy_row* (accounts for current sort order)."""
+        proxy_idx = self._tracks_proxy.index(proxy_row, _COL_NUM)
+        if not proxy_idx.isValid():
             return None
-        track = item.data(_TRACK_REF_ROLE)
+        src_idx = self._tracks_proxy.mapToSource(proxy_idx)
+        track = self.tracks_model.track_at(src_idx.row())
         return track if isinstance(track, Track) else None
 
     def _displayed_tracks(self) -> list[Track]:
+        """All visible tracks in the current (possibly sorted) display order."""
         out: list[Track] = []
-        for r in range(self.tracks_model.rowCount()):
+        for r in range(self._tracks_proxy.rowCount()):
             t = self._track_at_row(r)
             if t is not None:
                 out.append(t)
@@ -1773,8 +1882,9 @@ class LibraryView(QWidget):
             self._select_track_row(row)
 
     def _row_for_track(self, track: Track) -> int:
-        for row in range(self.tracks_model.rowCount()):
-            current = self._track_at_row(row)
+        """Return the source-model row for *track*, or -1 if not visible."""
+        for row in range(self.tracks_model.track_count()):
+            current = self.tracks_model.track_at(row)
             if current and self._same_track(current, track):
                 return row
         return -1
@@ -1785,23 +1895,20 @@ class LibraryView(QWidget):
             if self._currently_playing is not None
             else -1
         )
-        for r in range(self.tracks_model.rowCount()):
-            item = self.tracks_model.item(r, 0)
-            track = self._track_at_row(r)
-            if item is None or track is None:
-                continue
-            new_text = _PLAYING_GLYPH if r == target_row else str(track.track_no or "")
-            if item.text() != new_text:
-                item.setText(new_text)
+        self.tracks_model.set_playing_row(target_row)
 
     def _same_track(self, a: Track, b: Track) -> bool:
         return (a.id and b.id and a.id == b.id) or a.path == b.path
 
     def _select_track_row(self, row: int) -> None:
-        idx = self.tracks_model.index(row, 0)
-        self.tracks.selectRow(row)
-        self.tracks.setCurrentIndex(idx)
-        self.tracks.scrollTo(idx, QAbstractItemView.PositionAtCenter)
+        """Select *row* (source-model coordinate) in the tracks view."""
+        src_idx = self.tracks_model.index(row, 0)
+        proxy_idx = self._tracks_proxy.mapFromSource(src_idx)
+        if not proxy_idx.isValid():
+            return
+        self.tracks.selectRow(proxy_idx.row())
+        self.tracks.setCurrentIndex(proxy_idx)
+        self.tracks.scrollTo(proxy_idx, QAbstractItemView.PositionAtCenter)
 
     def _show_track_album(self, track: Track) -> None:
         artist = track.display_artist
@@ -2163,7 +2270,7 @@ class LibraryView(QWidget):
         if self._active_playlist_id == playlist_id:
             self._active_playlist_id = None
             self._current_tracks = []
-            self.tracks_model.removeRows(0, self.tracks_model.rowCount())
+            self._clear_tracks_model()
             self._update_footer()
         self._refresh_playlists()
 
