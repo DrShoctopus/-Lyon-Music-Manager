@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 
 from ..core import metadata
 from ..core.library import Library, Track
-from ..core.player import Player, RepeatMode
+from ..core.player import Player
 from ..core.settings import Settings
 from .artist_panel import ArtistPanel
 from .widgets import StarRatingWidget, cover_pixmap, format_duration, format_ms
@@ -61,7 +61,7 @@ def _parse_lrc(text: str) -> list[tuple[int, str]]:
 def _read_embedded_lyrics(path: str) -> str | None:
     """Try to extract embedded lyrics from an audio file via mutagen."""
     try:
-        from mutagen.id3 import ID3, USLT
+        from mutagen.id3 import ID3
 
         tags = ID3(path)
         for key in tags.keys():

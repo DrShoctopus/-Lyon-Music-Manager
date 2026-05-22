@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections import OrderedDict
 from pathlib import Path
 
-from PySide6.QtCore import QAbstractTableModel, QEvent, QMimeData, QModelIndex, QObject, QRect, QRunnable, QSize, QSortFilterProxyModel, Qt, QThreadPool, QTimer, QUrl, Signal
+from PySide6.QtCore import QAbstractTableModel, QEvent, QMimeData, QModelIndex, QObject, QRunnable, QSize, QSortFilterProxyModel, Qt, QThreadPool, QTimer, QUrl, Signal
 from PySide6.QtGui import (
     QColor, QDesktopServices, QIcon, QImage, QKeySequence, QPainter, QPixmap, QShortcut,
     QStandardItem, QStandardItemModel,
@@ -22,7 +22,7 @@ from ..core.smart_playlist import spec_to_json
 from ..core.tagger import write_partial_tags
 from .metadata_fetch_dialog import MetadataFetchDialog
 from .smart_playlist_dialog import SmartPlaylistDialog
-from .widgets import StarRatingWidget, format_duration
+from .widgets import format_duration
 
 
 # Sentinel stored in Qt.UserRole on the synthetic "All Albums" album row.
