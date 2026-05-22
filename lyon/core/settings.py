@@ -406,7 +406,9 @@ class Settings:
         data = json.dumps(asdict(self), indent=2)
         tmp = path.with_suffix(".tmp")
         tmp.write_text(data, encoding="utf-8")
+        _chmod_owner_only(tmp)
         os.replace(tmp, path)
+        _chmod_owner_only(path)
         invalidate_settings_cache()
 
 
@@ -429,3 +431,10 @@ def invalidate_settings_cache() -> None:
     """Discard the cached Settings so the next call re-reads from disk."""
     global _settings_cache
     _settings_cache = None
+
+
+def _chmod_owner_only(path: Path) -> None:
+    try:
+        path.chmod(0o600)
+    except OSError:
+        LOG.debug("Could not set owner-only permissions on %s", path)

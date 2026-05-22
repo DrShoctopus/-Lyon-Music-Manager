@@ -12,10 +12,8 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 from urllib.parse import urljoin, urlparse
 
-try:
-    import defusedxml.ElementTree as ET
-except ImportError:  # defusedxml is an optional hardening layer
-    import xml.etree.ElementTree as ET  # type: ignore[no-redef]
+import defusedxml.ElementTree as ET
+from defusedxml.common import DefusedXmlException
 
 from . import settings as _settings
 
@@ -449,7 +447,7 @@ def lookup_cuetools_db_layout(ctdb_toc: str | None, *, fuzzy: bool = False) -> O
 
     try:
         root = ET.fromstring(response.content)
-    except ET.ParseError as exc:
+    except (ET.ParseError, DefusedXmlException) as exc:
         _log_metadata_diagnostic(
             "CUETools DB %s lookup returned invalid XML for layout=%s: %s",
             "fuzzy" if fuzzy else "exact",

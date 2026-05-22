@@ -429,6 +429,8 @@ def test_safe_path_component_suffixes_windows_reserved_names():
 def test_safe_path_component_returns_unknown_for_empty_input():
     assert safe_path_component("") == "Unknown"
     assert safe_path_component(" . . ") == "Unknown"
+    assert safe_path_component(".") == "Unknown"
+    assert safe_path_component("..") == "Unknown"
 
 
 def test_format_extension_matches_selected_rip_format():
@@ -753,3 +755,24 @@ def test_known_album_keeps_stable_folder_for_overwrite_confirmation(tmp_path):
     (first / "01 - Song.flac").write_bytes(b"existing")
 
     assert unique_target_folder(settings, album) == first
+
+
+def test_target_folder_rejects_symlink_escape_from_music_root(tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    music_root = tmp_path / "music"
+    music_root.mkdir()
+    try:
+        (music_root / "Artist").symlink_to(outside, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        return
+
+    settings = Settings(music_root=str(music_root))
+    album = AlbumInfo(artist="Artist", album="Album")
+
+    try:
+        target_folder(settings, album)
+    except ValueError as exc:
+        assert "inside the music folder" in str(exc)
+    else:
+        raise AssertionError("target folder should reject symlink escape")
