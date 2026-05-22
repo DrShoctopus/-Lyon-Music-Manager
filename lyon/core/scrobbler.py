@@ -28,6 +28,7 @@ _SESSION = requests.Session()
 
 _MIN_TRACK_DURATION_S = 30   # Last.fm requires >= 30 s
 _SCROBBLE_CAP_S = 240        # scrobble at 4 min if track is longer than 8 min
+_MAX_LISTENED_DELTA_MS = 10_000
 
 
 def _lastfm_sign(params: dict[str, str]) -> str:
@@ -116,6 +117,8 @@ class ScrobblerService(QObject):
         self._current_track: "Track | None" = None
         self._track_start_time: float = 0.0
         self._scrobbled = False
+        self._last_position_ms: int | None = None
+        self._listened_ms = 0
         self._auth_token: str = ""
 
         self._token_received.connect(self._on_token_received)
@@ -134,6 +137,8 @@ class ScrobblerService(QObject):
     def _on_track_changed(self, track: "Track | None") -> None:
         self._current_track = track
         self._scrobbled = False
+        self._last_position_ms = None
+        self._listened_ms = 0
         self._track_start_time = time.time()
         if track is not None:
             self._submit_now_playing(track)
@@ -143,9 +148,17 @@ class ScrobblerService(QObject):
             return
         duration_s = total_ms / 1000.0
         if duration_s < _MIN_TRACK_DURATION_S:
+            self._last_position_ms = pos_ms
             return
+        if self._last_position_ms is None:
+            self._last_position_ms = pos_ms
+            return
+        delta_ms = pos_ms - self._last_position_ms
+        self._last_position_ms = pos_ms
+        if 0 < delta_ms <= _MAX_LISTENED_DELTA_MS:
+            self._listened_ms += delta_ms
         threshold_ms = min(total_ms // 2, _SCROBBLE_CAP_S * 1000)
-        if pos_ms >= threshold_ms:
+        if self._listened_ms >= threshold_ms:
             self._scrobbled = True
             self._submit_scrobble(self._current_track, int(self._track_start_time))
 

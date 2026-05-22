@@ -7,6 +7,7 @@ QObject = QtCore.QObject
 Signal = QtCore.Signal
 
 from lyon.core.library import Track
+from lyon.core import player as player_module
 from lyon.core.player import Player
 from lyon.core.playback_backend import UnavailablePlaybackBackend
 
@@ -76,6 +77,13 @@ class FakeBackend(QObject):
 
     def cleanup(self) -> None:
         self._playing = False
+
+
+class FailingPlayBackend(FakeBackend):
+    def play(self) -> bool:
+        self.play_count += 1
+        self._playing = False
+        return False
 
 
 def _track(path: str = "C:/Music/test.flac") -> Track:
@@ -220,6 +228,83 @@ def test_removing_current_queue_item_while_playing_advances_to_next_track():
     assert backend.is_playing()
 
 
+def test_previous_wraps_from_first_track_when_repeat_all():
+    backend = FakeBackend()
+    player = Player(backend=backend)
+    player.set_queue([
+        _track("C:/Music/one.flac"),
+        _track("C:/Music/two.flac"),
+    ])
+    player.cycle_repeat()
+
+    player.previous()
+
+    assert player.current_index() == 1
+    assert player.current().path == "C:/Music/two.flac"
+
+
+def test_shuffle_repeat_off_stops_after_every_track_played(monkeypatch):
+    backend = FakeBackend()
+    player = Player(backend=backend)
+    player.set_queue([
+        _track("C:/Music/one.flac"),
+        _track("C:/Music/two.flac"),
+        _track("C:/Music/three.flac"),
+    ])
+    player.set_shuffle(True)
+    monkeypatch.setattr(player_module.random, "choice", lambda seq: seq[0])
+
+    player.next()
+    assert player.current_index() == 1
+
+    player.next()
+    assert player.current_index() == 2
+
+    player.next()
+    assert player.current_index() == -1
+    assert player.current() is None
+    assert not backend.is_playing()
+
+
+def test_shuffle_previous_uses_play_history(monkeypatch):
+    backend = FakeBackend()
+    player = Player(backend=backend)
+    player.set_queue([
+        _track("C:/Music/one.flac"),
+        _track("C:/Music/two.flac"),
+        _track("C:/Music/three.flac"),
+    ])
+    player.set_shuffle(True)
+    monkeypatch.setattr(player_module.random, "choice", lambda seq: seq[-1])
+
+    player.next()
+    assert player.current_index() == 2
+
+    player.previous()
+
+    assert player.current_index() == 0
+    assert player.current().path == "C:/Music/one.flac"
+
+
+def test_reenabling_shuffle_starts_a_fresh_played_set(monkeypatch):
+    backend = FakeBackend()
+    player = Player(backend=backend)
+    player.set_queue([
+        _track("C:/Music/one.flac"),
+        _track("C:/Music/two.flac"),
+        _track("C:/Music/three.flac"),
+    ])
+    player.set_shuffle(True)
+    monkeypatch.setattr(player_module.random, "choice", lambda seq: seq[0])
+    player.next()
+
+    player.set_shuffle(False)
+    player.set_shuffle(True)
+    player.next()
+
+    assert player.current_index() == 0
+
+
 def test_unavailable_backend_keeps_queue_but_does_not_fake_current_track():
     backend = UnavailablePlaybackBackend("libVLC missing")
     player = Player(backend=backend)
@@ -347,6 +432,41 @@ def test_crossfade_starts_next_backend_before_stopping_current():
     assert backends[1].is_playing()
     assert backends[1].sources == ["C:/Music/two.flac"]
     assert backends[1].volume() == 0
+
+
+def test_failed_crossfade_keeps_current_track_and_does_not_increment_play_count():
+    class Library:
+        def __init__(self):
+            self.incremented: list[int] = []
+
+        def increment_play_count(self, track_id: int) -> None:
+            self.incremented.append(track_id)
+
+    backends: list[FakeBackend] = []
+
+    def factory(parent=None):
+        backend = FakeBackend() if not backends else FailingPlayBackend()
+        backends.append(backend)
+        return backend
+
+    library = Library()
+    player = Player(backend_factory=factory, library=library)
+    player.set_crossfade(5)
+    player.set_queue([
+        _track("C:/Music/one.flac"),
+        _track("C:/Music/two.flac"),
+    ])
+
+    backends[0].position_changed.emit(115_000, 120_000)
+
+    assert len(backends) == 2
+    assert player.current_index() == 0
+    assert player.current().path == "C:/Music/one.flac"
+    assert player._backend is backends[0]
+    assert player._fade_out_backend is None
+    assert backends[0].is_playing()
+    assert backends[1].parent() is None
+    assert library.incremented == []
 
 
 def test_crossfade_preserves_muted_state_on_next_backend():

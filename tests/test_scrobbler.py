@@ -221,34 +221,47 @@ class TestPositionChanged:
     def teardown_method(self):
         self.svc.deleteLater()
 
+    def _advance_to(self, pos_ms: int, total_ms: int, *, step_ms: int = 10_000) -> None:
+        for pos in range(0, pos_ms + 1, step_ms):
+            self.svc._on_position_changed(pos, total_ms)
+        if pos_ms % step_ms:
+            self.svc._on_position_changed(pos_ms, total_ms)
+
     def test_no_scrobble_before_threshold(self):
         with patch.object(self.svc, "_submit_scrobble") as mock:
-            self.svc._on_position_changed(10_000, 240_000)
+            self._advance_to(110_000, 240_000)
             mock.assert_not_called()
 
     def test_scrobble_at_50_percent(self):
         with patch.object(self.svc, "_submit_scrobble") as mock:
-            self.svc._on_position_changed(120_000, 240_000)  # exactly 50%
+            self._advance_to(120_000, 240_000)  # exactly 50%
             mock.assert_called_once()
 
     def test_scrobble_capped_at_240s(self):
         # 10-minute track: 50% is 300s which exceeds 240s cap.
         self.svc._current_track = _make_track(duration=600.0)
         with patch.object(self.svc, "_submit_scrobble") as mock:
-            self.svc._on_position_changed(240_000, 600_000)
+            self._advance_to(240_000, 600_000)
             mock.assert_called_once()
 
     def test_no_scrobble_before_cap_on_long_track(self):
         self.svc._current_track = _make_track(duration=600.0)
         with patch.object(self.svc, "_submit_scrobble") as mock:
-            self.svc._on_position_changed(200_000, 600_000)
+            self._advance_to(200_000, 600_000)
             mock.assert_not_called()
 
     def test_no_duplicate_scrobble(self):
         with patch.object(self.svc, "_submit_scrobble") as mock:
-            self.svc._on_position_changed(120_000, 240_000)
+            self._advance_to(120_000, 240_000)
             self.svc._on_position_changed(180_000, 240_000)
             assert mock.call_count == 1
+
+    def test_forward_seek_does_not_count_as_listened_time(self):
+        self.svc._current_track = _make_track(duration=40.0)
+        with patch.object(self.svc, "_submit_scrobble") as mock:
+            self.svc._on_position_changed(0, 40_000)
+            self.svc._on_position_changed(25_000, 40_000)
+            mock.assert_not_called()
 
     def test_short_track_not_scrobbled(self):
         self.svc._current_track = _make_track(duration=20.0)

@@ -104,7 +104,7 @@ class PlaybackBackend(QObject):
     ) -> None:
         raise NotImplementedError
 
-    def play(self) -> None:
+    def play(self) -> bool | None:
         raise NotImplementedError
 
     def pause(self) -> None:
@@ -170,12 +170,13 @@ class UnavailablePlaybackBackend(PlaybackBackend):
     ) -> None:
         self._source = path
 
-    def play(self) -> None:
+    def play(self) -> bool:
         if not self._warned:
             LOG.warning("Playback unavailable: %s", self._reason)
             self._warned = True
         self.state_changed.emit("stopped")
         self.position_changed.emit(0, 0)
+        return False
 
     def pause(self) -> None:
         self.state_changed.emit("stopped")
@@ -293,10 +294,11 @@ class VlcPlaybackBackend(PlaybackBackend):
         self._player.audio_set_mute(self._muted)
         self._eq.attach_to_player()
 
-    def play(self) -> None:
-        self._player.play()
+    def play(self) -> bool:
+        ok = self._player.play() != -1
         self._timer.start()
         self._emit_state("playing")
+        return ok
 
     def pause(self) -> None:
         self._player.pause()
