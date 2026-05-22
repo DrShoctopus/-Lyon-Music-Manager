@@ -168,7 +168,7 @@ def test_list_album_art_uses_async_loader(app, monkeypatch, tmp_path):
             started.append(runnable)
 
     class FakeLoader:
-        def __init__(self, gen, path, signals):
+        def __init__(self, gen, path, signals, get_gen=None):
             self.gen = gen
             self.path = path
             self.signals = signals

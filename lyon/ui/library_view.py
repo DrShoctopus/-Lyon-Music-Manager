@@ -482,21 +482,41 @@ class _ArtSignals(QObject):
 
 
 class _ArtLoader(QRunnable):
-    """Loads and scales an artwork image on a worker thread."""
+    """Loads and scales an artwork image on a worker thread.
 
-    def __init__(self, gen: int, art_path: str, signals: _ArtSignals) -> None:
+    ``get_gen`` is a zero-argument callable that returns the *current*
+    generation counter held by the owning ``LibraryView``.  If the counter
+    has already advanced past ``gen`` when the worker wakes up — or between
+    the disk read and the scale step — the worker bails out early so the GUI
+    thread never has to discard the result.
+    """
+
+    def __init__(
+        self,
+        gen: int,
+        art_path: str,
+        signals: _ArtSignals,
+        get_gen: Callable[[], int],
+    ) -> None:
         super().__init__()
         self.setAutoDelete(True)
         self._gen = gen
         self._art_path = art_path
         self._signals = signals
+        self._get_gen = get_gen
 
     def run(self) -> None:
+        # Bail out immediately if the artist/genre selection has already changed.
+        if self._get_gen() != self._gen:
+            return
         try:
             img = QImage(self._art_path)
             if img.isNull():
                 self._signals.loaded.emit(self._gen, self._art_path, None)
             else:
+                # Check again before the expensive scale step.
+                if self._get_gen() != self._gen:
+                    return
                 scaled = img.scaled(
                     _GRID_ICON_SIZE, _GRID_ICON_SIZE,
                     Qt.KeepAspectRatio, Qt.SmoothTransformation,
@@ -1021,7 +1041,7 @@ class LibraryView(QWidget):
                 first = _art not in self._grid_art_map
                 self._grid_art_map.setdefault(_art, []).append(it)
                 if first:
-                    pool.start(_ArtLoader(gen, _art, self._art_signals))
+                    pool.start(_ArtLoader(gen, _art, self._art_signals, lambda: self._grid_gen))
         if self.albums_model.rowCount():
             self.albums.setCurrentIndex(self.albums_model.index(0, 0))
         else:
@@ -1138,7 +1158,7 @@ class LibraryView(QWidget):
                 first = art not in self._grid_art_map
                 self._grid_art_map.setdefault(art, []).append(it)
                 if first:
-                    pool.start(_ArtLoader(gen, art, self._art_signals))
+                    pool.start(_ArtLoader(gen, art, self._art_signals, lambda: self._grid_gen))
 
     def _on_artwork_loaded(self, gen: int, art_path: str, img: object) -> None:
         if gen != self._grid_gen:
