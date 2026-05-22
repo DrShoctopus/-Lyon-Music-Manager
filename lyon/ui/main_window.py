@@ -320,7 +320,7 @@ class MainWindow(QMainWindow):
                     min(self.settings.queue_current_index, len(restored) - 1),
                 )
 
-        # macOS global media keys (PyObjC optional dep — no-op on other platforms)
+        # Platform global media keys (optional dependencies; no-op when unavailable)
         from ..core.media_keys import register_media_key_handler
         self._media_key_handler = register_media_key_handler(self.player)
 
@@ -1516,6 +1516,7 @@ class MainWindow(QMainWindow):
         self.cast_controller.stop_cast()
         self.cast_controller.shutdown()
         self.player.stop()
+        self._shutdown_media_key_handler()
         self.dlna_server.stop()
         if self._youtube_view is not None:
             self._youtube_view.shutdown()
@@ -1541,3 +1542,10 @@ class MainWindow(QMainWindow):
         close_cd_dll_handles()
         close_dll_handles()
         super().closeEvent(ev)
+
+    def _shutdown_media_key_handler(self) -> None:
+        handler = getattr(self, "_media_key_handler", None)
+        self._media_key_handler = None
+        close = getattr(handler, "close", None)
+        if callable(close):
+            close()

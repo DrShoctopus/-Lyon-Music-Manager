@@ -506,6 +506,23 @@ def test_status_bar_carries_scan_progress_widgets(main_window):
     assert main_window._scan_status_label.parent() is sb
 
 
+def test_media_key_handler_is_closed_during_shutdown(main_window):
+    class Handler:
+        def __init__(self):
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    handler = Handler()
+    main_window._media_key_handler = handler
+
+    main_window._shutdown_media_key_handler()
+
+    assert handler.closed is True
+    assert main_window._media_key_handler is None
+
+
 def test_close_event_waits_for_replaygain_scanner_to_stop(main_window):
     class StuckScanner:
         def __init__(self):
