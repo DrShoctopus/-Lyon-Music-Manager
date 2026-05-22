@@ -3,7 +3,12 @@ from __future__ import annotations
 from io import BytesIO
 from pathlib import Path
 
-from lyon.core.dlna_server import DlnaServer, _encode_object_value, _is_allowed_client
+from lyon.core.dlna_server import (
+    DlnaServer,
+    _encode_object_value,
+    _is_allowed_client,
+    _server_header,
+)
 from lyon.core.library import Library
 from lyon.core.settings import Settings
 
@@ -68,6 +73,15 @@ def test_dlna_description_exposes_media_server(tmp_path):
     assert "<friendlyName>Sea Test</friendlyName>" in body
     assert "urn:schemas-upnp-org:device:MediaServer:1" in body
     assert "/ContentDirectory/control" in body
+
+
+def test_dlna_server_header_does_not_disclose_host_os():
+    header = _server_header()
+
+    assert header.startswith("UPnP/1.0 SeaLyon/")
+    assert "Darwin" not in header
+    assert "Windows" not in header
+    assert "Linux" not in header
 
 
 def test_dlna_browse_returns_library_tracks(tmp_path):

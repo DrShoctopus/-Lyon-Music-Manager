@@ -540,6 +540,7 @@ class Library:
         art = _find_local_artwork(cue_path.parent)
         now = time.time()
         new_paths: set[str] = set()
+        image_duration = _audio_duration_seconds(cue_sheet.image_path)
 
         with self._lock:
             for track in cue_sheet.tracks:
@@ -548,6 +549,8 @@ class Library:
 
                 if track.end_sectors is not None:
                     duration = (track.end_sectors - track.start_sectors) / 75.0
+                elif image_duration is not None:
+                    duration = max(0.0, image_duration - (track.start_sectors / 75.0))
                 else:
                     duration = 0.0  # last track: length unknown without decoding
 
@@ -1604,6 +1607,22 @@ def _read_tags(path: str) -> dict | None:
         "bitrate": int(getattr(info, "bitrate", 0) or 0),
         "samplerate": int(getattr(info, "sample_rate", 0) or 0),
     }
+
+
+def _audio_duration_seconds(path: Path | None) -> float | None:
+    """Return an audio file duration for CUE boundary calculation, if readable."""
+    if path is None:
+        return None
+    try:
+        f = MutagenFile(path, easy=True)
+    except Exception as exc:
+        LOG.debug("Failed to read CUE image duration from %s: %s", path, exc)
+        return None
+    if f is None:
+        return None
+    info = getattr(f, "info", None)
+    duration = float(getattr(info, "length", 0.0) or 0.0)
+    return duration if duration > 0 else None
 
 
 def _find_video_artwork(path: Path) -> Path | None:

@@ -426,8 +426,8 @@ class SettingsDialog(QDialog):
             layout.addWidget(warn)
         elif not lastfm_api_configured():
             lfm_warn = QLabel(
-                "Last.fm API key/secret not configured — scrobbling is disabled until a developer "
-                "sets _LASTFM_API_KEY and _LASTFM_API_SECRET in lyon/core/scrobbler.py."
+                "Last.fm API key/secret not configured. Set LYON_LASTFM_API_KEY and "
+                "LYON_LASTFM_API_SECRET before connecting a Last.fm account."
             )
             lfm_warn.setObjectName("warningLabel")
             lfm_warn.setWordWrap(True)
@@ -485,7 +485,8 @@ class SettingsDialog(QDialog):
         form.addRow("Port:", self.dlna_port)
 
         note = QLabel(
-            "DLNA shares indexed audio and video files on your local network while Sea Lyon is running."
+            "DLNA shares indexed audio and video files with devices on your local network while "
+            "Sea Lyon is running. Anyone on that network may be able to browse and stream them."
         )
         note.setWordWrap(True)
         note.setObjectName("mutedText")

@@ -183,10 +183,24 @@ class TestTrackChanged:
         )
         self.svc.update_settings(settings)
         with patch("lyon.core.scrobbler._LASTFM_API_KEY", "testkey"), \
+             patch("lyon.core.scrobbler._LASTFM_API_SECRET", "testsecret"), \
              patch("lyon.core.scrobbler.QThreadPool") as mock_pool:
             mock_pool.globalInstance.return_value = MagicMock()
             self.svc._on_track_changed(_make_track())
             mock_pool.globalInstance.return_value.start.assert_called_once()
+
+    def test_now_playing_not_submitted_without_lastfm_secret(self):
+        settings = _make_settings(
+            lastfm_scrobbling_enabled=True,
+            lastfm_session_key="sk123",
+        )
+        self.svc.update_settings(settings)
+        with patch("lyon.core.scrobbler._LASTFM_API_KEY", "testkey"), \
+             patch("lyon.core.scrobbler._LASTFM_API_SECRET", ""), \
+             patch("lyon.core.scrobbler.QThreadPool") as mock_pool:
+            mock_pool.globalInstance.return_value = MagicMock()
+            self.svc._on_track_changed(_make_track())
+            mock_pool.globalInstance.return_value.start.assert_not_called()
 
     def test_no_submission_when_disabled(self):
         settings = _make_settings(lastfm_scrobbling_enabled=False)

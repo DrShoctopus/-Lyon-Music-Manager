@@ -1122,6 +1122,12 @@ class MainWindow(QMainWindow):
         finally:
             dlg.deleteLater()
         if accepted and result_settings is not None:
+            if (
+                result_settings.dlna_enabled
+                and not old_dlna[0]
+                and not self._confirm_dlna_lan_exposure()
+            ):
+                result_settings.dlna_enabled = False
             self.settings = result_settings
             self.settings.save()
             metadata.reset_musicbrainz_useragent()
@@ -1224,6 +1230,21 @@ class MainWindow(QMainWindow):
             return
         if show_toast:
             self.show_toast("DLNA sharing is running.", level="success")
+
+    def _confirm_dlna_lan_exposure(self) -> bool:
+        result = QMessageBox.question(
+            self,
+            "Enable DLNA Sharing?",
+            (
+                "DLNA sharing advertises your indexed audio and video files on the local network "
+                "while Sea Lyon is running. Devices on that network may be able to browse and "
+                "stream your library without a password.\n\n"
+                "Enable DLNA sharing?"
+            ),
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        return result == QMessageBox.Yes
 
     def open_queue(self) -> None:
         if self._queue_dialog is None:

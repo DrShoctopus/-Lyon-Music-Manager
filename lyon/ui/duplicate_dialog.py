@@ -114,7 +114,7 @@ class DuplicateDialog(QDialog):
                 self._fp_warn.setVisible(True)
             elif not is_lookup_configured():
                 self._fp_warn.setText(
-                    "AcoustID API key not configured. Set ACOUSTID_API_KEY "
+                    "AcoustID API key not configured. Set LYON_ACOUSTID_API_KEY "
                     "to enable fingerprint lookup."
                 )
                 self._fp_warn.setVisible(True)
@@ -300,7 +300,7 @@ class DuplicateDialog(QDialog):
         if not is_lookup_configured():
             QMessageBox.warning(
                 self, "API Key Required",
-                "Set ACOUSTID_API_KEY first."
+                "Set LYON_ACOUSTID_API_KEY first."
             )
             return
 

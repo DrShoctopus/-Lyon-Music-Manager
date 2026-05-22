@@ -5,7 +5,6 @@ import base64
 import logging
 import mimetypes
 import os
-import platform
 import socket
 import stat as stat_module
 import threading
@@ -30,7 +29,7 @@ LOG = logging.getLogger(__name__)
 
 _SSDP_ADDR = ("239.255.255.250", 1900)
 _CHUNK_SIZE = 256 * 1024
-_MAX_SOAP_BODY = 1024 * 1024
+_MAX_SOAP_BODY = 64 * 1024
 _MAX_BROWSE_ITEMS = 500
 _TRACK_CACHE_TTL = 5.0
 
@@ -267,9 +266,12 @@ class DlnaServer:
         handler.end_headers()
         if not send_body:
             return
-        with path.open("rb") as fh:
-            fh.seek(start)
-            _copy_limited(fh, handler.wfile, length)
+        try:
+            with path.open("rb") as fh:
+                fh.seek(start)
+                _copy_limited(fh, handler.wfile, length)
+        except (BrokenPipeError, ConnectionResetError):
+            LOG.debug("DLNA client disconnected while streaming %s", path)
 
     def _browse_response(self, root) -> bytes:
         object_id = _xml_text(root, "ObjectID", "0")
@@ -1118,7 +1120,7 @@ def _local_ip() -> str:
 
 
 def _server_header() -> str:
-    return f"{platform.system()}/{platform.release()} UPnP/1.0 SeaLyon/{__version__}"
+    return f"UPnP/1.0 SeaLyon/{__version__}"
 
 
 def _ssdp_search_matches(text: str) -> bool:

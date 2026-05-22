@@ -152,7 +152,11 @@ class ScrobblerService(QObject):
     # ------------------------------------------------------------------ submissions
 
     def _submit_now_playing(self, track: "Track") -> None:
-        if self._settings.lastfm_scrobbling_enabled and self._settings.lastfm_session_key and _LASTFM_API_KEY:
+        if (
+            self._settings.lastfm_scrobbling_enabled
+            and self._settings.lastfm_session_key
+            and lastfm_api_configured()
+        ):
             params = {
                 "method": "track.updateNowPlaying",
                 "api_key": _LASTFM_API_KEY,
@@ -177,7 +181,11 @@ class ScrobblerService(QObject):
             QThreadPool.globalInstance().start(_HttpTask(lambda p=payload, t=token: _lbz_post(p, t)))
 
     def _submit_scrobble(self, track: "Track", timestamp: int) -> None:
-        if self._settings.lastfm_scrobbling_enabled and self._settings.lastfm_session_key and _LASTFM_API_KEY:
+        if (
+            self._settings.lastfm_scrobbling_enabled
+            and self._settings.lastfm_session_key
+            and lastfm_api_configured()
+        ):
             params = {
                 "method": "track.scrobble",
                 "api_key": _LASTFM_API_KEY,

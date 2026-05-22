@@ -1605,7 +1605,7 @@ class LibraryView(QWidget):
                 identify_act.setToolTip("Install pyacoustid and fpcalc to enable")
             elif not _fp_configured():
                 identify_act.setEnabled(False)
-                identify_act.setToolTip("Set ACOUSTID_API_KEY to enable AcoustID lookup")
+                identify_act.setToolTip("Set LYON_ACOUSTID_API_KEY to enable AcoustID lookup")
         scan_rg = menu.addAction("Scan ReplayGain…")
         youtube_search = menu.addAction("Search YouTube for Artist, Album, and Track")
         properties = menu.addAction("Properties")
@@ -1656,7 +1656,7 @@ class LibraryView(QWidget):
             QMessageBox.warning(
                 self,
                 "AcoustID API Key Required",
-                "Set ACOUSTID_API_KEY to enable AcoustID lookup.",
+                "Set LYON_ACOUSTID_API_KEY to enable AcoustID lookup.",
             )
             return
 
