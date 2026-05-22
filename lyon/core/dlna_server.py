@@ -278,14 +278,19 @@ class DlnaServer:
         flag = _xml_text(root, "BrowseFlag", "BrowseDirectChildren")
         start = _nonnegative_xml_int(root, "StartingIndex", 0)
         count = _nonnegative_xml_int(root, "RequestedCount", 0)
-        items = self._browse_items(object_id, flag)
         limit = _MAX_BROWSE_ITEMS if count <= 0 else min(count, _MAX_BROWSE_ITEMS)
-        visible = items[start:start + limit]
+        page = self._browse_track_page(object_id, flag, start, limit)
+        if page is None:
+            items = self._browse_items(object_id, flag)
+            visible = items[start:start + limit]
+            total = len(items)
+        else:
+            visible, total = page
         didl = _didl_xml(visible)
         payload = (
             f"<Result>{escape(didl)}</Result>"
             f"<NumberReturned>{len(visible)}</NumberReturned>"
-            f"<TotalMatches>{len(items)}</TotalMatches>"
+            f"<TotalMatches>{total}</TotalMatches>"
             "<UpdateID>1</UpdateID>"
         )
         return _soap_envelope(
@@ -306,16 +311,16 @@ class DlnaServer:
             if query
             else self._tracks_for_container(container_id, media_type)
         )
-        items = self._track_items_from_tracks(
-            tracks,
+        limit = _MAX_BROWSE_ITEMS if count <= 0 else min(count, _MAX_BROWSE_ITEMS)
+        visible_tracks = tracks[start:start + limit]
+        visible = self._track_items_from_tracks(
+            visible_tracks,
             parent_id=_track_parent_for_container(container_id, media_type),
         )
-        limit = _MAX_BROWSE_ITEMS if count <= 0 else min(count, _MAX_BROWSE_ITEMS)
-        visible = items[start:start + limit]
         payload = (
             f"<Result>{escape(_didl_xml(visible))}</Result>"
             f"<NumberReturned>{len(visible)}</NumberReturned>"
-            f"<TotalMatches>{len(items)}</TotalMatches>"
+            f"<TotalMatches>{len(tracks)}</TotalMatches>"
             "<UpdateID>1</UpdateID>"
         )
         return _soap_envelope(
@@ -440,6 +445,49 @@ class DlnaServer:
         if object_id == "video:all":
             return self._track_items("video", parent_id="video:all")
         return []
+
+    def _browse_track_page(
+        self,
+        object_id: str,
+        flag: str,
+        start: int,
+        limit: int,
+    ) -> tuple[list[_BrowseItem], int] | None:
+        if flag != "BrowseDirectChildren":
+            return None
+        parent_id: str
+        if object_id == "audio:all":
+            tracks = self._tracks("audio")
+            parent_id = "audio:all"
+        elif object_id == "video:all":
+            tracks = self._tracks("video")
+            parent_id = "video:all"
+        elif object_id.startswith("artist:"):
+            artist = _decode_object_value(object_id.removeprefix("artist:"))
+            if not artist:
+                return ([], 0)
+            tracks = self._tracks_for_artist(artist, "audio")
+            parent_id = object_id
+        elif object_id.startswith("album:"):
+            decoded = _decode_object_value(object_id.removeprefix("album:"))
+            artist, album = _split_pair(decoded)
+            if not (artist and album):
+                return ([], 0)
+            tracks = self._tracks_for_album(artist, album, "audio")
+            parent_id = object_id
+        elif object_id.startswith("genre:"):
+            genre = _decode_object_value(object_id.removeprefix("genre:"))
+            if not genre:
+                return ([], 0)
+            tracks = self._tracks_for_genre(genre, "audio")
+            parent_id = object_id
+        else:
+            return None
+        visible_tracks = tracks[start:start + limit]
+        return (
+            self._track_items_from_tracks(visible_tracks, parent_id=parent_id),
+            len(tracks),
+        )
 
     def _track_items(
         self, media_type: str | None = None, *, parent_id: str | None = None

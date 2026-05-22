@@ -114,6 +114,44 @@ def test_dlna_browse_returns_library_tracks(tmp_path):
     assert "NumberReturned>1<" in body
 
 
+def test_dlna_browse_only_materializes_requested_media_page(tmp_path, monkeypatch):
+    library = Library(tmp_path / "library.db")
+    _insert_track(library, tmp_path / "one.mp3")
+    _insert_track(library, tmp_path / "two.mp3")
+    _insert_track(library, tmp_path / "three.mp3")
+    server = DlnaServer(library, Settings(music_root=str(tmp_path), dlna_port=0))
+    original = server._track_item
+    calls: list[int] = []
+
+    def track_item(track, *, parent_id=None):
+        calls.append(track.id)
+        return original(track, parent_id=parent_id)
+
+    monkeypatch.setattr(server, "_track_item", track_item)
+    soap = b"""<?xml version="1.0"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
+  <s:Body>
+    <u:Browse xmlns:u="urn:schemas-upnp-org:service:ContentDirectory:1">
+      <ObjectID>audio:all</ObjectID>
+      <BrowseFlag>BrowseDirectChildren</BrowseFlag>
+      <Filter>*</Filter>
+      <StartingIndex>1</StartingIndex>
+      <RequestedCount>1</RequestedCount>
+      <SortCriteria></SortCriteria>
+    </u:Browse>
+    </s:Body>
+</s:Envelope>"""
+    try:
+        server._base_url = "http://127.0.0.1:8200"
+        body = server.handle_content_directory(soap).decode()
+    finally:
+        library.close()
+
+    assert "NumberReturned>1<" in body
+    assert "TotalMatches>3<" in body
+    assert len(calls) == 1
+
+
 def test_dlna_browse_exposes_music_containers(tmp_path):
     library = Library(tmp_path / "library.db")
     _insert_track(library, tmp_path / "song.mp3")
@@ -171,6 +209,44 @@ def test_dlna_search_filters_library_tracks(tmp_path):
     assert "Ocean Song" in body
     assert "Mountain Song" not in body
     assert "NumberReturned>1<" in body
+
+
+def test_dlna_search_only_materializes_requested_media_page(tmp_path, monkeypatch):
+    library = Library(tmp_path / "library.db")
+    _insert_track(library, tmp_path / "ocean-a.mp3")
+    _insert_track(library, tmp_path / "ocean-b.mp3")
+    _insert_track(library, tmp_path / "ocean-c.mp3")
+    server = DlnaServer(library, Settings(music_root=str(tmp_path), dlna_port=0))
+    original = server._track_item
+    calls: list[int] = []
+
+    def track_item(track, *, parent_id=None):
+        calls.append(track.id)
+        return original(track, parent_id=parent_id)
+
+    monkeypatch.setattr(server, "_track_item", track_item)
+    soap = b"""<?xml version="1.0"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
+  <s:Body>
+    <u:Search xmlns:u="urn:schemas-upnp-org:service:ContentDirectory:1">
+      <ContainerID>audio:all</ContainerID>
+      <SearchCriteria>dc:title contains "Ocean"</SearchCriteria>
+      <Filter>*</Filter>
+      <StartingIndex>1</StartingIndex>
+      <RequestedCount>1</RequestedCount>
+      <SortCriteria></SortCriteria>
+    </u:Search>
+    </s:Body>
+</s:Envelope>"""
+    try:
+        server._base_url = "http://127.0.0.1:8200"
+        body = server.handle_content_directory(soap).decode()
+    finally:
+        library.close()
+
+    assert "NumberReturned>1<" in body
+    assert "TotalMatches>3<" in body
+    assert len(calls) == 1
 
 
 def test_dlna_search_upnp_audio_class_returns_music_tracks(tmp_path):
