@@ -74,11 +74,13 @@ jobs:
           $archive = "ffmpeg-release-essentials.zip"
           $url = "https://www.gyan.dev/ffmpeg/builds/$archive"
           Invoke-WebRequest -Uri $url -OutFile ffmpeg.zip -UseBasicParsing
-          $checksum = Invoke-WebRequest -Uri "$url.sha256" -UseBasicParsing
-          $contentType = [string]$checksum.Headers['Content-Type']
+          $checksumResp = Invoke-WebRequest -Uri "$url.sha256" -UseBasicParsing
+          $contentType = [string]$checksumResp.Headers['Content-Type']
           if ($contentType -match 'text/html') { throw "ffmpeg checksum URL returned HTML." }
+          $checksumRaw = $checksumResp.Content
+          $checksumText = if ($checksumRaw -is [byte[]]) { [System.Text.Encoding]::UTF8.GetString($checksumRaw) } else { [string]$checksumRaw }
           $expected = $null
-          foreach ($line in ($checksum.Content -split "`r?`n")) {
+          foreach ($line in ($checksumText -split "`r?`n")) {
             if ($line -match '^\s*([A-Fa-f0-9]{64})\s+[* ]?(.+?)\s*$' -and [System.IO.Path]::GetFileName($Matches[2]) -eq $archive) {
               $expected = $Matches[1].ToLowerInvariant(); break
             }
@@ -172,9 +174,10 @@ jobs:
           $archive = "vlc-${{ env.VLC_VERSION }}-win64.zip"
           $url = "https://download.videolan.org/pub/videolan/vlc/${{ env.VLC_VERSION }}/win64/$archive"
           Invoke-WebRequest -Uri $url -OutFile vlc.zip -UseBasicParsing
-          $checksum = Invoke-WebRequest -Uri "$url.sha256" -UseBasicParsing
+          $checksumRaw = (Invoke-WebRequest -Uri "$url.sha256" -UseBasicParsing).Content
+          $checksumText = if ($checksumRaw -is [byte[]]) { [System.Text.Encoding]::UTF8.GetString($checksumRaw) } else { [string]$checksumRaw }
           $expected = $null
-          foreach ($line in ($checksum.Content -split "`r?`n")) {
+          foreach ($line in ($checksumText -split "`r?`n")) {
             if ($line -match '^\s*([A-Fa-f0-9]{64})\s+[* ]?(.+?)\s*$' -and [System.IO.Path]::GetFileName($Matches[2]) -eq $archive) {
               $expected = $Matches[1].ToLowerInvariant(); break
             }
