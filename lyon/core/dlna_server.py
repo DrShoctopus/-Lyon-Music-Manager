@@ -542,7 +542,7 @@ class DlnaServer:
         tracks = [
             track
             for track in self._tracks(media_type)
-            if track.display_artist == artist and (track.album or "Unknown Album") == album
+            if track.display_artist == artist and track.display_album == album
         ]
         return sorted(tracks, key=_track_number_sort_key)
 
@@ -586,7 +586,7 @@ class DlnaServer:
     def _album_counts(self, media_type: str) -> dict[tuple[str, str], int]:
         counts: dict[tuple[str, str], int] = {}
         for track in self._tracks(media_type):
-            key = (track.display_artist, track.album or "Unknown Album")
+            key = (track.display_artist, track.display_album)
             counts[key] = counts.get(key, 0) + 1
         return dict(
             sorted(
@@ -763,6 +763,15 @@ class _SsdpResponder:
                 sock.bind(("", 1900))
             except OSError:
                 sock.bind(("", 0))
+            # Join the SSDP multicast group so we receive M-SEARCH queries from
+            # control points even when another process on this host has already
+            # joined the group (macOS activates IGMP filtering once any socket
+            # joins, and only delivers multicast to joined sockets thereafter).
+            try:
+                mreq = socket.inet_aton("239.255.255.250") + socket.inet_aton("0.0.0.0")
+                sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+            except OSError as exc:
+                LOG.warning("DLNA SSDP: could not join multicast group: %s", exc)
             self._socket = sock
         except OSError as exc:
             LOG.info("DLNA SSDP unavailable: %s", exc)
