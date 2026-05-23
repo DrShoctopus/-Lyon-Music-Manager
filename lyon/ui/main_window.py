@@ -31,8 +31,9 @@ from ..core.player import Player
 from ..core.replaygain import ReplayGainScanner
 from ..core.scrobbler import ScrobblerService
 from ..core.ripper import find_ffmpeg
-from ..core.settings import Settings
-from .about import COPYRIGHT_NOTICE, THIRD_PARTY_NOTICE
+from ..core.diagnostics import collect_diagnostics_bundle, logs_dir
+from ..core.settings import Settings, is_placeholder_contact
+from .about_dialog import AboutDialog
 from .branding import app_icon
 from .diagnostics_dialog import DiagnosticsDialog
 from .library_stats_dialog import LibraryStatsDialog
@@ -141,6 +142,9 @@ class MainWindow(QMainWindow):
         self._now_playing_view = None
         self._podcast_view = None
         self._radio_view = None
+        # YouTube acknowledgement: tracks the last tab the user actually
+        # confirmed so we can revert there if they decline the gate.
+        self._last_confirmed_tab_idx: int = 0
         self._youtube_view = None
         self._disc_view = None
         self._ripper_view = None
@@ -397,6 +401,12 @@ class MainWindow(QMainWindow):
         help_menu.addAction(kb_act)
         help_menu.addAction(QAction("Library Statistics", self, triggered=self.show_library_stats))
         help_menu.addAction(QAction("Runtime Diagnostics", self, triggered=self.show_diagnostics))
+        help_menu.addSeparator()
+        help_menu.addAction(QAction("Open Log Folder", self, triggered=self.open_log_folder))
+        help_menu.addAction(QAction(
+            "Copy Diagnostics to Clipboard", self, triggered=self.copy_diagnostics
+        ))
+        help_menu.addSeparator()
         about_act = QAction("About", self, triggered=self.show_about)
         about_act.setMenuRole(QAction.MenuRole.AboutRole)
         help_menu.addAction(about_act)
@@ -444,7 +454,17 @@ class MainWindow(QMainWindow):
 
     def _activate_tab(self, idx: int) -> None:
         if 0 <= idx < len(self._TAB_ORDER):
-            self._ensure_tab_view(self._TAB_ORDER[idx])
+            name = self._TAB_ORDER[idx]
+            if name == "YouTube" and not self._ensure_youtube_acknowledged():
+                # Revert the tab bar back to the last confirmed tab. Defer
+                # via QTimer so the signal completes before we re-emit.
+                revert_idx = self._last_confirmed_tab_idx
+                if revert_idx == idx:
+                    revert_idx = 0
+                QTimer.singleShot(0, lambda r=revert_idx: self.tab_bar.setCurrentIndex(r))
+                return
+            self._ensure_tab_view(name)
+        self._last_confirmed_tab_idx = idx
         self.stack.setCurrentIndex(idx)
 
     def _ensure_tab_view(self, name: str) -> QWidget:
@@ -733,6 +753,8 @@ class MainWindow(QMainWindow):
             self._rg_scanner = None
 
     def _on_yt_download(self, url: str) -> None:
+        if not self._ensure_youtube_acknowledged():
+            return
         dlg = YtDownloadDialog(url, self.settings, self.library, self)
         dlg.library_updated.connect(self._library_refresh_timer.start)
         dlg.video_download_finished.connect(self._on_yt_video_download_finished)
@@ -741,6 +763,28 @@ class MainWindow(QMainWindow):
         finally:
             dlg.deleteLater()
 
+    def _ensure_youtube_acknowledged(self) -> bool:
+        """Show the YouTube ToS gate if the user has not already accepted.
+
+        Returns True if the user has previously acknowledged or accepts now,
+        False if they declined this prompt. Persists the flag to
+        ``settings.json`` on first accept.
+        """
+        if self.settings.youtube_acknowledged:
+            return True
+        from .youtube_acknowledgement_dialog import YouTubeAcknowledgementDialog
+
+        dlg = YouTubeAcknowledgementDialog(self)
+        try:
+            accepted = dlg.exec() == dlg.DialogCode.Accepted and dlg.acknowledged
+        finally:
+            dlg.deleteLater()
+        if not accepted:
+            return False
+        self.settings.youtube_acknowledged = True
+        self.settings.save()
+        return True
+
     def _on_yt_video_download_finished(self) -> None:
         self.tab_bar.setCurrentIndex(self._tab_index["Video"])
         self.video_player_view.refresh_catalog()
@@ -748,6 +792,8 @@ class MainWindow(QMainWindow):
 
     def _search_youtube_for_track(self, query: str) -> None:
         if not query:
+            return
+        if not self._ensure_youtube_acknowledged():
             return
         self.tab_bar.setCurrentIndex(self._tab_index["YouTube"])
         youtube_view = self.youtube_view
@@ -1451,21 +1497,44 @@ class MainWindow(QMainWindow):
         dlg.show()
 
     def show_about(self) -> None:
-        dlg = QMessageBox(self)
-        dlg.setWindowTitle("About " + __app_name__)
-        dlg.setIconPixmap(app_icon().pixmap(64, 64))
-        dlg.setText(f"<b>{__app_name__}</b><br>Version {__version__}")
-        dlg.setInformativeText(
-            "Sea Lyon is a music library manager, CD ripper, and player\n"
-            "for Windows, macOS, and Linux.\n\n"
-            f"{COPYRIGHT_NOTICE}\n\n"
-            "Released under the MIT License.\n\n"
-            f"{THIRD_PARTY_NOTICE}"
-        )
+        dlg = AboutDialog(self)
+        dlg.setAttribute(Qt.WA_DeleteOnClose)
+        dlg.exec()
+
+    def open_log_folder(self) -> None:
+        """Help → Open Log Folder. Opens %APPDATA%\\LyonMusicManager\\logs."""
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+
+        path = logs_dir()
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))):
+            self.show_toast(
+                f"Could not open log folder: {path}",
+                level="warning",
+            )
+
+    def copy_diagnostics(self) -> None:
+        """Help → Copy Diagnostics. Builds a redacted bundle to the clipboard."""
+        from PySide6.QtGui import QGuiApplication
+
         try:
-            dlg.exec()
-        finally:
-            dlg.deleteLater()
+            bundle = collect_diagnostics_bundle()
+        except Exception as exc:  # noqa: BLE001 — must never crash the menu
+            self.show_toast(
+                f"Could not build diagnostics bundle: {exc}",
+                level="error",
+            )
+            return
+        clipboard = QGuiApplication.clipboard()
+        if clipboard is None:
+            self.show_toast("Clipboard is not available.", level="warning")
+            return
+        clipboard.setText(bundle)
+        self.show_toast(
+            "Diagnostics copied to clipboard. Paste into a support email.",
+            level="success",
+            duration_ms=4000,
+        )
 
     # ------------------------------------------------------------------ drag-and-drop
     _AUDIO_EXTENSIONS = frozenset(

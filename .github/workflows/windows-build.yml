@@ -241,14 +241,86 @@ jobs:
           }
           if (-not (Test-Path (Join-Path $bundleBin 'fpcalc.exe'))) { throw "Packaged app is missing fpcalc.exe." }
 
+      - name: Read app version
+        id: appver
+        shell: pwsh
+        run: |
+          $m = Select-String -Path "lyon\__init__.py" -Pattern '__version__\s*=\s*"([^"]+)"' | Select-Object -First 1
+          if (-not $m) { throw "Could not read __version__ from lyon\__init__.py." }
+          $ver = $m.Matches[0].Groups[1].Value
+          "version=$ver" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "App version: $ver"
+
       - name: Zip dist folder
         shell: pwsh
-        run: Compress-Archive -Path dist\LyonMusicManager\* -DestinationPath LyonMusicManager-windows.zip
+        run: |
+          $zip = "dist\SeaLyonMediaManager-${{ steps.appver.outputs.version }}-windows.zip"
+          if (Test-Path $zip) { Remove-Item $zip -Force }
+          Compress-Archive -Path dist\LyonMusicManager\* -DestinationPath $zip
+          if (-not (Test-Path $zip)) { throw "Portable zip was not created at $zip." }
 
-      - name: Upload artifact
+      - name: Install Inno Setup 6
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress --yes
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup install failed (exit $LASTEXITCODE)." }
+          $iscc = $null
+          foreach ($candidate in @(
+            'C:\Program Files (x86)\Inno Setup 6\ISCC.exe',
+            'C:\Program Files\Inno Setup 6\ISCC.exe'
+          )) {
+            if (Test-Path $candidate) { $iscc = $candidate; break }
+          }
+          if (-not $iscc) {
+            $found = Get-Command ISCC.exe -ErrorAction SilentlyContinue
+            if ($found) { $iscc = $found.Source }
+          }
+          if (-not $iscc) { throw "ISCC.exe not found after Inno Setup install." }
+          "ISCC_PATH=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "Using ISCC at $iscc"
+
+      - name: Compile installer
+        shell: pwsh
+        run: |
+          $ver = "${{ steps.appver.outputs.version }}"
+          if (-not (Test-Path "build\lyon-app-icon.ico")) {
+            throw "build\lyon-app-icon.ico missing; PyInstaller spec should have generated it."
+          }
+          & "$env:ISCC_PATH" "build\lyon.iss" "/DAppVersion=$ver" /Q
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup compilation failed (exit $LASTEXITCODE)." }
+          $installer = "dist\SeaLyonMediaManager-$ver-Setup.exe"
+          if (-not (Test-Path $installer)) { throw "Expected installer not found at $installer." }
+          $size = "{0:N1} MB" -f ((Get-Item $installer).Length / 1MB)
+          Write-Host "Installer: $installer ($size)"
+
+      - name: Compute SHA256SUMS
+        shell: pwsh
+        run: |
+          $ver = "${{ steps.appver.outputs.version }}"
+          $sums = "dist\SeaLyonMediaManager-$ver-SHA256SUMS.txt"
+          $lines = @()
+          foreach ($file in @(
+            "dist\SeaLyonMediaManager-$ver-windows.zip",
+            "dist\SeaLyonMediaManager-$ver-Setup.exe"
+          )) {
+            if (Test-Path $file) {
+              $h = (Get-FileHash -Algorithm SHA256 $file).Hash.ToLowerInvariant()
+              $name = [System.IO.Path]::GetFileName($file)
+              $lines += "$h  $name"
+              Write-Host "$h  $name"
+            }
+          }
+          if ($lines.Count -eq 0) { throw "No release artefacts found for SHA-256 manifest." }
+          $lines | Out-File -Encoding ASCII -FilePath $sums
+          if (-not (Test-Path $sums)) { throw "SHA256SUMS file was not written to $sums." }
+
+      - name: Upload release artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: LyonMusicManager-windows
-          path: LyonMusicManager-windows.zip
+          name: SeaLyonMediaManager-${{ steps.appver.outputs.version }}-windows
+          path: |
+            dist/SeaLyonMediaManager-${{ steps.appver.outputs.version }}-windows.zip
+            dist/SeaLyonMediaManager-${{ steps.appver.outputs.version }}-Setup.exe
+            dist/SeaLyonMediaManager-${{ steps.appver.outputs.version }}-SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 30

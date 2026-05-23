@@ -278,6 +278,8 @@ class Settings:
     last_cast_renderer: str = ""
     radio_stations: list[dict[str, object]] = field(default_factory=list)
     podcast_subscriptions: list[dict[str, object]] = field(default_factory=list)
+    youtube_acknowledged: bool = False  # gate: user has accepted YouTube ToS disclaimer
+    smartscreen_advisory_shown: bool = False  # gate: one-time SmartScreen explainer toast
 
     def __post_init__(self) -> None:
         self.rip_format = str(self.rip_format or "flac").lower()
@@ -311,6 +313,8 @@ class Settings:
         self.last_cast_renderer = str(self.last_cast_renderer or "").strip()
         self.radio_stations = normalize_radio_stations(self.radio_stations)
         self.podcast_subscriptions = normalize_podcast_subscriptions(self.podcast_subscriptions)
+        self.youtube_acknowledged = _bool_value(self.youtube_acknowledged, False)
+        self.smartscreen_advisory_shown = _bool_value(self.smartscreen_advisory_shown, False)
         self.yt_audio_format = str(self.yt_audio_format or "flac").lower()
         if self.yt_audio_format not in _YT_AUDIO_FORMATS:
             self.yt_audio_format = "flac"
