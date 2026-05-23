@@ -55,6 +55,8 @@ class Player(QObject):
         self._queue: list[Track] = []
         self._index: int = -1
         self._shuffle = False
+        self._shuffle_played: set[int] = set()
+        self._play_history: list[int] = []
         self._repeat = RepeatMode.OFF
         self._equalizer_enabled = False
         self._equalizer_preamp = 0
@@ -90,6 +92,9 @@ class Player(QObject):
         self._queue = list(tracks)
         self._index = max(-1, min(current_index, len(tracks) - 1)) if tracks else -1
         self._active_source_key = None
+        self._reset_play_tracking()
+        if 0 <= self._index < len(self._queue):
+            self._shuffle_played.add(self._index)
         self.queue_changed.emit()
         if 0 <= self._index < len(self._queue):
             self.track_changed.emit(self._queue[self._index])
@@ -98,6 +103,7 @@ class Player(QObject):
         self._queue = list(tracks)
         self._index = -1
         self._active_source_key = None
+        self._reset_play_tracking()
         self.queue_changed.emit()
         if self._queue:
             self.play_index(max(0, min(start_index, len(self._queue) - 1)))
@@ -122,12 +128,14 @@ class Player(QObject):
         self._queue = []
         self._index = -1
         self._active_source_key = None
+        self._reset_play_tracking()
         self.queue_changed.emit()
         self.track_changed.emit(None)
 
     def remove_queue_index(self, idx: int) -> None:
         if not (0 <= idx < len(self._queue)):
             return
+        self._remove_play_tracking_index(idx)
         removing_current = idx == self._index
         was_playing = self.is_playing()
         if idx == self._gapless_prebuffer_index:
@@ -178,6 +186,7 @@ class Player(QObject):
                 self._gapless_prebuffer_index -= 1
             elif new_index <= pb < old_index:
                 self._gapless_prebuffer_index += 1
+        self._move_play_tracking_index(old_index, new_index)
         self.queue_changed.emit()
 
     def current(self) -> Optional[Track]:
@@ -199,21 +208,31 @@ class Player(QObject):
         return self._backend.is_playing()
 
     # --------------------------------------------------------------- transport
-    def play_index(self, idx: int) -> None:
+    def play_index(self, idx: int) -> bool:
+        return self._play_index(idx)
+
+    def _play_index(self, idx: int, *, record_history: bool = True) -> bool:
         if not (0 <= idx < len(self._queue)):
-            return
+            return False
         if not self._ensure_playback_available():
-            return
+            return False
         self._cancel_gapless_prebuffer()
-        if self._should_crossfade_to(idx) and self._crossfade_to_index(idx):
-            return
+        previous_index = self._index
+        if self._should_crossfade_to(idx) and self._crossfade_to_index(
+            idx,
+            previous_index=previous_index,
+            record_history=record_history,
+        ):
+            return True
         self._cancel_crossfade()
-        self._index = idx
         track = self._queue[idx]
+        old_multiplier = self._rg_multiplier
         self._rg_multiplier = self._rg_multiplier_for_track(track)
-        self._start_backend_track(self._backend, track, self._user_volume)
-        self._active_source_key = self._track_source_key(track)
-        self.track_changed.emit(track)
+        if not self._start_backend_track(self._backend, track, self._user_volume):
+            self._rg_multiplier = old_multiplier
+            return False
+        self._commit_track_index(idx, previous_index, record_history=record_history)
+        return True
 
     def play(self) -> None:
         if self._index < 0 and self._queue:
@@ -224,9 +243,12 @@ class Player(QObject):
         track = self.current()
         if track is not None and self._active_source_key != self._track_source_key(track):
             self._cancel_crossfade()
+            old_multiplier = self._rg_multiplier
             self._rg_multiplier = self._rg_multiplier_for_track(track)
-            self._start_backend_track(self._backend, track, self._user_volume)
-            self._active_source_key = self._track_source_key(track)
+            if self._start_backend_track(self._backend, track, self._user_volume):
+                self._active_source_key = self._track_source_key(track)
+            else:
+                self._rg_multiplier = old_multiplier
             return
         self._backend.play()
 
@@ -293,6 +315,7 @@ class Player(QObject):
             self.stop()
             self._index = -1
             self._active_source_key = None
+            self._reset_play_tracking()
             self.track_changed.emit(None)
             return
         self.play_index(nxt)
@@ -301,8 +324,20 @@ class Player(QObject):
         if self._backend.position() > 4000:
             self._backend.set_position(0)
             return
+        if self._shuffle:
+            while self._play_history:
+                idx = self._play_history.pop()
+                if not (0 <= idx < len(self._queue)):
+                    continue  # stale entry from a removed track — discard
+                if idx != self._index:
+                    self._play_index(idx, record_history=False)
+                    return
+                break  # history points at current track — stop here
+            return
         if self._index > 0:
             self.play_index(self._index - 1)
+        elif self._repeat == RepeatMode.ALL and self._queue:
+            self.play_index(len(self._queue) - 1)
 
     def seek(self, ms: int) -> None:
         self._cancel_crossfade()
@@ -382,7 +417,16 @@ class Player(QObject):
         return self._shuffle
 
     def set_shuffle(self, on: bool) -> None:
+        was_shuffle = self._shuffle
         self._shuffle = bool(on)
+        if not self._shuffle:
+            self._reset_play_tracking()
+        elif not was_shuffle:
+            self._reset_play_tracking()
+            if 0 <= self._index < len(self._queue):
+                self._shuffle_played.add(self._index)
+        elif 0 <= self._index < len(self._queue):
+            self._shuffle_played.add(self._index)
 
     def repeat(self) -> RepeatMode:
         return self._repeat
@@ -456,6 +500,54 @@ class Player(QObject):
         except RuntimeError:
             pass
 
+    def _reset_play_tracking(self) -> None:
+        self._shuffle_played.clear()
+        self._play_history.clear()
+
+    def _commit_track_index(
+        self,
+        idx: int,
+        previous_index: int,
+        *,
+        record_history: bool = True,
+    ) -> None:
+        if (
+            record_history
+            and 0 <= previous_index < len(self._queue)
+            and previous_index != idx
+        ):
+            self._play_history.append(previous_index)
+        self._index = idx
+        self._active_source_key = self._track_source_key(self._queue[idx])
+        if self._shuffle:
+            self._shuffle_played.add(idx)
+        self.track_changed.emit(self._queue[idx])
+
+    def _remove_play_tracking_index(self, removed: int) -> None:
+        self._play_history = [
+            idx if idx < removed else idx - 1
+            for idx in self._play_history
+            if idx != removed
+        ]
+        self._shuffle_played = {
+            idx if idx < removed else idx - 1
+            for idx in self._shuffle_played
+            if idx != removed
+        }
+
+    def _move_play_tracking_index(self, old_index: int, new_index: int) -> None:
+        def remap(idx: int) -> int:
+            if idx == old_index:
+                return new_index
+            if old_index < idx <= new_index:
+                return idx - 1
+            if new_index <= idx < old_index:
+                return idx + 1
+            return idx
+
+        self._play_history = [remap(idx) for idx in self._play_history]
+        self._shuffle_played = {remap(idx) for idx in self._shuffle_played}
+
     def _on_position_changed(self, pos_ms: int, dur_ms: int) -> None:
         self.position_changed.emit(pos_ms, dur_ms)
         self._maybe_auto_crossfade(pos_ms, dur_ms)
@@ -476,7 +568,18 @@ class Player(QObject):
 
     def _next_index(self) -> Optional[int]:
         if self._shuffle:
-            candidates = [i for i in range(len(self._queue)) if i != self._index]
+            played = set(self._shuffle_played)
+            if 0 <= self._index < len(self._queue):
+                played.add(self._index)
+            candidates = [
+                i for i in range(len(self._queue))
+                if i != self._index and i not in played
+            ]
+            if not candidates and self._repeat == RepeatMode.ALL:
+                self._shuffle_played.clear()
+                if 0 <= self._index < len(self._queue):
+                    self._shuffle_played.add(self._index)
+                candidates = [i for i in range(len(self._queue)) if i != self._index]
             if not candidates:
                 return self._index if self._repeat == RepeatMode.ALL else None
             return random.choice(candidates)
@@ -492,7 +595,7 @@ class Player(QObject):
         track: Track,
         volume: int,
         muted: bool | None = None,
-    ) -> None:
+    ) -> bool:
         backend.set_source(
             track.playback_uri or track.path,
             is_location=track.playback_is_location,
@@ -505,7 +608,12 @@ class Player(QObject):
         )
         backend.set_muted(self.is_muted() if muted is None else muted)
         backend.set_volume(self._rg_applied_vol(volume, self._rg_multiplier))
-        backend.play()
+        result = backend.play()
+        if result is False:
+            return False
+        if result is None:
+            return backend.is_playing()
+        return True
 
     @staticmethod
     def _track_source_key(track: Track) -> tuple:
@@ -540,15 +648,26 @@ class Player(QObject):
         nxt = self._next_index()
         if nxt is None or nxt == self._index:
             return
-        if (
-            self._library is not None
-            and 0 <= self._index < len(self._queue)
-            and self._queue[self._index].is_library_item
-        ):
-            self._library.increment_play_count(self._queue[self._index].id)
-        self._crossfade_to_index(nxt)
+        outgoing_track = (
+            self._queue[self._index]
+            if 0 <= self._index < len(self._queue)
+            else None
+        )
+        if self._crossfade_to_index(nxt):
+            if (
+                self._library is not None
+                and outgoing_track is not None
+                and outgoing_track.is_library_item
+            ):
+                self._library.increment_play_count(outgoing_track.id)
 
-    def _crossfade_to_index(self, idx: int) -> bool:
+    def _crossfade_to_index(
+        self,
+        idx: int,
+        *,
+        previous_index: int | None = None,
+        record_history: bool = True,
+    ) -> bool:
         if self._backend_factory is None:
             return False
         if self._fade_timer is not None or self._fade_out_backend is not None:
@@ -560,24 +679,32 @@ class Player(QObject):
         self._adopt_backend(next_backend)
         is_available = getattr(next_backend, "is_available", None)
         if callable(is_available) and not is_available():
-            self._cleanup_backend(next_backend)
+            self._dispose_transient_backend(next_backend)
             return False
         if self._audio_output or self._audio_device:
             self._set_backend_audio_device(next_backend, self._audio_output, self._audio_device)
 
         previous_backend = self._backend
         muted = previous_backend.is_muted()
+        old_multiplier = self._rg_multiplier
+        track = self._queue[idx]
+        new_multiplier = self._rg_multiplier_for_track(track)
+        self._rg_multiplier = new_multiplier
+        if not self._start_backend_track(next_backend, track, 0, muted=muted):
+            self._rg_multiplier = old_multiplier
+            self._dispose_transient_backend(next_backend)
+            return False
+
         self._disconnect_backend(previous_backend)
         self._backend = next_backend
         self._connect_backend(next_backend)
 
-        self._rg_fade_out_multiplier = self._rg_multiplier
-        self._index = idx
-        track = self._queue[idx]
-        self._rg_multiplier = self._rg_multiplier_for_track(track)
-        self._start_backend_track(next_backend, track, 0, muted=muted)
-        self._active_source_key = self._track_source_key(track)
-        self.track_changed.emit(track)
+        self._rg_fade_out_multiplier = old_multiplier
+        self._commit_track_index(
+            idx,
+            self._index if previous_index is None else previous_index,
+            record_history=record_history,
+        )
 
         self._fade_out_backend = previous_backend
         self._clear_fade_timer()
@@ -680,20 +807,19 @@ class Player(QObject):
             self.next()
             return
         muted = self._backend.is_muted()
+        previous_index = self._index
         old_backend = self._backend
         self._disconnect_backend(old_backend)
         self._backend = backend
         self._connect_backend(backend)
-        self._index = idx
         track = self._queue[idx]
         self._rg_multiplier = self._rg_multiplier_for_track(track)
         backend.set_muted(muted)
         backend.set_volume(self._rg_applied_vol(self._user_volume, self._rg_multiplier))
         backend.play()
-        self._active_source_key = self._track_source_key(track)
         old_backend.stop()
         self._dispose_transient_backend(old_backend)
-        self.track_changed.emit(track)
+        self._commit_track_index(idx, previous_index)
 
     def _cancel_gapless_prebuffer(self) -> None:
         backend = self._gapless_prebuffer_backend

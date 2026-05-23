@@ -35,3 +35,44 @@ def test_vlc_check_warns_when_only_vlc_app_is_on_path(monkeypatch, tmp_path) -> 
 
     assert check.status is DiagnosticStatus.WARNING
     assert "libVLC was not found" in check.detail
+
+
+def test_dlna_network_check_warns_when_udp_socket_is_denied(monkeypatch) -> None:
+    class DeniedSocket:
+        def setsockopt(self, *_args):
+            pass
+
+        def bind(self, *_args):
+            raise PermissionError("Operation not permitted")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(diagnostics.socket, "socket", lambda *_args: DeniedSocket())
+
+    check = diagnostics.check_dlna_network()
+
+    assert check.status is DiagnosticStatus.WARNING
+    assert "Operation not permitted" in check.detail
+    assert "Local Network" in check.fix
+
+
+def test_dlna_network_check_warns_when_advertised_address_is_loopback(monkeypatch) -> None:
+    class WorkingSocket:
+        def setsockopt(self, *_args):
+            pass
+
+        def bind(self, *_args):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(diagnostics.socket, "socket", lambda *_args: WorkingSocket())
+    monkeypatch.setattr(diagnostics, "_local_ip", lambda: "127.0.0.1")
+
+    check = diagnostics.check_dlna_network()
+
+    assert check.status is DiagnosticStatus.WARNING
+    assert "127.0.0.1" in check.detail
+    assert "LAN" in check.fix

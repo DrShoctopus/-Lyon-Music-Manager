@@ -17,7 +17,7 @@ from lyon.core.library import Track
 from lyon.core.metadata import ArtistInfo
 from lyon.core.player import Player
 from lyon.core.settings import Settings
-from lyon.ui.now_playing import NowPlayingView, _fetch_lrclib, _parse_lrc
+from lyon.ui.now_playing import NowPlayingView, _InfoPanel, _fetch_lrclib, _parse_lrc
 
 
 class _FakeBackend(QtCore.QObject):
@@ -64,6 +64,28 @@ def _track(track_id: int = 1, title: str = "Song", duration: float = 200.0) -> T
         album="Album", track_no=1, disc_no=1, year=2026,
         genre="", duration=duration,
     )
+
+
+def test_info_panel_uses_display_album_for_blank_video_album(app):
+    video = _track(title="Video", duration=180.0)
+    video.album = ""
+    video.media_type = "video"
+
+    class LibraryStub:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def tracks_for_album(self, artist: str, album: str, media_type: str):
+            self.calls.append((artist, album, media_type))
+            return [video]
+
+    library = LibraryStub()
+    panel = _InfoPanel()
+
+    panel.set_track(video, library)
+
+    assert library.calls == [("Artist", "YouTube Downloads", "video")]
+    assert "Tracks: 1" in panel._details.text()
 
 
 # ---- _parse_lrc: timing normalization -----------------------------------

@@ -266,6 +266,21 @@ def test_lookup_cuetools_db_layout_uses_exact_toc_matching_by_default(monkeypatc
     assert captured["params"]["toc"] == "0:45000"
 
 
+def test_lookup_cuetools_db_layout_rejects_xml_entities(monkeypatch):
+    _stub_settings(monkeypatch)
+
+    class FakeResponse:
+        status_code = 200
+        content = (
+            b'<!DOCTYPE ctdb [<!ENTITY boom "boom">]>'
+            b'<ctdb><metadata artist="&boom;" album="Album" /></ctdb>'
+        )
+
+    monkeypatch.setattr(metadata.requests, "get", lambda *args, **kwargs: FakeResponse())
+
+    assert metadata.lookup_cuetools_db_layout("0:45000") is None
+
+
 def test_ctdb_meta_to_album_maps_tracks_and_primary_art():
     meta = ET.fromstring(
         """

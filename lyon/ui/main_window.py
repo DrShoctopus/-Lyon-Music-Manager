@@ -35,12 +35,13 @@ from ..core.settings import Settings
 from .about import COPYRIGHT_NOTICE, THIRD_PARTY_NOTICE
 from .branding import app_icon
 from .diagnostics_dialog import DiagnosticsDialog
+from .library_stats_dialog import LibraryStatsDialog
 from .duplicate_dialog import DuplicateDialog
 from .cast_dialog import CastDialog
 from .equalizer_dialog import EqualizerDialog
 from .first_run_dialog import FirstRunDialog
 from .library_view import LibraryView
-from .now_playing import TransportBar
+from .transport_bar import TransportBar
 from .queue_dialog import QueueDialog
 from .styles import apply_app_styles
 from .toast import Toast
@@ -320,7 +321,7 @@ class MainWindow(QMainWindow):
                     min(self.settings.queue_current_index, len(restored) - 1),
                 )
 
-        # macOS global media keys (PyObjC optional dep — no-op on other platforms)
+        # Platform global media keys (optional dependencies; no-op when unavailable)
         from ..core.media_keys import register_media_key_handler
         self._media_key_handler = register_media_key_handler(self.player)
 
@@ -391,6 +392,10 @@ class MainWindow(QMainWindow):
         settings_menu.addAction(settings_act)
 
         help_menu = m.addMenu("&Help")
+        kb_act = QAction("Knowledge Base", self, triggered=self.show_knowledge_base)
+        kb_act.setShortcut("F1")
+        help_menu.addAction(kb_act)
+        help_menu.addAction(QAction("Library Statistics", self, triggered=self.show_library_stats))
         help_menu.addAction(QAction("Runtime Diagnostics", self, triggered=self.show_diagnostics))
         about_act = QAction("About", self, triggered=self.show_about)
         about_act.setMenuRole(QAction.MenuRole.AboutRole)
@@ -1122,9 +1127,16 @@ class MainWindow(QMainWindow):
         finally:
             dlg.deleteLater()
         if accepted and result_settings is not None:
+            if (
+                result_settings.dlna_enabled
+                and not old_dlna[0]
+                and not self._confirm_dlna_lan_exposure()
+            ):
+                result_settings.dlna_enabled = False
             self.settings = result_settings
             self.settings.save()
             metadata.reset_musicbrainz_useragent()
+            metadata.clear_metadata_cache()   # evict stale entries if API key changed
             if self._ripper_view is not None:
                 self._ripper_view.apply_settings(self.settings)
             if self._now_playing_view is not None:
@@ -1184,6 +1196,7 @@ class MainWindow(QMainWindow):
             self.settings = result_settings
             self.settings.save()
             metadata.reset_musicbrainz_useragent()
+            metadata.clear_metadata_cache()   # evict stale entries if API key changed
             if self._ripper_view is not None:
                 self._ripper_view.apply_settings(self.settings)
             if self._now_playing_view is not None:
@@ -1198,6 +1211,13 @@ class MainWindow(QMainWindow):
                 self._start_scan(self.settings.library_paths, "Scanned")
             self._restart_library_watcher()
             self.show_toast("Setup saved.", level="success")
+
+    def show_library_stats(self) -> None:
+        dlg = LibraryStatsDialog(self.library, parent=self)
+        try:
+            dlg.exec()
+        finally:
+            dlg.deleteLater()
 
     def show_diagnostics(self) -> None:
         dlg = DiagnosticsDialog(parent=self)
@@ -1222,6 +1242,21 @@ class MainWindow(QMainWindow):
             return
         if show_toast:
             self.show_toast("DLNA sharing is running.", level="success")
+
+    def _confirm_dlna_lan_exposure(self) -> bool:
+        result = QMessageBox.question(
+            self,
+            "Enable DLNA Sharing?",
+            (
+                "DLNA sharing advertises your indexed audio and video files on the local network "
+                "while Sea Lyon is running. Devices on that network may be able to browse and "
+                "stream your library without a password.\n\n"
+                "Enable DLNA sharing?"
+            ),
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        return result == QMessageBox.Yes
 
     def open_queue(self) -> None:
         if self._queue_dialog is None:
@@ -1268,7 +1303,25 @@ class MainWindow(QMainWindow):
         self._cast_dialog = None
 
     def _start_cast(self, renderer) -> None:
+        video_track = self._current_video_cast_track()
+        if video_track is not None:
+            self.cast_controller.start_cast_track(
+                renderer,
+                video_track,
+                self.dlna_server,
+                pause_local=self.video_player_view.pause_playback,
+            )
+            return
         self.cast_controller.start_cast(renderer, self.player, self.dlna_server)
+
+    def _current_video_cast_track(self) -> Track | None:
+        if self._video_player_view is None or self.stack.currentWidget() is not self._video_player_view:
+            return None
+        current_track = getattr(self._video_player_view, "current_library_track", None)
+        if not callable(current_track):
+            return None
+        track = current_track()
+        return track if isinstance(track, Track) and track.is_video else None
 
     def _stop_cast(self) -> None:
         self.cast_controller.stop_cast()
@@ -1384,6 +1437,19 @@ class MainWindow(QMainWindow):
     def _clear_equalizer_dialog(self, *_args) -> None:
         self._equalizer_dialog = None
 
+    def show_knowledge_base(self) -> None:
+        from .knowledge_base_dialog import KnowledgeBaseDialog
+        existing = getattr(self, "_knowledge_base_dialog", None)
+        if existing is not None and existing.isVisible():
+            existing.raise_()
+            existing.activateWindow()
+            return
+        dlg = KnowledgeBaseDialog(self)
+        dlg.setAttribute(Qt.WA_DeleteOnClose)
+        dlg.destroyed.connect(lambda *_: setattr(self, "_knowledge_base_dialog", None))
+        self._knowledge_base_dialog = dlg
+        dlg.show()
+
     def show_about(self) -> None:
         dlg = QMessageBox(self)
         dlg.setWindowTitle("About " + __app_name__)
@@ -1491,7 +1557,9 @@ class MainWindow(QMainWindow):
             ev.ignore()
             return
         self.cast_controller.stop_cast()
+        self.cast_controller.shutdown()
         self.player.stop()
+        self._shutdown_media_key_handler()
         self.dlna_server.stop()
         if self._youtube_view is not None:
             self._youtube_view.shutdown()
@@ -1517,3 +1585,10 @@ class MainWindow(QMainWindow):
         close_cd_dll_handles()
         close_dll_handles()
         super().closeEvent(ev)
+
+    def _shutdown_media_key_handler(self) -> None:
+        handler = getattr(self, "_media_key_handler", None)
+        self._media_key_handler = None
+        close = getattr(handler, "close", None)
+        if callable(close):
+            close()

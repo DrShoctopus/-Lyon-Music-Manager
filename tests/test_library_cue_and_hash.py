@@ -593,9 +593,10 @@ def test_row_to_track_sets_playback_uri_for_cue(tmp_path):
     assert any(o.startswith(":stop-time=") for o in t1.playback_options)
 
 
-def test_row_to_track_last_cue_track_has_no_stop_time(tmp_path):
+def test_row_to_track_last_cue_track_uses_image_duration_for_stop_time(tmp_path, monkeypatch):
     img = _write_image(tmp_path)
     cue = _write_cue(tmp_path, ["Only Track"])
+    monkeypatch.setattr(library_module, "_audio_duration_seconds", lambda path: 60.0)
     library = Library(tmp_path / "lib.db")
     library._index_cue_file(str(cue))
 
@@ -604,8 +605,8 @@ def test_row_to_track_last_cue_track_has_no_stop_time(tmp_path):
     ).fetchall()
     from lyon.core.library import _row_to_track
     t = _row_to_track(tracks[0])
-    # duration is 0 for last track → no :stop-time
-    assert not any(o.startswith(":stop-time=") for o in t.playback_options)
+    assert t.playback_uri == str(img.resolve())
+    assert ":stop-time=60.000" in t.playback_options
 
 
 # ===========================================================================

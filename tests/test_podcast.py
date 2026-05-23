@@ -108,6 +108,18 @@ def test_parse_opml_wraps_malformed_xml_as_value_error():
         raise AssertionError("malformed OPML should raise ValueError")
 
 
+def test_parse_opml_rejects_xml_entities():
+    try:
+        parse_opml_text(
+            """<!DOCTYPE opml [<!ENTITY boom "boom">]>
+            <opml version="2.0"><body><outline text="&boom;" /></body></opml>"""
+        )
+    except ValueError as exc:
+        assert "Invalid OPML XML" in str(exc)
+    else:
+        raise AssertionError("entity-bearing OPML should raise ValueError")
+
+
 def test_podcast_subscription_settings_normalize_and_merge():
     settings = Settings(
         podcast_subscriptions=[

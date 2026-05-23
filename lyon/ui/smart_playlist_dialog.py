@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
 
 from ..core.smart_playlist import (
     FIELDS, FIELD_MAP, OPS_FOR_TYPE, ORDER_BY_OPTIONS,
-    Rule, SmartPlaylistSpec, spec_from_json, spec_to_json,
+    Rule, SmartPlaylistSpec, spec_from_json,
 )
 
 

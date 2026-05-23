@@ -24,10 +24,8 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 
-try:
-    import defusedxml.ElementTree as ET
-except ImportError:
-    import xml.etree.ElementTree as ET  # type: ignore[no-redef]
+import defusedxml.ElementTree as ET
+from defusedxml.common import DefusedXmlException
 
 import requests
 
@@ -232,7 +230,7 @@ def fetch_ctdb_crcs(
 
     try:
         root = ET.fromstring(resp.content)
-    except ET.ParseError:
+    except (ET.ParseError, DefusedXmlException):
         return None
 
     result: dict[int, list[tuple[int, int]]] = {}

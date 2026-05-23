@@ -34,10 +34,7 @@ from lyon.core.ctdb_verify import (  # noqa: E402
     verify_rips,
 )
 
-try:
-    import defusedxml.ElementTree as ET
-except ImportError:
-    import xml.etree.ElementTree as ET
+import defusedxml.ElementTree as ET
 
 
 # ---------------------------------------------------------------------------
@@ -239,6 +236,18 @@ def test_fetch_ctdb_crcs_returns_none_on_network_error(monkeypatch):
 def test_fetch_ctdb_crcs_returns_none_on_bad_xml(monkeypatch):
     session = mock.MagicMock()
     session.get.return_value = mock.MagicMock(status_code=200, content=b"not xml <<<")
+    assert fetch_ctdb_crcs("0:15000:45000", session=session) is None
+
+
+def test_fetch_ctdb_crcs_rejects_xml_entities(monkeypatch):
+    session = mock.MagicMock()
+    session.get.return_value = mock.MagicMock(
+        status_code=200,
+        content=(
+            b'<!DOCTYPE ctdb [<!ENTITY boom "boom">]>'
+            b'<ctdb><entry confidence="1"><track id="1" CRC="&boom;"/></entry></ctdb>'
+        ),
+    )
     assert fetch_ctdb_crcs("0:15000:45000", session=session) is None
 
 

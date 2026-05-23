@@ -20,6 +20,7 @@ if not SPEC_DIR.is_dir():
     SPEC_DIR = SPEC_DIR.parent
 ROOT = SPEC_DIR.parent
 BIN = ROOT / "bin"
+UI_ASSETS = ROOT / "lyon" / "ui" / "assets"
 BRAND_DIRS = (
     ROOT / "docs" / "brand",
     ROOT / "Docs" / "brand",
@@ -59,6 +60,9 @@ if BIN.exists():
                 if child.is_file():
                     dest = Path("bin") / entry.name / child.relative_to(entry).parent
                     datas.append((str(child), str(dest)))
+
+if UI_ASSETS.exists():
+    datas.append((str(UI_ASSETS), str(Path("lyon") / "ui" / "assets")))
 
 for brand_dir in BRAND_DIRS:
     if brand_dir.exists():

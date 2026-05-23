@@ -186,7 +186,8 @@ class YtDownloadDialog(QDialog):
         self._close_btn.setEnabled(True)
         self._canceling = False
 
-        worker = YtDownloadWorker(url, mode, fmt, output_dir, playlist, self)
+        quality = self.settings.yt_video_quality if mode == "video" else "best"
+        worker = YtDownloadWorker(url, mode, fmt, output_dir, playlist, quality, self)
         self._worker = worker
         worker.progress.connect(self._log)
         worker.track_ready.connect(self._on_track_ready)

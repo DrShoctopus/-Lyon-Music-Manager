@@ -7,13 +7,10 @@ from pathlib import Path
 from urllib.parse import quote, urljoin, urlparse, urlunparse
 from urllib.request import Request, urlopen
 
-try:
-    import defusedxml.ElementTree as ET
-    from defusedxml.common import DefusedXmlException
-    _XML_EXCEPTIONS = (ET.ParseError, DefusedXmlException)
-except ImportError:  # defusedxml is an optional hardening layer
-    import xml.etree.ElementTree as ET  # type: ignore[no-redef]
-    _XML_EXCEPTIONS = (ET.ParseError,)
+import defusedxml.ElementTree as ET
+from defusedxml.common import DefusedXmlException
+
+_XML_EXCEPTIONS = (ET.ParseError, DefusedXmlException)
 
 
 _ITUNES_NS = "http://www.itunes.com/dtds/podcast-1.0.dtd"

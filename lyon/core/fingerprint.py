@@ -4,7 +4,7 @@ Requires the ``pyacoustid`` package and the ``fpcalc`` binary (Chromaprint).
 Both are optional; all public functions degrade gracefully when unavailable.
 
 Register a free application API key at https://acoustid.org/new-application
-and set ACOUSTID_API_KEY below.
+and set ``LYON_ACOUSTID_API_KEY`` or ``ACOUSTID_API_KEY`` in the environment.
 """
 from __future__ import annotations
 
@@ -15,7 +15,8 @@ from pathlib import Path
 
 LOG = logging.getLogger(__name__)
 
-# Register your application at https://acoustid.org/new-application
+# Tests and downstream packagers may override this constant, but shipped builds
+# should prefer environment configuration so secrets never live in source.
 ACOUSTID_API_KEY: str = ""
 
 
