@@ -11,6 +11,7 @@ from lyon.core.disc_playback import (
     cdda_track_options,
     cdda_uri,
     dvd_uri,
+    drive_root,
     probe_video_disc,
     tracks_from_audio_cd,
     vcd_uri,
@@ -40,6 +41,10 @@ def test_disc_mrl_builders_normalize_windows_drive_letters():
     assert dvd_uri("D:", menus=False) == "dvdsimple:///D:/"
     assert vcd_uri("D:\\") == "vcd:///D:/"
     assert cdda_track_options(3) == (":cdda-track=3",)
+
+
+def test_drive_root_preserves_full_windows_paths():
+    assert drive_root(r"C:\Users\runneradmin\disc") == r"C:\Users\runneradmin\disc"
 
 
 def test_tracks_from_audio_cd_uses_metadata_and_transient_playback_source():

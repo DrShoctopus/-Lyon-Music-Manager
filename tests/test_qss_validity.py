@@ -53,7 +53,7 @@ def _setobjectname_values_in_ui_tree() -> set[str]:
     """Scan every Python source under lyon/ui for setObjectName("X") literals."""
     used: set[str] = set()
     for path in Path("lyon/ui").glob("*.py"):
-        src = path.read_text()
+        src = path.read_text(encoding="utf-8")
         # Capture `setObjectName("value")` and `setObjectName('value')`.
         for m in re.finditer(r'setObjectName\(\s*["\']([A-Za-z_][A-Za-z0-9_]*)["\']\s*\)', src):
             used.add(m.group(1))

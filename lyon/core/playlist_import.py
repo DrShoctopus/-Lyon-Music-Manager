@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import posixpath
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -22,6 +23,8 @@ def _normalize(entry: str, base: Path) -> str:
     or unreadable parents; os.path.abspath/normpath always succeed and produce
     a string that's good enough for exact + case-insensitive matching.
     """
+    if entry.startswith("/") and not entry.startswith("//"):
+        return posixpath.normpath(entry)
     p = Path(entry)
     if not p.is_absolute():
         p = base / p

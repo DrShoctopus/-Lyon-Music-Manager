@@ -278,7 +278,7 @@ class VlcPlaybackBackend(PlaybackBackend):
         media = (
             self._instance.media_new_location(path)
             if is_location
-            else self._instance.media_new_path(str(Path(path)))
+            else self._instance.media_new_path(str(path))
         )
         for option in options:
             try:
