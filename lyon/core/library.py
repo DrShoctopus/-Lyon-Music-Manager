@@ -34,7 +34,11 @@ SUPPORTED_EXTS = SUPPORTED_AUDIO_EXTS | SUPPORTED_VIDEO_EXTS
 SUPPORTED_CUE_EXT = ".cue"
 
 DISPLAY_ARTIST_SQL = "COALESCE(NULLIF(album_artist,''), NULLIF(artist,''), 'Unknown Artist')"
-DISPLAY_ALBUM_SQL = "COALESCE(NULLIF(album,''), 'Unknown Album')"
+DISPLAY_ALBUM_SQL = (
+    "CASE WHEN album IS NOT NULL AND album != '' THEN album"
+    " WHEN media_type = 'video' THEN 'YouTube Downloads'"
+    " ELSE 'Unknown Album' END"
+)
 
 # Original table shape at first release (version 0).
 # Never add migrated columns here — keep them in _MIGRATIONS so that
@@ -146,6 +150,10 @@ class Track:
     @property
     def display_artist(self) -> str:
         return self.album_artist or self.artist or "Unknown Artist"
+
+    @property
+    def display_album(self) -> str:
+        return self.album or ("YouTube Downloads" if self.is_video else "Unknown Album")
 
     @property
     def is_video(self) -> bool:

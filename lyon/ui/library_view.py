@@ -1138,10 +1138,10 @@ class LibraryView(QWidget):
             seen: set[tuple[str, str]] = set()
             albums = []
             for t in tracks:
-                key_t = (t.display_artist, t.album or "Unknown Album")
+                key_t = (t.display_artist, t.display_album)
                 if key_t not in seen:
                     seen.add(key_t)
-                    albums.append((t.display_artist, t.album or "Unknown Album", t.artwork_path))
+                    albums.append((t.display_artist, t.display_album, t.artwork_path))
 
         pool = QThreadPool.globalInstance()
         for artist, album, art in albums:
@@ -1453,7 +1453,7 @@ class LibraryView(QWidget):
     def _track_details(track: Track, duration: str) -> list[tuple[str, str]]:
         file_type = Path(track.path).suffix.lstrip(".").upper() or "Unknown"
         artist = track.display_artist
-        album = track.album or "Unknown Album"
+        album = track.display_album
         bitrate = LibraryView._format_bitrate(track.bitrate)
         sample_rate = LibraryView._format_sample_rate(track.samplerate)
         return [
@@ -1932,7 +1932,7 @@ class LibraryView(QWidget):
 
     def _show_track_album(self, track: Track) -> None:
         artist = track.display_artist
-        album = track.album or "Unknown Album"
+        album = track.display_album
         # Search only real artist rows (skip virtual collection sentinels)
         artist_row = -1
         for row in range(self.artists_model.rowCount()):
@@ -1968,7 +1968,7 @@ class LibraryView(QWidget):
             self._set_view_mode_checked(self._list_mode_btn)
             has_tracks = bool(self._library_all_artists(self._media_type_filter))
             self._browser_stack.setCurrentIndex(1 if has_tracks else 0)
-        self._navigate_to_album(track.display_artist, track.album or "Unknown Album")
+        self._navigate_to_album(track.display_artist, track.display_album)
         row = self._row_for_track(track)
         if row >= 0:
             self._select_track_row(row)
