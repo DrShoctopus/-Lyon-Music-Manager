@@ -26,6 +26,21 @@ _LASTFM_AUTH_URL = "https://www.last.fm/api/auth/"
 _LBZ_SUBMIT_URL = "https://api.listenbrainz.org/1/submit-listens"
 _SESSION = requests.Session()
 
+
+def _scrobbler_user_agent() -> str:
+    """Return a Sea Lyon UA string for outbound Last.fm + ListenBrainz requests."""
+    from .. import __version__
+    from .settings import DEFAULT_MUSICBRAINZ_CONTACT, get_cached_settings
+
+    contact = ""
+    try:
+        contact = (get_cached_settings().musicbrainz_contact or "").strip()
+    except Exception:  # noqa: BLE001 — UA must never crash a scrobble
+        contact = ""
+    if not contact:
+        contact = DEFAULT_MUSICBRAINZ_CONTACT
+    return f"Sea Lyon Media Manager/{__version__} (+{contact}) Scrobbler/1.0"
+
 _MIN_TRACK_DURATION_S = 30   # Last.fm requires >= 30 s
 _SCROBBLE_CAP_S = 240        # scrobble at 4 min if track is longer than 8 min
 _MAX_LISTENED_DELTA_MS = 10_000
@@ -41,7 +56,12 @@ def _lastfm_post(params: dict[str, str]) -> dict:
     params["format"] = "json"
     params["api_sig"] = _lastfm_sign(params)
     try:
-        resp = _SESSION.post(_LASTFM_API_URL, data=params, timeout=10)
+        resp = _SESSION.post(
+            _LASTFM_API_URL,
+            data=params,
+            timeout=10,
+            headers={"User-Agent": _scrobbler_user_agent()},
+        )
         return resp.json()
     except Exception as exc:
         LOG.debug("Last.fm POST failed: %s", exc)
@@ -52,6 +72,7 @@ def _lbz_post(payload: dict, token: str) -> bool:
     headers = {
         "Authorization": f"Token {token}",
         "Content-Type": "application/json",
+        "User-Agent": _scrobbler_user_agent(),
     }
     try:
         resp = _SESSION.post(

@@ -881,9 +881,9 @@ PODCASTS = _wrap(
     <ul>
       <li><b>Mark all played</b> on a podcast or an individual episode.</li>
       <li><b>Unsubscribe</b> removes the feed and its episode list.</li>
-      <li>The User-Agent sent to podcast hosts identifies the app and its
-      version (visible in the source as <code>PODCAST_USER_AGENT</code>) so
-      polite hosts can rate-limit predictably.</li>
+      <li>The User-Agent sent to podcast hosts identifies the app, its
+      version, and the configured MusicBrainz contact so polite hosts can
+      rate-limit predictably.</li>
     </ul>
     """,
 )

@@ -311,6 +311,8 @@ def test_podcast_play_request_uses_audio_player(main_window, monkeypatch):
         lambda url, title=None, options=(): calls.append(("play_url", url, title, options)),
     )
 
+    from lyon.core.podcast import _podcast_user_agent
+
     main_window._play_podcast_episode("https://podcasts.example.test/episode.mp3", "Sea Stories - One")
 
     assert calls == [
@@ -320,7 +322,7 @@ def test_podcast_play_request_uses_audio_player(main_window, monkeypatch):
             "https://podcasts.example.test/episode.mp3",
             "Sea Stories - One",
             (
-                ":http-user-agent=Sea Lyon Media Manager/Podcast",
+                f":http-user-agent={_podcast_user_agent()}",
                 ":network-caching=1500",
             ),
         ),

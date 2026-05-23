@@ -14,6 +14,7 @@ from lyon.core.scrobbler import (
     _lbz_post,
     _MIN_TRACK_DURATION_S,
     _SCROBBLE_CAP_S,
+    _scrobbler_user_agent,
 )
 from lyon.core.settings import Settings
 
@@ -140,6 +141,7 @@ class TestScrobblerHttpHelpers:
             {
                 "Authorization": "Token token-123",
                 "Content-Type": "application/json",
+                "User-Agent": _scrobbler_user_agent(),
             },
             10,
         )]

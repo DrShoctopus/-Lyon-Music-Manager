@@ -1,3 +1,13 @@
+# Top-level dependencies. To regenerate with full transitive pins, run on
+# a clean Windows venv:
+#
+#     pip install pip-tools
+#     pip-compile --generate-hashes --output-file=requirements.txt requirements.in
+#
+# Transitive pinning is a v1.0.0 release blocker (Track E3). Until that runs,
+# this file pins direct deps only; transitive deps resolve at install time
+# from PyPI, which is reproducible-ish but not byte-identical across runs.
+
 PySide6-Essentials==6.11.1
 mutagen==1.47.0
 musicbrainzngs==0.7.1

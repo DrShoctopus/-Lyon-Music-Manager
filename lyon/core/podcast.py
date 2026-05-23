@@ -18,7 +18,21 @@ _ATOM_NS = "http://www.w3.org/2005/Atom"
 _MEDIA_NS = "http://search.yahoo.com/mrss/"
 _AUDIO_MIME_PREFIXES = ("audio/", "video/")
 _ENCLOSURE_REL_VALUES = {"enclosure", "http://www.iana.org/assignments/relation/enclosure"}
-PODCAST_USER_AGENT = "Sea Lyon Media Manager/Podcast"
+
+
+def _podcast_user_agent() -> str:
+    """Return a Sea Lyon UA string with version + contact for outbound feed fetches."""
+    from .. import __version__
+    from .settings import DEFAULT_MUSICBRAINZ_CONTACT, get_cached_settings
+
+    contact = ""
+    try:
+        contact = (get_cached_settings().musicbrainz_contact or "").strip()
+    except Exception:  # noqa: BLE001 — UA must never crash a podcast fetch
+        contact = ""
+    if not contact:
+        contact = DEFAULT_MUSICBRAINZ_CONTACT
+    return f"Sea Lyon Media Manager/{__version__} (+{contact}) Podcast/1.0"
 
 
 @dataclass(frozen=True)
@@ -77,7 +91,7 @@ def fetch_feed(url: str, *, timeout: int = 15) -> PodcastFeed:
     clean_url = _clean_url(url)
     if not _is_http_url(clean_url):
         raise ValueError("Podcast feed URL must be HTTP or HTTPS.")
-    request = Request(clean_url, headers={"User-Agent": PODCAST_USER_AGENT})
+    request = Request(clean_url, headers={"User-Agent": _podcast_user_agent()})
     with urlopen(request, timeout=timeout) as response:  # noqa: S310 - user-supplied podcast URLs are expected.
         data = response.read()
     text = data.decode("utf-8-sig", errors="replace")

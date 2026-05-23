@@ -38,6 +38,17 @@ _MAX_RECENT_STREAM_URLS = 25
 _MAX_RADIO_STATIONS = 200
 _MAX_PODCAST_SUBSCRIPTIONS = 500
 
+DEFAULT_MUSICBRAINZ_CONTACT = "https://github.com/DrShoctopus/Sea-Lyon-Media-Manager"
+_PLACEHOLDER_CONTACT_MARKERS = ("example.", "localhost", "your-email", "your.email")
+
+
+def is_placeholder_contact(value: str) -> bool:
+    """Return True if the MusicBrainz contact string still looks like a placeholder."""
+    text = (value or "").strip().casefold()
+    if not text:
+        return True
+    return any(marker in text for marker in _PLACEHOLDER_CONTACT_MARKERS)
+
 
 def _default_music_root() -> Path:
     if sys.platform == "win32":
@@ -223,7 +234,7 @@ class Settings:
     cd_drive: str = ""                 # e.g. "D:" - blank means auto-pick first
     musicbrainz_app: str = "LyonMusicManager"
     musicbrainz_version: str = field(default_factory=_app_version)
-    musicbrainz_contact: str = "https://example.invalid/lyon"
+    musicbrainz_contact: str = DEFAULT_MUSICBRAINZ_CONTACT
     theaudiodb_api_key: str = ""    # blank → TheAudioDB disabled; enter "123" for free tier
     eject_after_rip: bool = True
     auto_lookup_metadata: bool = True

@@ -26,7 +26,7 @@ from ..core.library_watcher import (
     coalesce_batch,
 )
 from ..core.playback_backend import close_dll_handles
-from ..core.podcast import PODCAST_USER_AGENT
+from ..core.podcast import _podcast_user_agent
 from ..core.player import Player
 from ..core.replaygain import ReplayGainScanner
 from ..core.scrobbler import ScrobblerService
@@ -769,7 +769,7 @@ class MainWindow(QMainWindow):
             url,
             title=title,
             options=(
-                f":http-user-agent={PODCAST_USER_AGENT}",
+                f":http-user-agent={_podcast_user_agent()}",
                 ":network-caching=1500",
             ),
         )
