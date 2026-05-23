@@ -392,6 +392,9 @@ class MainWindow(QMainWindow):
         settings_menu.addAction(settings_act)
 
         help_menu = m.addMenu("&Help")
+        kb_act = QAction("Knowledge Base", self, triggered=self.show_knowledge_base)
+        kb_act.setShortcut("F1")
+        help_menu.addAction(kb_act)
         help_menu.addAction(QAction("Library Statistics", self, triggered=self.show_library_stats))
         help_menu.addAction(QAction("Runtime Diagnostics", self, triggered=self.show_diagnostics))
         about_act = QAction("About", self, triggered=self.show_about)
@@ -1415,6 +1418,19 @@ class MainWindow(QMainWindow):
 
     def _clear_equalizer_dialog(self, *_args) -> None:
         self._equalizer_dialog = None
+
+    def show_knowledge_base(self) -> None:
+        from .knowledge_base_dialog import KnowledgeBaseDialog
+        existing = getattr(self, "_knowledge_base_dialog", None)
+        if existing is not None and existing.isVisible():
+            existing.raise_()
+            existing.activateWindow()
+            return
+        dlg = KnowledgeBaseDialog(self)
+        dlg.setAttribute(Qt.WA_DeleteOnClose)
+        dlg.destroyed.connect(lambda *_: setattr(self, "_knowledge_base_dialog", None))
+        self._knowledge_base_dialog = dlg
+        dlg.show()
 
     def show_about(self) -> None:
         dlg = QMessageBox(self)
