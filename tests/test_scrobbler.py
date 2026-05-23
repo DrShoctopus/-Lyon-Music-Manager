@@ -8,7 +8,9 @@ import pytest
 
 from lyon.core.scrobbler import (
     ScrobblerService,
+    _lastfm_post,
     _lastfm_sign,
+    _lbz_post,
     _MIN_TRACK_DURATION_S,
     _SCROBBLE_CAP_S,
 )
@@ -77,6 +79,69 @@ class TestLastFmSign:
         params = {"method": "m", "api_key": "k", "api_sig": "old"}
         sig = _lastfm_sign(params)
         assert len(sig) == 32
+
+
+class TestScrobblerHttpHelpers:
+    def test_lastfm_post_uses_shared_session_and_returns_json(self, monkeypatch):
+        calls = []
+
+        class Response:
+            def json(self):
+                return {"ok": True}
+
+        class Session:
+            def post(self, url, *, data=None, timeout=None, **_kwargs):
+                calls.append((url, data, timeout))
+                return Response()
+
+        monkeypatch.setattr("lyon.core.scrobbler._SESSION", Session())
+        params = {"method": "track.updateNowPlaying", "api_key": "KEY"}
+
+        result = _lastfm_post(params)
+
+        assert result == {"ok": True}
+        assert calls == [(
+            "https://ws.audioscrobbler.com/2.0/",
+            params,
+            10,
+        )]
+        assert params["format"] == "json"
+        assert "api_sig" in params
+
+    def test_listenbrainz_post_uses_shared_session_json_body(self, monkeypatch):
+        calls = []
+
+        class Response:
+            status_code = 200
+
+        class Session:
+            def post(self, url, *, json=None, headers=None, timeout=None, **_kwargs):
+                calls.append((url, json, headers, timeout))
+                return Response()
+
+        monkeypatch.setattr("lyon.core.scrobbler._SESSION", Session())
+        payload = {"listen_type": "single", "payload": []}
+
+        assert _lbz_post(payload, "token-123") is True
+        assert calls == [(
+            "https://api.listenbrainz.org/1/submit-listens",
+            payload,
+            {
+                "Authorization": "Token token-123",
+                "Content-Type": "application/json",
+            },
+            10,
+        )]
+
+    def test_scrobbler_http_helpers_handle_errors(self, monkeypatch):
+        class Session:
+            def post(self, *_args, **_kwargs):
+                raise RuntimeError("offline")
+
+        monkeypatch.setattr("lyon.core.scrobbler._SESSION", Session())
+
+        assert _lastfm_post({"method": "auth.getToken"})["error"] == -1
+        assert _lbz_post({"payload": []}, "token") is False
 
 
 class TestScrobblerServiceInit:

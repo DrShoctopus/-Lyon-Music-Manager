@@ -251,6 +251,7 @@ class VlcPlaybackBackend(PlaybackBackend):
         self._last_state = "stopped"
         self._last_position = (-1, -1)
         self._ended = False
+        self._has_started_playback = False
         self._eq = VlcEqualizerController(
             vlc_module,
             self._player,
@@ -263,7 +264,7 @@ class VlcPlaybackBackend(PlaybackBackend):
         self._eq_fade_timer.timeout.connect(self._eq_fade_step)
 
         self._timer = QTimer(self)
-        self._timer.setInterval(200)
+        self._timer.setInterval(500)
         self._timer.timeout.connect(self._poll)
 
     def set_source(
@@ -286,6 +287,7 @@ class VlcPlaybackBackend(PlaybackBackend):
         self._player.set_media(media)
         media.release()  # drop our reference; VLC holds its own via set_media
         self._ended = False
+        self._has_started_playback = False
         self._last_position = (-1, -1)
         self._player.audio_set_volume(self._volume)
         self._player.audio_set_mute(self._muted)
@@ -298,6 +300,7 @@ class VlcPlaybackBackend(PlaybackBackend):
 
     def pause(self) -> None:
         self._player.pause()
+        self._timer.stop()
         self._emit_state("paused")
 
     def stop(self) -> None:
@@ -430,11 +433,20 @@ class VlcPlaybackBackend(PlaybackBackend):
             self._timer.stop()
             return
         if state == self._vlc.State.Ended:
+            if not self._has_started_playback and self.position() <= 0 and self.duration() <= 0:
+                self._timer.stop()
+                self._emit_state("stopped")
+                current = (0, 0)
+                if current != self._last_position:
+                    self._last_position = current
+                    self.position_changed.emit(*current)
+                return
             if not self._ended:
                 self._ended = True
                 self.end_reached.emit()
             return
         if state == self._vlc.State.Playing:
+            self._has_started_playback = True
             self._emit_state("playing")
         elif state == self._vlc.State.Paused:
             self._emit_state("paused")

@@ -838,6 +838,9 @@ class LibraryView(QWidget):
     def _refresh_albums(self) -> None:
         self._clear_playlist_selection()
         self.albums_model.clear()
+        self._grid_gen += 1
+        gen = self._grid_gen
+        self._grid_art_map = {}
         idx = self.artists.currentIndex()
         if not idx.isValid():
             self._current_tracks = []
@@ -860,18 +863,23 @@ class LibraryView(QWidget):
             font.setItalic(True)
             all_item.setFont(font)
             self.albums_model.appendRow(all_item)
+        pool = QThreadPool.globalInstance()
         for album, _art in albums:
             it = QStandardItem(album)
             it.setData(album, Qt.UserRole)
-            if _art:
-                pm = QPixmap(_art)
-                if not pm.isNull():
-                    it.setIcon(QIcon(pm.scaled(48, 48, Qt.KeepAspectRatio, Qt.SmoothTransformation)))
-                else:
-                    it.setForeground(QColor("#888888"))
-            else:
+            if not _art:
                 it.setForeground(QColor("#888888"))
             self.albums_model.appendRow(it)
+            if not _art:
+                continue
+            if _art in self._art_cache:
+                self._art_cache.move_to_end(_art)
+                it.setIcon(QIcon(self._art_cache[_art]))
+            else:
+                first = _art not in self._grid_art_map
+                self._grid_art_map.setdefault(_art, []).append(it)
+                if first:
+                    pool.start(_ArtLoader(gen, _art, self._art_signals))
         if self.albums_model.rowCount():
             self.albums.setCurrentIndex(self.albums_model.index(0, 0))
         else:
@@ -1005,6 +1013,8 @@ class LibraryView(QWidget):
         icon = QIcon(pm) if pm else QIcon()
         for item in self._grid_art_map.get(art_path, []):
             item.setIcon(icon)
+            if pm is None:
+                item.setForeground(QColor("#888888"))
 
     def _on_grid_album_activated(self, index: QModelIndex) -> None:
         data = index.data(Qt.UserRole)

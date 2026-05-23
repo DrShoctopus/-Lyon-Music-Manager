@@ -215,6 +215,12 @@ class Library:
         self.conn.row_factory = sqlite3.Row
         with self._lock:
             self.conn.execute("PRAGMA foreign_keys = ON")
+            # WAL improves reader/writer concurrency; NORMAL is the usual
+            # durability tradeoff for WAL, and busy_timeout avoids immediate
+            # lock failures during scanner/UI contention.
+            self.conn.execute("PRAGMA journal_mode = WAL")
+            self.conn.execute("PRAGMA synchronous = NORMAL")
+            self.conn.execute("PRAGMA busy_timeout = 5000")
             self.conn.executescript(_SCHEMA_V0)
             self._migrate()
             self.conn.commit()
@@ -375,8 +381,21 @@ class Library:
         file_path = Path(path)
         art = _find_video_artwork(file_path) if media_type == "video" else None
         art = art or _find_local_artwork(file_path.parent)
-        # Hash audio files only; video files are large and hashing gives little benefit.
-        file_hash = _compute_file_hash(path) if media_type == "audio" else None
+        previous_hash = (
+            row["file_hash"]
+            if row is not None and "file_hash" in row.keys()
+            else None
+        )
+        file_hash = (
+            previous_hash
+            if (
+                media_type == "audio"
+                and previous_hash is not None
+                and row is not None
+                and _row_matches_stat(row, stat)
+            )
+            else None
+        )
         now = time.time()
         with self._lock:
             values = (
@@ -401,19 +420,13 @@ class Library:
                 None,
                 file_hash,
             )
-            previous_hash = (
-                row["file_hash"]
-                if row is not None and "file_hash" in row.keys()
-                else None
-            )
             acoustid_id = (
                 row["acoustid_id"]
                 if (
                     row is not None
                     and "acoustid_id" in row.keys()
                     and media_type == "audio"
-                    and previous_hash is not None
-                    and previous_hash == file_hash
+                    and _row_matches_stat(row, stat)
                 )
                 else None
             )
@@ -477,7 +490,13 @@ class Library:
                 (int(stat.st_size), int(stat.st_mtime_ns), time.time(), error, path),
             )
 
-    def _index_cue_file(self, cue_path_str: str, *, force: bool = False) -> ScanSummary:
+    def _index_cue_file(
+        self,
+        cue_path_str: str,
+        *,
+        force: bool = False,
+        commit: bool = False,
+    ) -> ScanSummary:
         """Parse a CUE sheet and upsert one library row per audio track it describes."""
         from .cue_parser import parse_cue
         summary = ScanSummary()
@@ -589,7 +608,8 @@ class Library:
                     self.conn.execute("DELETE FROM tracks WHERE path = ?", (orphan_path,))
                     summary.removed += 1
 
-            self.conn.commit()
+            if commit:
+                self.conn.commit()
 
         return summary
 
@@ -894,6 +914,17 @@ class Library:
             if len(rows) < _PAGE_SIZE:
                 break
 
+    def count_tracks(self, media_type: str | None = None) -> int:
+        """Return the number of tracks, optionally restricted by media type."""
+        filter_sql = "" if media_type is None else "WHERE media_type = ?"
+        params = () if media_type is None else (media_type,)
+        with self._lock:
+            row = self.conn.execute(
+                f"SELECT COUNT(*) FROM tracks {filter_sql}",
+                params,
+            ).fetchone()
+        return int(row[0]) if row is not None else 0
+
     def track_by_id(self, track_id: int) -> Track | None:
         """Return one track by database id, or None when it is not indexed."""
         with self._lock:
@@ -1080,6 +1111,7 @@ class Library:
 
     def find_duplicates_by_hash(self) -> list[list[Track]]:
         """Return groups of audio tracks sharing an identical MD5 header hash."""
+        self._backfill_missing_hashes()
         with self._lock:
             rows = self.conn.execute(
                 """WITH dupe_keys AS (
@@ -1108,6 +1140,31 @@ class Library:
         if current_group:
             groups.append(current_group)
         return groups
+
+    def _backfill_missing_hashes(self) -> None:
+        """Populate missing audio file hashes before exact duplicate lookup."""
+        with self._lock:
+            rows = self.conn.execute(
+                """SELECT id, path FROM tracks
+                   WHERE media_type = 'audio'
+                     AND (file_hash IS NULL OR file_hash = '')"""
+            ).fetchall()
+        if not rows:
+            return
+
+        updates: list[tuple[str, int]] = []
+        for row in rows:
+            file_hash = _compute_file_hash(row["path"])
+            if file_hash:
+                updates.append((file_hash, int(row["id"])))
+
+        if updates:
+            with self._lock:
+                self.conn.executemany(
+                    "UPDATE tracks SET file_hash = ? WHERE id = ? AND (file_hash IS NULL OR file_hash = '')",
+                    updates,
+                )
+                self.conn.commit()
 
     def find_duplicates_by_fingerprint(self) -> list[list[Track]]:
         """Return groups of audio tracks sharing the same AcoustID UUID."""
@@ -1152,13 +1209,37 @@ class Library:
 
     def tracks_without_acoustid(self) -> list[Track]:
         """Return audio tracks that have no acoustid_id stored yet."""
+        return list(self.iter_tracks_without_acoustid())
+
+    def count_tracks_without_acoustid(self) -> int:
+        """Return the number of audio tracks missing an AcoustID UUID."""
         with self._lock:
-            rows = self.conn.execute(
-                "SELECT * FROM tracks WHERE media_type = 'audio' "
-                "AND (acoustid_id IS NULL OR acoustid_id = '') "
-                "ORDER BY artist COLLATE NOCASE, album COLLATE NOCASE, track_no"
-            ).fetchall()
-        return [_row_to_track(r) for r in rows]
+            row = self.conn.execute(
+                "SELECT COUNT(*) FROM tracks WHERE media_type = 'audio' "
+                "AND (acoustid_id IS NULL OR acoustid_id = '')"
+            ).fetchone()
+        return int(row[0]) if row is not None else 0
+
+    def iter_tracks_without_acoustid(self, batch_size: int = _PAGE_SIZE) -> Iterator[Track]:
+        """Yield audio tracks missing an AcoustID UUID in bounded pages."""
+        batch_size = max(1, int(batch_size))
+        offset = 0
+        while True:
+            with self._lock:
+                rows = self.conn.execute(
+                    "SELECT * FROM tracks WHERE media_type = 'audio' "
+                    "AND (acoustid_id IS NULL OR acoustid_id = '') "
+                    "ORDER BY artist COLLATE NOCASE, album COLLATE NOCASE, track_no "
+                    "LIMIT ? OFFSET ?",
+                    (batch_size, offset),
+                ).fetchall()
+            if not rows:
+                break
+            for row in rows:
+                yield _row_to_track(row)
+            offset += len(rows)
+            if len(rows) < batch_size:
+                break
 
     # ------------------------------------------------------------------ playlist CRUD
     def all_playlists(self) -> list[Playlist]:

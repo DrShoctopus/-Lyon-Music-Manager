@@ -9,10 +9,12 @@
 #
 # They are bundled next to the .exe so the app works offline.
 # -*- mode: python ; coding: utf-8 -*-
+import sys
 from pathlib import Path
 
 from PIL import Image
 
+STRIP_BINARIES = sys.platform != "win32"
 SPEC_DIR = Path(SPECPATH).resolve()
 if not SPEC_DIR.is_dir():
     SPEC_DIR = SPEC_DIR.parent
@@ -77,7 +79,6 @@ a = Analysis(
         "discid",
         "musicbrainzngs",
         "mutagen",
-        "PIL",
         "vlc",
         "defusedxml",
         "requests",
@@ -88,7 +89,34 @@ a = Analysis(
     ],
     hookspath=[],
     runtime_hooks=[],
-    excludes=[],
+    excludes=[
+        "PySide6.QtWebEngineCore",
+        "PySide6.QtWebEngineWidgets",
+        "PySide6.QtWebChannel",
+        "PySide6.QtMultimedia",
+        "PySide6.QtMultimediaWidgets",
+        "PySide6.QtCharts",
+        "PySide6.QtDataVisualization",
+        "PySide6.QtQml",
+        "PySide6.QtQuick",
+        "PySide6.QtQuickWidgets",
+        "PySide6.Qt3DCore",
+        "PySide6.Qt3DRender",
+        "PySide6.QtPdf",
+        "PySide6.QtPdfWidgets",
+        "PySide6.QtBluetooth",
+        "PySide6.QtPositioning",
+        "PySide6.QtSensors",
+        "PySide6.QtSerialPort",
+        "PySide6.QtSql",
+        "PySide6.QtTest",
+        "PySide6.QtDesigner",
+        "PySide6.QtHelp",
+        "tkinter",
+        "test",
+        "unittest",
+        "pydoc",
+    ],
     noarchive=False,
 )
 pyz = PYZ(a.pure, a.zipped_data)
@@ -101,7 +129,7 @@ exe = EXE(
     name="LyonMusicManager",
     debug=False,
     bootloader_ignore_signals=False,
-    strip=False,
+    strip=STRIP_BINARIES,
     upx=False,
     console=False,
     icon=icon_file,
@@ -111,7 +139,7 @@ coll = COLLECT(
     a.binaries,
     a.zipfiles,
     a.datas,
-    strip=False,
+    strip=STRIP_BINARIES,
     upx=False,
     upx_exclude=[],
     name="LyonMusicManager",

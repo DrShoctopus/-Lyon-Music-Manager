@@ -80,6 +80,7 @@ class Player(QObject):
         self._gapless_playback: bool = False
         self._gapless_prebuffer_backend: PlaybackBackend | None = None
         self._gapless_prebuffer_index: int = -1
+        self._active_source_key: tuple | None = None
 
         self._connect_backend(self._backend)
 
@@ -88,6 +89,7 @@ class Player(QObject):
         """Restore a saved queue without starting playback."""
         self._queue = list(tracks)
         self._index = max(-1, min(current_index, len(tracks) - 1)) if tracks else -1
+        self._active_source_key = None
         self.queue_changed.emit()
         if 0 <= self._index < len(self._queue):
             self.track_changed.emit(self._queue[self._index])
@@ -95,6 +97,7 @@ class Player(QObject):
     def set_queue(self, tracks: list[Track], start_index: int = 0) -> None:
         self._queue = list(tracks)
         self._index = -1
+        self._active_source_key = None
         self.queue_changed.emit()
         if self._queue:
             self.play_index(max(0, min(start_index, len(self._queue) - 1)))
@@ -118,6 +121,7 @@ class Player(QObject):
         self.stop()
         self._queue = []
         self._index = -1
+        self._active_source_key = None
         self.queue_changed.emit()
         self.track_changed.emit(None)
 
@@ -134,6 +138,7 @@ class Player(QObject):
         if not self._queue:
             self.stop()
             self._index = -1
+            self._active_source_key = None
             self.queue_changed.emit()
             self.track_changed.emit(None)
             return
@@ -147,6 +152,7 @@ class Player(QObject):
         elif removing_current:
             self.stop()
             self._index = -1
+            self._active_source_key = None
             self.track_changed.emit(None)
         self.queue_changed.emit()
 
@@ -206,6 +212,7 @@ class Player(QObject):
         track = self._queue[idx]
         self._rg_multiplier = self._rg_multiplier_for_track(track)
         self._start_backend_track(self._backend, track, self._user_volume)
+        self._active_source_key = self._track_source_key(track)
         self.track_changed.emit(track)
 
     def play(self) -> None:
@@ -213,6 +220,13 @@ class Player(QObject):
             self.play_index(0)
             return
         if not self._ensure_playback_available():
+            return
+        track = self.current()
+        if track is not None and self._active_source_key != self._track_source_key(track):
+            self._cancel_crossfade()
+            self._rg_multiplier = self._rg_multiplier_for_track(track)
+            self._start_backend_track(self._backend, track, self._user_volume)
+            self._active_source_key = self._track_source_key(track)
             return
         self._backend.play()
 
@@ -278,6 +292,7 @@ class Player(QObject):
         if nxt is None:
             self.stop()
             self._index = -1
+            self._active_source_key = None
             self.track_changed.emit(None)
             return
         self.play_index(nxt)
@@ -492,6 +507,14 @@ class Player(QObject):
         backend.set_volume(self._rg_applied_vol(volume, self._rg_multiplier))
         backend.play()
 
+    @staticmethod
+    def _track_source_key(track: Track) -> tuple:
+        return (
+            track.playback_uri or track.path,
+            bool(track.playback_is_location),
+            tuple(track.playback_options),
+        )
+
     def _should_crossfade_to(self, idx: int) -> bool:
         return (
             self._crossfade_seconds > 0
@@ -553,6 +576,7 @@ class Player(QObject):
         track = self._queue[idx]
         self._rg_multiplier = self._rg_multiplier_for_track(track)
         self._start_backend_track(next_backend, track, 0, muted=muted)
+        self._active_source_key = self._track_source_key(track)
         self.track_changed.emit(track)
 
         self._fade_out_backend = previous_backend
@@ -666,6 +690,7 @@ class Player(QObject):
         backend.set_muted(muted)
         backend.set_volume(self._rg_applied_vol(self._user_volume, self._rg_multiplier))
         backend.play()
+        self._active_source_key = self._track_source_key(track)
         old_backend.stop()
         self._dispose_transient_backend(old_backend)
         self.track_changed.emit(track)

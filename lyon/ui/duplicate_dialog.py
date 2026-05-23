@@ -137,11 +137,9 @@ class DuplicateDialog(QDialog):
         mode = self._mode_combo.currentData()
         if not self._groups:
             if mode == self._MODE_FINGERPRINT:
-                pending = self.library.tracks_without_acoustid()
-                total_audio = sum(
-                    1 for _ in self.library.all_tracks(media_type="audio")
-                )
-                if len(pending) == total_audio:
+                pending = self.library.count_tracks_without_acoustid()
+                total_audio = self.library.count_tracks(media_type="audio")
+                if pending == total_audio:
                     self._summary_label.setText(
                         "No fingerprints computed yet. Click 'Scan Missing Fingerprints…' to begin."
                     )

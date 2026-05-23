@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 
 from lyon.core import library as library_module
+from lyon.core import library_watcher as library_watcher_module
 from lyon.core.library import Library
 from lyon.core.library_watcher import (
     LibraryFolderWatcher,
@@ -212,6 +213,29 @@ def test_watch_batch_coalesces_duplicate_and_conflicting_events():
     assert target.changed_paths == set()
     assert target.deleted_paths == {"/music/a.flac"}
     assert target.moved_paths == {"/music/b.flac": "/music/c.flac"}
+
+
+def test_library_index_thread_settles_changed_paths_as_one_batch(monkeypatch):
+    calls: list[str] = []
+    sleeps: list[float] = []
+
+    def fake_stat(path: str):
+        calls.append(path)
+        return (10, 1)
+
+    monkeypatch.setattr(library_watcher_module, "_stat_signature", fake_stat)
+    monkeypatch.setattr(library_watcher_module.time, "sleep", sleeps.append)
+    worker = LibraryIndexThread(object(), WatchBatch(), settle_ms=300)
+
+    worker._wait_for_stable_batch(["/music/a.flac", "/music/b.flac"])
+
+    assert sleeps == [0.1]
+    assert calls == [
+        "/music/a.flac",
+        "/music/b.flac",
+        "/music/a.flac",
+        "/music/b.flac",
+    ]
 
 
 def test_library_index_thread_applies_watched_folder_batch(tmp_path, monkeypatch):

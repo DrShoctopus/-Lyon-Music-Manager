@@ -15,7 +15,7 @@ scripts\build-windows.ps1
 
 1. Locates Python 3.11 (`py -3.11` first, then `python` if it's 3.11).
 2. Creates `.venv\` and upgrades pip.
-3. Installs `requirements.txt` + `pyinstaller`.
+3. Installs `requirements-build.txt`.
 4. Downloads `ffmpeg.exe` (gyan.dev essentials build), the latest Windows x64
    Chromaprint `fpcalc.exe`, `discid.dll` (MetaBrainz libdiscid v0.6.4), and
    the VideoLAN VLC runtime into `bin\` if not already present. Existing
@@ -40,7 +40,7 @@ scripts\build-windows.ps1
 - `-SkipZip` — produce the PyInstaller bundle in `dist\` but don't
   zip it.
 - `-SkipInstaller` — skip the Inno Setup installer step.
-- `-Clean` — wipe `.venv`, `build\`, `dist\` before building.
+- `-Clean` — wipe `.venv`, `dist\`, and generated PyInstaller artefacts before building.
 
 ### Output
 

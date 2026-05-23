@@ -157,7 +157,8 @@ from lyon.core.ripper import (  # noqa: E402
     track_output_files,
     unique_target_folder,
 )
-from lyon.ui.ripper_view import _existing_target_files, _rip_request_from_toc  # noqa: E402
+from lyon.ui import ripper_view as ripper_view_module  # noqa: E402
+from lyon.ui.ripper_view import RipperView, _existing_target_files, _rip_request_from_toc  # noqa: E402
 
 if _PYSIDE_STUBBED:
     for _module_name in ("PySide6.QtWidgets", "PySide6.QtGui", "PySide6.QtCore", "PySide6"):
@@ -483,6 +484,24 @@ def test_existing_target_files_checks_duplicate_planned_names(tmp_path):
     duplicate.write_bytes(b"old duplicate")
 
     assert _existing_target_files(settings, album, tmp_path) == [duplicate]
+
+
+def test_ripper_track_rows_do_not_resize_status_column_per_row(qapp, monkeypatch, tmp_path):
+    monkeypatch.setattr(ripper_view_module.cd_detect, "list_cd_drives", lambda: [])
+    settings = Settings(music_root=str(tmp_path))
+    view = RipperView(settings, object())
+    calls: list[tuple[int, int]] = []
+
+    class Header:
+        def resizeSection(self, section: int, width: int) -> None:
+            calls.append((section, width))
+
+    monkeypatch.setattr(view.tracks, "horizontalHeader", lambda: Header())
+
+    view._populate_default_tracks(4)
+
+    assert view.tracks_model.rowCount() == 4
+    assert calls == []
 
 
 def test_rip_request_reuses_detected_disc_toc(tmp_path):

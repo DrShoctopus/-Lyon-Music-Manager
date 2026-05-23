@@ -33,8 +33,7 @@ bin\
 ```cmd
 py -3.11 -m venv .venv
 .venv\Scripts\activate
-pip install -r requirements.txt
-pip install pyinstaller
+pip install -r requirements-build.txt
 ```
 
 ## 3. Run from source
@@ -62,7 +61,7 @@ which trades faster startup for a slower first launch.
 ## Troubleshooting
 
 Open **Help > Runtime Diagnostics** in Sea Lyon to check whether ffmpeg,
-libdiscid/discid, VLC/libVLC, and Qt WebEngine are available in the current
+libdiscid/discid and VLC/libVLC are available in the current
 source or packaged environment before troubleshooting individual features.
 
 - **"ffmpeg not found"** — check that `bin\ffmpeg.exe` exists, or install

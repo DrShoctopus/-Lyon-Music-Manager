@@ -8,6 +8,7 @@ __pycache__/
 venv/
 env/
 .env
+lyon/core/_secrets.py
 build/dist/
 build/build/
 build/*.toc
