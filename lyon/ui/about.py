@@ -1,7 +1,7 @@
 """Shared About text for Sea Lyon UI surfaces."""
 from __future__ import annotations
 
-COPYRIGHT_NOTICE = "Copyright Shane Simmons 2026"
+COPYRIGHT_NOTICE = "© 2026 Shane Simmons. All rights reserved."
 
 THIRD_PARTY_NOTICE = (
     "Third-party components and services: Python, Qt/PySide6, "

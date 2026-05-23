@@ -23,6 +23,7 @@ LOG = logging.getLogger(__name__)
 _RIP_FORMATS = {"flac", "mp3", "aac", "opus", "ogg", "alac", "wav", "aiff", "wma"}
 _YT_AUDIO_FORMATS = {"flac", "mp3"}
 _YT_VIDEO_FORMATS = {"mp4", "mkv", "webm"}
+_YT_VIDEO_QUALITIES = {"best", "1080p", "2k", "4k"}
 _STREAM_URL_SCHEMES = {
     "http",
     "https",
@@ -241,6 +242,7 @@ class Settings:
     first_run_completed: bool = False
     yt_audio_format: str = "flac"        # flac | mp3
     yt_video_format: str = "mp4"         # mp4 | mkv | webm
+    yt_video_quality: str = "best"       # best | 1080p | 2k | 4k
     yt_output_dir: str = ""              # defaults to music_root/YouTube at runtime
     yt_auto_add: bool = True             # add downloaded files to library automatically
     queue_track_paths: list[str] = field(default_factory=list)
@@ -304,6 +306,9 @@ class Settings:
         self.yt_video_format = str(self.yt_video_format or "mp4").lower()
         if self.yt_video_format not in _YT_VIDEO_FORMATS:
             self.yt_video_format = "mp4"
+        self.yt_video_quality = str(self.yt_video_quality or "best").lower()
+        if self.yt_video_quality not in _YT_VIDEO_QUALITIES:
+            self.yt_video_quality = "best"
         self.library_paths = normalize_library_paths(self.library_paths)
         self.watch_library_folders = _bool_value(self.watch_library_folders, True)
         self.equalizer_preamp = clamp_preamp(self.equalizer_preamp)

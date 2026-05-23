@@ -372,6 +372,25 @@ class SettingsDialog(QDialog):
         self.yt_video_fmt.setCurrentText(settings.yt_video_format)
         form.addRow("Video format (video + audio):", self.yt_video_fmt)
 
+        _QUALITY_LABELS = [
+            ("Best available", "best"),
+            ("1080p (Full HD)", "1080p"),
+            ("2K (1440p)",      "2k"),
+            ("4K (2160p)",      "4k"),
+        ]
+        self.yt_video_quality = QComboBox()
+        for label, key in _QUALITY_LABELS:
+            self.yt_video_quality.addItem(label, key)
+        current_q = settings.yt_video_quality
+        for i in range(self.yt_video_quality.count()):
+            if self.yt_video_quality.itemData(i) == current_q:
+                self.yt_video_quality.setCurrentIndex(i)
+                break
+        self.yt_video_quality.setToolTip(
+            "Maximum resolution for video downloads. Requires ffmpeg for splitting and merging streams."
+        )
+        form.addRow("Video quality:", self.yt_video_quality)
+
         save_dir_row = QHBoxLayout()
         default_save = settings.yt_output_dir or str(Path(settings.music_root) / "YouTube")
         self.yt_save_dir = QLineEdit(settings.yt_output_dir)
@@ -390,7 +409,6 @@ class SettingsDialog(QDialog):
         return w
 
     def _build_scrobbling_tab(self, settings: Settings) -> QWidget:
-        from ..core.scrobbler import lastfm_api_configured
         w = QWidget()
         layout = QVBoxLayout(w)
         layout.setContentsMargins(12, 12, 12, 12)
@@ -424,15 +442,6 @@ class SettingsDialog(QDialog):
             warn.setObjectName("warningLabel")
             warn.setWordWrap(True)
             layout.addWidget(warn)
-        elif not lastfm_api_configured():
-            lfm_warn = QLabel(
-                "Last.fm API key/secret not configured. Set LYON_LASTFM_API_KEY and "
-                "LYON_LASTFM_API_SECRET before connecting a Last.fm account."
-            )
-            lfm_warn.setObjectName("warningLabel")
-            lfm_warn.setWordWrap(True)
-            layout.addWidget(lfm_warn)
-            self._lastfm_connect_btn.setEnabled(False)
         else:
             self._scrobbler.lastfm_token_ready.connect(self._on_lastfm_token_ready)
             self._scrobbler.lastfm_auth_complete.connect(self._on_lastfm_auth_complete)
@@ -716,6 +725,7 @@ class SettingsDialog(QDialog):
         self.result_settings.theaudiodb_api_key = self.audiodb_key.text().strip()
         self.result_settings.yt_audio_format = self.yt_audio_fmt.currentText()
         self.result_settings.yt_video_format = self.yt_video_fmt.currentText()
+        self.result_settings.yt_video_quality = self.yt_video_quality.currentData() or "best"
         self.result_settings.yt_output_dir = self.yt_save_dir.text().strip()
         self.result_settings.yt_auto_add = self.yt_auto_add.isChecked()
         self.result_settings.lastfm_scrobbling_enabled = self.lastfm_enabled.isChecked()

@@ -20,6 +20,18 @@ def _find_ffmpeg() -> Path | None:
     return Path(found) if found else None
 
 
+_YT_QUALITY_HEIGHT = {"1080p": 1080, "2k": 1440, "4k": 2160}
+
+
+def _video_format_selector(quality: str, has_ffmpeg: bool, container: str) -> str:
+    if not has_ffmpeg:
+        return f"best[ext={container}]/best[ext=mp4]/best"
+    if quality in _YT_QUALITY_HEIGHT:
+        h = _YT_QUALITY_HEIGHT[quality]
+        return f"bestvideo[height<={h}]+bestaudio/best[height<={h}]"
+    return "bestvideo+bestaudio/best"
+
+
 def _video_postprocessors(fmt: str) -> list[dict]:
     """Postprocessors for video downloads with a persistent catalog thumbnail."""
     postprocessors = [
@@ -84,6 +96,7 @@ class YtDownloadWorker(QThread):
         fmt: str,           # 'flac' | 'mp3'  or  'mp4' | 'mkv' | 'webm'
         output_dir: str,
         playlist: bool = False,
+        quality: str = "best",   # 'best' | '1080p' | '2k' | '4k'
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -92,6 +105,7 @@ class YtDownloadWorker(QThread):
         self.fmt = fmt
         self.output_dir = output_dir
         self.playlist = playlist
+        self.quality = quality
         self._cancelled = False
         self._succeeded = 0
         self._failed = 0
@@ -138,7 +152,7 @@ class YtDownloadWorker(QThread):
         else:
             if ffmpeg_path:
                 postprocessors = _video_postprocessors(self.fmt)
-                fmt_selector = "bestvideo+bestaudio/best"
+                fmt_selector = _video_format_selector(self.quality, True, self.fmt)
                 merge_fmt = self.fmt
             else:
                 self.progress.emit(
@@ -146,7 +160,7 @@ class YtDownloadWorker(QThread):
                     "(quality capped at ~720p). Install ffmpeg for full quality and metadata embedding."
                 )
                 postprocessors = []
-                fmt_selector = f"best[ext={self.fmt}]/best[ext=mp4]/best"
+                fmt_selector = _video_format_selector(self.quality, False, self.fmt)
                 merge_fmt = None
 
         ydl_opts: dict = {
