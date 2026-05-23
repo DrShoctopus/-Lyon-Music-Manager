@@ -52,3 +52,7 @@ def test_pyinstaller_spec_resolves_repo_root(monkeypatch):
     assert captured["scripts"] == [str(repo / "main.py")]
     assert captured["pathex"] == [str(repo)]
     assert any(str(repo / "docs" / "brand") in src for src, _dest in captured["datas"])
+    assert (
+        str(repo / "lyon" / "ui" / "assets"),
+        str(Path("lyon") / "ui" / "assets"),
+    ) in captured["datas"]

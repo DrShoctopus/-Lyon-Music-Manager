@@ -300,7 +300,7 @@ class _InfoPanel(QWidget):
         if library is not None and track.is_library_item:
             try:
                 album_tracks = library.tracks_for_album(
-                    track.display_artist, track.album or "", track.media_type
+                    track.display_artist, track.display_album, track.media_type
                 )
                 if album_tracks:
                     total_s = sum(int(t.duration) for t in album_tracks)

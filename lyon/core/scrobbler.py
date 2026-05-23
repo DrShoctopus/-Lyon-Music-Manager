@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import time
 from typing import TYPE_CHECKING
 
@@ -15,9 +16,10 @@ if TYPE_CHECKING:
 
 LOG = logging.getLogger(__name__)
 
-# Sea Lyon registered Last.fm application credentials.
-_LASTFM_API_KEY = "3f132e502ab5387dce7664092dbb9b26"
-_LASTFM_API_SECRET = "7c617ca083bffe30a2f9c621cfb08200"
+# Register your app at https://www.last.fm/api/account/create.
+# Supply credentials through environment variables; never commit secrets.
+_LASTFM_API_KEY: str = (os.environ.get("LYON_LASTFM_API_KEY") or "").strip()
+_LASTFM_API_SECRET: str = (os.environ.get("LYON_LASTFM_API_SECRET") or "").strip()
 
 _LASTFM_API_URL = "https://ws.audioscrobbler.com/2.0/"
 _LASTFM_AUTH_URL = "https://www.last.fm/api/auth/"

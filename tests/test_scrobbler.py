@@ -1,6 +1,7 @@
 """Tests for ScrobblerService and related helpers."""
 from __future__ import annotations
 
+import importlib
 import time
 from unittest.mock import MagicMock, patch
 
@@ -82,6 +83,16 @@ class TestLastFmSign:
 
 
 class TestScrobblerHttpHelpers:
+    def test_lastfm_defaults_to_unconfigured_without_env_credentials(self, monkeypatch):
+        monkeypatch.delenv("LYON_LASTFM_API_KEY", raising=False)
+        monkeypatch.delenv("LYON_LASTFM_API_SECRET", raising=False)
+
+        import lyon.core.scrobbler as scrobbler
+
+        importlib.reload(scrobbler)
+
+        assert scrobbler.lastfm_api_configured() is False
+
     def test_lastfm_post_uses_shared_session_and_returns_json(self, monkeypatch):
         calls = []
 
