@@ -1303,7 +1303,25 @@ class MainWindow(QMainWindow):
         self._cast_dialog = None
 
     def _start_cast(self, renderer) -> None:
+        video_track = self._current_video_cast_track()
+        if video_track is not None:
+            self.cast_controller.start_cast_track(
+                renderer,
+                video_track,
+                self.dlna_server,
+                pause_local=self.video_player_view.pause_playback,
+            )
+            return
         self.cast_controller.start_cast(renderer, self.player, self.dlna_server)
+
+    def _current_video_cast_track(self) -> Track | None:
+        if self._video_player_view is None or self.stack.currentWidget() is not self._video_player_view:
+            return None
+        current_track = getattr(self._video_player_view, "current_library_track", None)
+        if not callable(current_track):
+            return None
+        track = current_track()
+        return track if isinstance(track, Track) and track.is_video else None
 
     def _stop_cast(self) -> None:
         self.cast_controller.stop_cast()

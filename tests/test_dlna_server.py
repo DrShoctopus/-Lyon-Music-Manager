@@ -331,6 +331,33 @@ def test_dlna_media_endpoint_supports_byte_ranges(tmp_path):
     assert body == b"ample"
 
 
+def test_dlna_browse_uses_conservative_video_protocol_info(tmp_path):
+    library = Library(tmp_path / "library.db")
+    _insert_track(library, tmp_path / "clip.mp4", media_type="video")
+    server = DlnaServer(library, Settings(music_root=str(tmp_path), dlna_port=0))
+    soap = b"""<?xml version="1.0"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
+  <s:Body>
+    <u:Browse xmlns:u="urn:schemas-upnp-org:service:ContentDirectory:1">
+      <ObjectID>video:all</ObjectID>
+      <BrowseFlag>BrowseDirectChildren</BrowseFlag>
+      <Filter>*</Filter>
+      <StartingIndex>0</StartingIndex>
+      <RequestedCount>0</RequestedCount>
+      <SortCriteria></SortCriteria>
+    </u:Browse>
+    </s:Body>
+</s:Envelope>"""
+    try:
+        server._base_url = "http://127.0.0.1:8200"
+        body = server.handle_content_directory(soap).decode()
+    finally:
+        library.close()
+
+    assert "http-get:*:video/mp4:*" in body
+    assert "DLNA.ORG_CI" not in body
+
+
 def test_dlna_media_url_for_track_matches_servable_media(tmp_path):
     from unittest.mock import MagicMock
     library = Library(tmp_path / "library.db")

@@ -32,6 +32,7 @@ _CHUNK_SIZE = 256 * 1024
 _MAX_SOAP_BODY = 256 * 1024
 _MAX_BROWSE_ITEMS = 500
 _TRACK_CACHE_TTL = 5.0
+DLNA_CONTENT_FEATURES = "DLNA.ORG_OP=01;DLNA.ORG_CI=0"
 
 _MIME_BY_EXT = {
     ".flac": "audio/flac",
@@ -260,7 +261,7 @@ class DlnaServer:
         handler.send_header("Accept-Ranges", "bytes")
         handler.send_header("Content-Length", str(length))
         handler.send_header("transferMode.dlna.org", "Streaming")
-        handler.send_header("contentFeatures.dlna.org", "DLNA.ORG_OP=01;DLNA.ORG_CI=0")
+        handler.send_header("contentFeatures.dlna.org", DLNA_CONTENT_FEATURES)
         if status == HTTPStatus.PARTIAL_CONTENT:
             handler.send_header("Content-Range", f"bytes {start}-{end}/{size}")
         handler.end_headers()
@@ -640,7 +641,7 @@ class DlnaServer:
         parent = parent_id or ("video:all" if track.media_type == "video" else "audio:all")
         upnp_class = "object.item.videoItem" if track.media_type == "video" else "object.item.audioItem.musicTrack"
         url = f"{self.base_url}/media/{track.id}/{quote(path.name)}"
-        attrs = f'protocolInfo="http-get:*:{escape(mime)}:*" size="{stat.st_size}"'
+        attrs = f'protocolInfo="{escape(dlna_protocol_info(path))}" size="{stat.st_size}"'
         if track.duration > 0:
             attrs += f' duration="{_duration_text(track.duration)}"'
         title = escape(track.title or path.stem)
@@ -947,6 +948,10 @@ def _path_is_under_roots(path: Path, roots: list[Path]) -> bool:
 
 def _mime_type(path: Path) -> str:
     return _MIME_BY_EXT.get(path.suffix.lower()) or mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+
+
+def dlna_protocol_info(path: str | Path) -> str:
+    return f"http-get:*:{_mime_type(Path(path))}:*"
 
 
 def _duration_text(seconds: float) -> str:

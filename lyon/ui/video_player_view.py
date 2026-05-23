@@ -1087,6 +1087,12 @@ class VideoPlayerView(QWidget):
     def unavailable_reason(self) -> str:
         return self._unavailable_reason
 
+    def current_library_track(self) -> Any | None:
+        """Return the loaded local library video track, if one is active."""
+        if not self._current_path or self._current_is_location:
+            return None
+        return self._video_track_for_path(self._current_path)
+
     def _load_media_source(
         self,
         source: str,

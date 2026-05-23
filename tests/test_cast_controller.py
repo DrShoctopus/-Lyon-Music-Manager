@@ -117,6 +117,7 @@ def test_didl_video_class():
     )
     xml = _didl(track, "http://192.168.1.1:8200/media/2/clip.mp4")
     assert "object.item.videoItem" in xml
+    assert 'protocolInfo="http-get:*:video/mp4:*"' in xml
 
 
 def test_didl_escapes_special_chars():
@@ -282,6 +283,48 @@ def test_start_cast_pauses_local_player(qapp):
             ctrl.start_cast(renderer, player, dlna)
 
         player.pause.assert_called_once()
+    finally:
+        ctrl.shutdown()
+
+
+def test_start_cast_track_sends_video_uri_and_pauses_local_video(qapp):
+    renderer = _make_renderer()
+    track = Track(
+        id=7,
+        path="/videos/clip.mp4",
+        title="Sea Clip",
+        artist="",
+        album_artist="",
+        album="",
+        track_no=0,
+        disc_no=0,
+        year=2026,
+        genre="",
+        duration=60.0,
+        media_type="video",
+    )
+    dlna = _make_dlna()
+    pauses: list[bool] = []
+
+    ctrl = CastController()
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+
+    try:
+        with patch("lyon.core.cast_controller.requests.post", return_value=mock_resp) as mock_post:
+            ctrl.start_cast_track(
+                renderer,
+                track,
+                dlna,
+                pause_local=lambda: pauses.append(True),
+            )
+            _drain(ctrl, qapp)
+
+        assert pauses == [True]
+        assert mock_post.call_count == 2
+        bodies = [call.kwargs["data"].decode("utf-8") for call in mock_post.call_args_list]
+        assert any("clip.mp4" in body for body in bodies)
+        assert any("object.item.videoItem" in body for body in bodies)
     finally:
         ctrl.shutdown()
 

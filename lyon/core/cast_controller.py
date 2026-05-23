@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import queue as _queue
 import random
+from collections.abc import Callable
 from pathlib import Path
 from xml.sax.saxutils import escape
 
@@ -11,7 +12,7 @@ import requests
 from PySide6.QtCore import QObject, QThread, Signal
 
 from .dlna_renderer_discovery import RendererDevice
-from .dlna_server import DlnaServer
+from .dlna_server import DlnaServer, dlna_protocol_info
 from .library import Track
 from .player import Player, RepeatMode
 
@@ -146,6 +147,42 @@ class CastController(QObject):
             self.stop_cast()
 
         track = player.current()
+        self._start_track_cast(
+            renderer,
+            track,
+            dlna_server,
+            player=player,
+            pause_local=player.pause,
+        )
+
+    def start_cast_track(
+        self,
+        renderer: RendererDevice,
+        track: Track,
+        dlna_server: DlnaServer,
+        *,
+        pause_local: Callable[[], None] | None = None,
+    ) -> None:
+        """Cast one known library track without binding to the audio queue."""
+        self._start_track_cast(
+            renderer,
+            track,
+            dlna_server,
+            pause_local=pause_local,
+        )
+
+    def _start_track_cast(
+        self,
+        renderer: RendererDevice,
+        track: Track | None,
+        dlna_server: DlnaServer,
+        *,
+        player: Player | None = None,
+        pause_local: Callable[[], None] | None = None,
+    ) -> None:
+        if self._renderer is not None:
+            self.stop_cast()
+
         if track is None:
             self.cast_error.emit("Nothing is currently playing.")
             return
@@ -167,12 +204,14 @@ class CastController(QObject):
         self._dlna = dlna_server
         self._remote_playing = True
 
-        # Pause local audio BEFORE connecting signals so the resulting
-        # state_changed("paused") does not propagate to the renderer.
-        player.pause()
+        # Pause local playback before mirroring signals so the pause does not
+        # immediately propagate back to the renderer.
+        if pause_local is not None:
+            pause_local()
 
-        player.state_changed.connect(self._on_state_changed)
-        player.track_changed.connect(self._on_track_changed)
+        if player is not None:
+            player.state_changed.connect(self._on_state_changed)
+            player.track_changed.connect(self._on_track_changed)
 
         self._submit_job(_SoapJob("start", [
             (renderer.av_transport_url, _AV_TRANSPORT_NS, "SetAVTransportURI", {
@@ -412,6 +451,7 @@ def _didl(track: Track, url: str) -> str:
     title = escape(track.title or Path(track.path or "").stem or "Unknown")
     artist = escape(track.display_artist)
     album = escape(track.album or "")
+    protocol_info = dlna_protocol_info(track.path or Path(url).name)
     upnp_class = (
         "object.item.videoItem"
         if track.media_type == "video"
@@ -427,7 +467,7 @@ def _didl(track: Track, url: str) -> str:
         f"<upnp:artist>{artist}</upnp:artist>"
         f"<upnp:album>{album}</upnp:album>"
         f"<upnp:class>{upnp_class}</upnp:class>"
-        f'<res protocolInfo="http-get:*:*:*">{escape(url)}</res>'
+        f'<res protocolInfo="{escape(protocol_info)}">{escape(url)}</res>'
         "</item>"
         "</DIDL-Lite>"
     )
