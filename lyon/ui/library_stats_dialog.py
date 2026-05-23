@@ -46,7 +46,7 @@ class LibraryStatsDialog(QDialog):
     def __init__(self, library: Library, parent: QWidget | None = None):
         super().__init__(parent)
         self.setWindowTitle("Library Statistics")
-        self.resize(420, 240)
+        self.resize(420, 320)
 
         stats = library.library_stats()
 
@@ -82,7 +82,7 @@ class LibraryStatsDialog(QDialog):
             label_item.setFlags(label_item.flags() & ~Qt.ItemIsEditable)
             value_item = QTableWidgetItem(values[key])
             value_item.setFlags(value_item.flags() & ~Qt.ItemIsEditable)
-            value_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            value_item.setTextAlignment(Qt.AlignCenter)
             table.setItem(row, 0, label_item)
             table.setItem(row, 1, value_item)
 

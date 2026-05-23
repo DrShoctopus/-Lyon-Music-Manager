@@ -383,7 +383,7 @@ class NowPlayingView(QWidget):
 
         info = QVBoxLayout()
         info.setSpacing(4)
-        info.addStretch(2)
+        info.addStretch(1)
         info.addWidget(self.title)
         info.addWidget(self.artist)
         info.addWidget(self.album)
@@ -392,7 +392,7 @@ class NowPlayingView(QWidget):
         info.addSpacing(6)
         info.addWidget(self.format_strip)
         info.addWidget(self.position_lbl)
-        info.addStretch(3)
+        info.addStretch(1)
 
         info_w = QWidget()
         info_w.setLayout(info)
@@ -471,7 +471,7 @@ class NowPlayingView(QWidget):
         # ---- Top-level layout
         row = QHBoxLayout()
         row.setSpacing(24)
-        row.addWidget(self.cover, 0, Qt.AlignTop)
+        row.addWidget(self.cover, 0, Qt.AlignVCenter)
         row.addWidget(info_w, 1)
         row.addWidget(right_w, 1)
 
