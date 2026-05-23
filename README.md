@@ -165,7 +165,7 @@ Pinned runtime packages currently include:
 - `watchdog` for recursive library-folder monitoring.
 
 Build machines should install `requirements-build.txt`, which layers
-PyInstaller and build-only icon tooling on top of the runtime dependencies.
+PyInstaller, pytest, and build-only icon tooling on top of the runtime dependencies.
 
 ### Native Runtime Files
 
