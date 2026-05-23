@@ -1,7 +1,14 @@
 """Global media key handlers for supported desktop platforms.
 
-macOS uses PyObjC's NSEvent monitor when available. Windows uses Qt's
-native event filter to handle WM_APPCOMMAND media keys.
+Sea Lyon Media Manager ships Windows installers only (v1.0). The Windows
+path uses Qt's native event filter to handle WM_APPCOMMAND media keys and
+is part of the supported release surface.
+
+The macOS path (PyObjC ``NSEvent`` global monitor) remains for developers
+running from source, but is **not** part of the advertised v1.0 product
+surface. Treat it as best-effort. If you remove macOS support entirely
+post-1.0, drop ``_register_macos_media_key_handler`` and the ``darwin``
+branch in ``register_media_key_handler``.
 """
 from __future__ import annotations
 

@@ -68,6 +68,7 @@ class SettingsDialog(QDialog):
         tabs.addTab(self._build_youtube_tab(settings), "YouTube")
         tabs.addTab(self._build_scrobbling_tab(settings), "Scrobbling")
         tabs.addTab(self._build_dlna_tab(settings), "DLNA")
+        tabs.addTab(self._build_updates_tab(settings), "Updates")
         tabs.addTab(self._build_about_tab(), "About")
 
         layout = QVBoxLayout(self)
@@ -503,6 +504,100 @@ class SettingsDialog(QDialog):
 
         return w
 
+    def _build_updates_tab(self, settings: Settings) -> QWidget:
+        w = QWidget()
+        form = QFormLayout(w)
+        form.setContentsMargins(12, 12, 12, 12)
+        form.setVerticalSpacing(8)
+
+        self.update_check_enabled = QCheckBox(
+            "Check for updates automatically (once a day)"
+        )
+        self.update_check_enabled.setChecked(settings.update_check_enabled)
+        form.addRow("", self.update_check_enabled)
+
+        self.update_appcast_url = QLineEdit(settings.update_appcast_url)
+        self.update_appcast_url.setPlaceholderText(
+            "https://drshoctopus.github.io/Sea-Lyon-Media-Manager/appcast.xml"
+        )
+        form.addRow("Update feed URL:", self.update_appcast_url)
+
+        # Last-checked display + manual "Check now" button.
+        check_row = QHBoxLayout()
+        if settings.last_update_check_ts > 0:
+            from datetime import datetime
+            ts = datetime.fromtimestamp(settings.last_update_check_ts).strftime(
+                "%Y-%m-%d %H:%M"
+            )
+            last_text = f"Last checked: {ts}"
+        else:
+            last_text = "Last checked: never"
+        self._update_last_checked_label = QLabel(last_text)
+        check_row.addWidget(self._update_last_checked_label, 1)
+
+        check_now_btn = QPushButton("Check now")
+        check_now_btn.clicked.connect(self._on_check_for_updates_clicked)
+        check_row.addWidget(check_now_btn)
+        form.addRow("", check_row)
+
+        if settings.skipped_update_version:
+            skipped_row = QHBoxLayout()
+            skipped_label = QLabel(
+                f"Currently skipping version {settings.skipped_update_version}."
+            )
+            skipped_label.setObjectName("mutedText")
+            skipped_row.addWidget(skipped_label, 1)
+            clear_btn = QPushButton("Stop skipping")
+            clear_btn.clicked.connect(self._on_clear_skipped_clicked)
+            skipped_row.addWidget(clear_btn)
+            form.addRow("", skipped_row)
+
+        note = QLabel(
+            "Sea Lyon checks a GitHub-hosted feed for new releases. The check "
+            "happens off the UI thread and does not transmit any of your data; "
+            "see PRIVACY.md."
+        )
+        note.setWordWrap(True)
+        note.setObjectName("mutedText")
+        form.addRow("", note)
+
+        return w
+
+    def _on_check_for_updates_clicked(self) -> None:
+        """Forward the manual "Check now" to MainWindow if accessible."""
+        # Persist the URL toggle from the form first, then ask the parent
+        # window to run a manual check. The parent owns the worker lifecycle.
+        self.result_settings.update_check_enabled = self.update_check_enabled.isChecked()
+        self.result_settings.update_appcast_url = self.update_appcast_url.text().strip()
+        parent = self.parent()
+        check = getattr(parent, "check_for_updates_now", None)
+        if callable(check):
+            # Push the latest URL into the parent's settings so the worker
+            # uses what the user just typed (even if they haven't clicked OK).
+            try:
+                parent.settings.update_appcast_url = self.result_settings.update_appcast_url
+            except Exception:  # noqa: BLE001
+                pass
+            check()
+        else:
+            QMessageBox.information(
+                self,
+                "Check for updates",
+                "Updates can only be checked from the main window. Close this dialog and try Help → Check for Updates…",
+            )
+
+    def _on_clear_skipped_clicked(self) -> None:
+        self.result_settings.skipped_update_version = ""
+        parent = self.parent()
+        try:
+            parent.settings.skipped_update_version = ""  # type: ignore[union-attr]
+            parent.settings.save()                       # type: ignore[union-attr]
+        except Exception:  # noqa: BLE001
+            pass
+        QMessageBox.information(
+            self, "Updates", "Cleared the skipped-version setting."
+        )
+
     @staticmethod
     def _lastfm_status_text(settings: Settings) -> str:
         if not settings.lastfm_session_key:
@@ -736,6 +831,10 @@ class SettingsDialog(QDialog):
         self.result_settings.dlna_friendly_name = (
             self.dlna_name.text().strip() or "Sea Lyon Media Manager"
         )
+        self.result_settings.update_check_enabled = self.update_check_enabled.isChecked()
+        url = self.update_appcast_url.text().strip()
+        if url:
+            self.result_settings.update_appcast_url = url
         # lastfm_session_key and lastfm_username are updated live by the auth flow;
         # preserve whatever's there.
         self.accept()

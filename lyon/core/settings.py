@@ -280,6 +280,14 @@ class Settings:
     podcast_subscriptions: list[dict[str, object]] = field(default_factory=list)
     youtube_acknowledged: bool = False  # gate: user has accepted YouTube ToS disclaimer
     smartscreen_advisory_shown: bool = False  # gate: one-time SmartScreen explainer toast
+    # Auto-update appcast polling (GitHub-Pages-hosted XML; in-app updater
+    # surfaces an "Update Available" dialog and links to the installer).
+    update_check_enabled: bool = True
+    update_appcast_url: str = (
+        "https://drshoctopus.github.io/Sea-Lyon-Media-Manager/appcast.xml"
+    )
+    last_update_check_ts: int = 0       # POSIX timestamp; 0 = never
+    skipped_update_version: str = ""    # user said "Skip This Version"
 
     def __post_init__(self) -> None:
         self.rip_format = str(self.rip_format or "flac").lower()
@@ -315,6 +323,12 @@ class Settings:
         self.podcast_subscriptions = normalize_podcast_subscriptions(self.podcast_subscriptions)
         self.youtube_acknowledged = _bool_value(self.youtube_acknowledged, False)
         self.smartscreen_advisory_shown = _bool_value(self.smartscreen_advisory_shown, False)
+        self.update_check_enabled = _bool_value(self.update_check_enabled, True)
+        self.update_appcast_url = str(self.update_appcast_url or "").strip() or (
+            "https://drshoctopus.github.io/Sea-Lyon-Media-Manager/appcast.xml"
+        )
+        self.last_update_check_ts = _nonnegative_int(self.last_update_check_ts, 0)
+        self.skipped_update_version = str(self.skipped_update_version or "").strip()
         self.yt_audio_format = str(self.yt_audio_format or "flac").lower()
         if self.yt_audio_format not in _YT_AUDIO_FORMATS:
             self.yt_audio_format = "flac"

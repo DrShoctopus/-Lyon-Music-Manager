@@ -145,6 +145,10 @@ class MainWindow(QMainWindow):
         # YouTube acknowledgement: tracks the last tab the user actually
         # confirmed so we can revert there if they decline the gate.
         self._last_confirmed_tab_idx: int = 0
+        # Auto-update plumbing — see _maybe_check_for_update / check_for_updates_now.
+        self._update_worker = None  # type: ignore[assignment]
+        self._update_dialog = None  # type: ignore[assignment]
+        self._update_manual_request: bool = False
         self._youtube_view = None
         self._disc_view = None
         self._ripper_view = None
@@ -330,6 +334,11 @@ class MainWindow(QMainWindow):
         self._media_key_handler = register_media_key_handler(self.player)
 
         QTimer.singleShot(0, self._maybe_show_first_run)
+        # Auto-update check kicks in shortly after first-run resolves; deferring
+        # a couple of seconds keeps the splash + startup-scan responsive.
+        QTimer.singleShot(2500, self._maybe_check_for_update)
+        # One-time SmartScreen advisory for installer-installed unsigned builds.
+        QTimer.singleShot(1500, self._maybe_show_smartscreen_advisory)
         backup_path = getattr(self.settings, "_corrupt_backup_path", None)
         if backup_path:
             QTimer.singleShot(
@@ -405,6 +414,10 @@ class MainWindow(QMainWindow):
         help_menu.addAction(QAction("Open Log Folder", self, triggered=self.open_log_folder))
         help_menu.addAction(QAction(
             "Copy Diagnostics to Clipboard", self, triggered=self.copy_diagnostics
+        ))
+        help_menu.addSeparator()
+        help_menu.addAction(QAction(
+            "Check for Updates…", self, triggered=self.check_for_updates_now
         ))
         help_menu.addSeparator()
         about_act = QAction("About", self, triggered=self.show_about)
@@ -1512,6 +1525,141 @@ class MainWindow(QMainWindow):
                 f"Could not open log folder: {path}",
                 level="warning",
             )
+
+    def _maybe_show_smartscreen_advisory(self) -> None:
+        """One-time toast explaining the unsigned-installer SmartScreen warning.
+
+        Fires on the first launch of a packaged (PyInstaller-frozen) build
+        when the user has not yet seen the advisory. Suppressed in source /
+        dev runs since the warning only applies to the installer.
+        """
+        import sys as _sys
+
+        if not getattr(_sys, "frozen", False):
+            return
+        if self.settings.smartscreen_advisory_shown:
+            return
+        self.show_toast(
+            "Heads up: Sea Lyon is unsigned for the 1.0 release, so Windows "
+            "SmartScreen may have warned you when installing. A signed build "
+            "is planned for 1.1 — see the project README for details.",
+            level="info",
+            duration_ms=10000,
+        )
+        self.settings.smartscreen_advisory_shown = True
+        try:
+            self.settings.save()
+        except Exception:  # noqa: BLE001
+            pass
+
+    # ------------------------------------------------------------------ auto-update
+
+    _UPDATE_CHECK_INTERVAL_S = 24 * 60 * 60  # at most once per day on startup
+
+    def _maybe_check_for_update(self) -> None:
+        """Startup hook: check the appcast if the user has opted in.
+
+        - Skipped if first-run is not yet completed (don't spam new users).
+        - Skipped if "Check for updates automatically" is unchecked.
+        - Skipped if we polled within the last 24 hours.
+        """
+        if not self.settings.first_run_completed:
+            return
+        if not self.settings.update_check_enabled:
+            return
+        import time
+        elapsed = time.time() - max(0, int(self.settings.last_update_check_ts))
+        if elapsed < self._UPDATE_CHECK_INTERVAL_S:
+            return
+        self._start_update_check(manual=False)
+
+    def check_for_updates_now(self) -> None:
+        """Help → Check for Updates… entry point. Surfaces a result toast even if up-to-date."""
+        self._start_update_check(manual=True)
+
+    def _start_update_check(self, *, manual: bool) -> None:
+        from ..core.updater import UpdateCheckWorker
+
+        if self._update_worker is not None:
+            if manual:
+                self.show_toast("An update check is already running.", level="info")
+            return
+        url = self.settings.update_appcast_url
+        if not url:
+            if manual:
+                self.show_toast("No update server is configured.", level="warning")
+            return
+        worker = UpdateCheckWorker(url, __version__, self)
+        worker.finished.connect(self._on_update_check_finished)
+        worker.failed.connect(self._on_update_check_failed)
+        self._update_worker = worker
+        self._update_manual_request = manual
+        worker.start()
+
+    def _on_update_check_finished(self, info: object) -> None:
+        from ..core.updater import UpdateInfo
+
+        self._update_worker = None
+        manual = self._update_manual_request
+        self._update_manual_request = False
+
+        import time
+        self.settings.last_update_check_ts = int(time.time())
+        # Persist the timestamp without churning the whole save path; settings.save()
+        # writes the JSON file atomically.
+        try:
+            self.settings.save()
+        except Exception:  # noqa: BLE001 — must never crash on save failure
+            pass
+
+        if info is None or not isinstance(info, UpdateInfo):
+            if manual:
+                self.show_toast(
+                    f"You're running the latest version ({__version__}).",
+                    level="success",
+                )
+            return
+        # Don't auto-surface an explicitly skipped version unless this is a manual check.
+        if (
+            not manual
+            and self.settings.skipped_update_version
+            and self.settings.skipped_update_version == info.version
+        ):
+            return
+        self._show_update_dialog(info)
+
+    def _on_update_check_failed(self, message: str) -> None:
+        self._update_worker = None
+        manual = self._update_manual_request
+        self._update_manual_request = False
+        if manual:
+            self.show_toast(
+                f"Could not check for updates: {message}",
+                level="warning",
+            )
+
+    def _show_update_dialog(self, info: object) -> None:
+        from .update_dialog import UpdateAvailableDialog
+
+        if self._update_dialog is not None and self._update_dialog.isVisible():
+            self._update_dialog.raise_()
+            self._update_dialog.activateWindow()
+            return
+        dlg = UpdateAvailableDialog(info, self)  # type: ignore[arg-type]
+        dlg.setAttribute(Qt.WA_DeleteOnClose)
+        dlg.version_skipped.connect(self._on_update_skipped)
+        dlg.destroyed.connect(lambda *_: setattr(self, "_update_dialog", None))
+        self._update_dialog = dlg
+        dlg.show()
+
+    def _on_update_skipped(self, version: str) -> None:
+        self.settings.skipped_update_version = version
+        try:
+            self.settings.save()
+        except Exception:  # noqa: BLE001
+            pass
+
+    # ------------------------------------------------------------------ diagnostics actions
 
     def copy_diagnostics(self) -> None:
         """Help → Copy Diagnostics. Builds a redacted bundle to the clipboard."""

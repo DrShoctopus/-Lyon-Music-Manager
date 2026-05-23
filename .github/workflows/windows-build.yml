@@ -2,6 +2,9 @@ name: Windows build
 
 on:
   workflow_dispatch:
+  push:
+    tags:
+      - 'v*.*.*'
 
 env:
   FFMPEG_VERSION: "7.1.1"
@@ -14,7 +17,7 @@ env:
   FPCALC_ARCHIVE: "chromaprint-fpcalc-1.5.1-windows-x86_64.zip"
   FPCALC_URL: "https://github.com/acoustid/chromaprint/releases/download/v1.5.1/chromaprint-fpcalc-1.5.1-windows-x86_64.zip"
   # Test-collection floor. Bump when adding tests; never silently drop.
-  PYTEST_FLOOR: "663"
+  PYTEST_FLOOR: "680"
 
 jobs:
   build:
@@ -324,3 +327,59 @@ jobs:
             dist/SeaLyonMediaManager-${{ steps.appver.outputs.version }}-SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 30
+
+      # ---- Tag-triggered release publishing -----------------------------
+      #
+      # When a tag like v1.0.0 is pushed, the steps below extract the
+      # matching CHANGELOG section, regenerate the appcast feed, and create
+      # (or update) a draft GitHub Release with the installer + zip +
+      # SHA256SUMS attached. The release stays draft so a human can
+      # smoke-test before publishing.
+      - name: Extract release notes from CHANGELOG
+        if: startsWith(github.ref, 'refs/tags/')
+        id: release-notes
+        shell: pwsh
+        run: |
+          $ver = "${{ steps.appver.outputs.version }}"
+          $notes = python scripts\changelog-section.py $ver
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not find CHANGELOG section for $ver. Update CHANGELOG.md before tagging."
+          }
+          $path = "release-notes.md"
+          $notes | Out-File -Encoding UTF8 -FilePath $path
+          "path=$path" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Generate appcast.xml
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          $ver = "${{ steps.appver.outputs.version }}"
+          $installer = "dist\SeaLyonMediaManager-$ver-Setup.exe"
+          $size = (Get-Item $installer).Length
+          $tagName = "v$ver"
+          $releaseUrl = "https://github.com/${{ github.repository }}/releases/tag/$tagName"
+          $installerUrl = "https://github.com/${{ github.repository }}/releases/download/$tagName/SeaLyonMediaManager-$ver-Setup.exe"
+          # Refresh appcast.xml in-place so the gh-pages branch can pick it
+          # up via a subsequent commit (manual for 1.0; automate in 1.1).
+          python scripts\generate-appcast.py `
+            --version $ver `
+            --installer-url $installerUrl `
+            --installer-size $size `
+            --release-url $releaseUrl `
+            --output dist\appcast.xml
+          if (-not (Test-Path "dist\appcast.xml")) { throw "appcast.xml was not generated." }
+          Write-Host "Generated appcast.xml for $ver"
+
+      - name: Create draft GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          name: Sea Lyon Media Manager ${{ steps.appver.outputs.version }}
+          body_path: release-notes.md
+          fail_on_unmatched_files: true
+          files: |
+            dist/SeaLyonMediaManager-${{ steps.appver.outputs.version }}-Setup.exe
+            dist/SeaLyonMediaManager-${{ steps.appver.outputs.version }}-windows.zip
+            dist/SeaLyonMediaManager-${{ steps.appver.outputs.version }}-SHA256SUMS.txt
+            dist/appcast.xml
