@@ -1,6 +1,15 @@
 from lyon.core import settings
 
 
+def test_tests_use_isolated_app_data_dir(tmp_path):
+    from lyon.core import library
+
+    expected = tmp_path / "app-data"
+
+    assert settings.app_data_dir() == expected
+    assert library.app_data_dir() == expected
+
+
 def test_settings_load_returns_defaults_when_read_fails(monkeypatch, tmp_path):
     (tmp_path / "settings.json").mkdir()
     monkeypatch.setattr(settings, "app_data_dir", lambda: tmp_path)
