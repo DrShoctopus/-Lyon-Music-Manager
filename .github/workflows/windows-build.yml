@@ -74,11 +74,10 @@ jobs:
           $archive = "ffmpeg-release-essentials.zip"
           $url = "https://www.gyan.dev/ffmpeg/builds/$archive"
           Invoke-WebRequest -Uri $url -OutFile ffmpeg.zip -UseBasicParsing
-          $checksumResp = Invoke-WebRequest -Uri "$url.sha256" -UseBasicParsing
-          $contentType = [string]$checksumResp.Headers['Content-Type']
-          if ($contentType -match 'text/html') { throw "ffmpeg checksum URL returned HTML." }
-          $checksumRaw = $checksumResp.Content
-          $checksumText = if ($checksumRaw -is [byte[]]) { [System.Text.Encoding]::UTF8.GetString($checksumRaw) } else { [string]$checksumRaw }
+          Invoke-WebRequest -Uri "$url.sha256" -OutFile ffmpeg.sha256 -UseBasicParsing
+          $checksumText = Get-Content ffmpeg.sha256 -Raw
+          Remove-Item ffmpeg.sha256
+          if ($checksumText -match '<html') { throw "ffmpeg checksum URL returned HTML." }
           $expected = $null
           foreach ($line in ($checksumText -split "`r?`n")) {
             if ($line -match '^\s*([A-Fa-f0-9]{64})\s+[* ]?(.+?)\s*$' -and [System.IO.Path]::GetFileName($Matches[2]) -eq $archive) {
@@ -111,8 +110,9 @@ jobs:
             "https://ftp.osuosl.org/pub/musicbrainz/libdiscid/$archive"
           )
           $zip = "libdiscid.zip"
-          $checksumRaw = (Invoke-WebRequest -Uri $checksumUrl -UseBasicParsing).Content
-          $checksumText = if ($checksumRaw -is [byte[]]) { [System.Text.Encoding]::UTF8.GetString($checksumRaw) } else { [string]$checksumRaw }
+          Invoke-WebRequest -Uri $checksumUrl -OutFile libdiscid.sha256 -UseBasicParsing
+          $checksumText = Get-Content libdiscid.sha256 -Raw
+          Remove-Item libdiscid.sha256
           $expected = $null
           foreach ($line in ($checksumText -split "`r?`n")) {
             if ($line -match '^\s*([A-Fa-f0-9]{64})\s+[* ]?(.+?)\s*$' -and [System.IO.Path]::GetFileName($Matches[2]) -eq $archive) {
@@ -174,8 +174,9 @@ jobs:
           $archive = "vlc-${{ env.VLC_VERSION }}-win64.zip"
           $url = "https://download.videolan.org/pub/videolan/vlc/${{ env.VLC_VERSION }}/win64/$archive"
           Invoke-WebRequest -Uri $url -OutFile vlc.zip -UseBasicParsing
-          $checksumRaw = (Invoke-WebRequest -Uri "$url.sha256" -UseBasicParsing).Content
-          $checksumText = if ($checksumRaw -is [byte[]]) { [System.Text.Encoding]::UTF8.GetString($checksumRaw) } else { [string]$checksumRaw }
+          Invoke-WebRequest -Uri "$url.sha256" -OutFile vlc.sha256 -UseBasicParsing
+          $checksumText = Get-Content vlc.sha256 -Raw
+          Remove-Item vlc.sha256
           $expected = $null
           foreach ($line in ($checksumText -split "`r?`n")) {
             if ($line -match '^\s*([A-Fa-f0-9]{64})\s+[* ]?(.+?)\s*$' -and [System.IO.Path]::GetFileName($Matches[2]) -eq $archive) {
