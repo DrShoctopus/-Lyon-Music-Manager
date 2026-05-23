@@ -38,6 +38,9 @@ def main_window(qapp, fake_backend, monkeypatch, tmp_path):
         music_root=str(tmp_path / "Music"),
         library_paths=[],
         first_run_completed=True,
+        # Pre-accept the YouTube ToS gate so tests that activate the
+        # YouTube tab don't hang on the modal acknowledgement dialog.
+        youtube_acknowledged=True,
     )
     monkeypatch.setattr(Settings, "load", classmethod(lambda cls: settings))
 
@@ -488,6 +491,9 @@ def test_startup_scan_prunes_missing_library_rows(qapp, fake_backend, monkeypatc
         library_paths=[str(library_root)],
         watch_library_folders=False,
         first_run_completed=True,
+        # Pre-accept the YouTube ToS gate so tests that activate the
+        # YouTube tab don't hang on the modal acknowledgement dialog.
+        youtube_acknowledged=True,
     )
     monkeypatch.setattr(Settings, "load", classmethod(lambda cls: settings))
     monkeypatch.setattr(
@@ -699,6 +705,9 @@ def test_main_window_stays_usable_when_playback_backend_is_unavailable(qapp, mon
         music_root=str(tmp_path / "Music"),
         library_paths=[],
         first_run_completed=True,
+        # Pre-accept the YouTube ToS gate so tests that activate the
+        # YouTube tab don't hang on the modal acknowledgement dialog.
+        youtube_acknowledged=True,
     )
     monkeypatch.setattr(Settings, "load", classmethod(lambda cls: settings))
     monkeypatch.setattr(

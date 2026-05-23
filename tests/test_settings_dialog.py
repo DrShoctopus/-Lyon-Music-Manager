@@ -170,8 +170,10 @@ def test_settings_dialog_about_tab_mentions_copyright_and_third_parties(app):
     about_text = "\n".join(label.text() for label in dialog.findChildren(QtWidgets.QLabel))
 
     assert COPYRIGHT_NOTICE in about_text
-    assert "Qt/PySide6" in about_text
-    assert "libVLC/python-vlc" in about_text
+    # The structured ATTRIBUTIONS list renders names with conventional spacing
+    # ("Qt / PySide6", "libVLC", "python-vlc"); check the canonical tokens.
+    assert "Qt" in about_text and "PySide6" in about_text
+    assert "libVLC" in about_text and "python-vlc" in about_text
     assert "MusicBrainz" in about_text
     assert "LRCLIB" in about_text
 

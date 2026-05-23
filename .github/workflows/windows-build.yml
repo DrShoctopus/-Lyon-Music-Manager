@@ -14,7 +14,7 @@ env:
   FPCALC_ARCHIVE: "chromaprint-fpcalc-1.5.1-windows-x86_64.zip"
   FPCALC_URL: "https://github.com/acoustid/chromaprint/releases/download/v1.5.1/chromaprint-fpcalc-1.5.1-windows-x86_64.zip"
   # Test-collection floor. Bump when adding tests; never silently drop.
-  PYTEST_FLOOR: "645"
+  PYTEST_FLOOR: "663"
 
 jobs:
   build:
