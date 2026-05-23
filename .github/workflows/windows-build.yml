@@ -109,9 +109,10 @@ jobs:
             "https://ftp.osuosl.org/pub/musicbrainz/libdiscid/$archive"
           )
           $zip = "libdiscid.zip"
-          $checksum = Invoke-WebRequest -Uri $checksumUrl -UseBasicParsing
+          $checksumRaw = (Invoke-WebRequest -Uri $checksumUrl -UseBasicParsing).Content
+          $checksumText = if ($checksumRaw -is [byte[]]) { [System.Text.Encoding]::UTF8.GetString($checksumRaw) } else { [string]$checksumRaw }
           $expected = $null
-          foreach ($line in ($checksum.Content -split "`r?`n")) {
+          foreach ($line in ($checksumText -split "`r?`n")) {
             if ($line -match '^\s*([A-Fa-f0-9]{64})\s+[* ]?(.+?)\s*$' -and [System.IO.Path]::GetFileName($Matches[2]) -eq $archive) {
               $expected = $Matches[1].ToLowerInvariant(); break
             }
