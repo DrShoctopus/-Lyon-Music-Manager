@@ -26,13 +26,13 @@ from ..core.library_watcher import (
     coalesce_batch,
 )
 from ..core.playback_backend import close_dll_handles
-from ..core.podcast import _podcast_user_agent
+from ..core.podcast import podcast_user_agent
 from ..core.player import Player
 from ..core.replaygain import ReplayGainScanner
 from ..core.scrobbler import ScrobblerService
 from ..core.ripper import find_ffmpeg
 from ..core.diagnostics import collect_diagnostics_bundle, logs_dir
-from ..core.settings import Settings, is_placeholder_contact
+from ..core.settings import Settings
 from .about_dialog import AboutDialog
 from .branding import app_icon
 from .diagnostics_dialog import DiagnosticsDialog
@@ -340,7 +340,7 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(2500, self._maybe_check_for_update)
         # One-time SmartScreen advisory for installer-installed unsigned builds.
         QTimer.singleShot(1500, self._maybe_show_smartscreen_advisory)
-        backup_path = getattr(self.settings, "_corrupt_backup_path", None)
+        backup_path = self.settings.corrupt_backup_path
         if backup_path:
             QTimer.singleShot(
                 200,
@@ -830,7 +830,7 @@ class MainWindow(QMainWindow):
             url,
             title=title,
             options=(
-                f":http-user-agent={_podcast_user_agent()}",
+                f":http-user-agent={podcast_user_agent()}",
                 ":network-caching=1500",
             ),
         )

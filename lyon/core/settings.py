@@ -6,7 +6,7 @@ import logging
 import os
 import sys
 import threading
-from dataclasses import dataclass, asdict, field
+from dataclasses import dataclass, fields, field
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -290,6 +290,7 @@ class Settings:
     )
     last_update_check_ts: int = 0       # POSIX timestamp; 0 = never
     skipped_update_version: str = ""    # user said "Skip This Version"
+    corrupt_backup_path: str = field(default="", init=False, repr=False, compare=False, metadata={"transient": True})
 
     def __post_init__(self) -> None:
         self.rip_format = str(self.rip_format or "flac").lower()
@@ -417,7 +418,11 @@ class Settings:
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
                 # Drop unknown keys so older configs don't crash on upgrade
-                known = {f for f in cls.__dataclass_fields__}
+                known = {
+                    name
+                    for name, field_info in cls.__dataclass_fields__.items()
+                    if field_info.init
+                }
                 data = {k: v for k, v in data.items() if k in known}
                 return cls(**data)
             except OSError as exc:
@@ -434,19 +439,26 @@ class Settings:
                     backup,
                 )
                 instance = cls()
-                instance._corrupt_backup_path = str(backup)
+                instance.corrupt_backup_path = str(backup)
                 return instance
         return cls()
 
     def save(self) -> None:
         path = app_data_dir() / "settings.json"
-        data = json.dumps(asdict(self), indent=2)
+        data = json.dumps(self._settings_dict(), indent=2)
         tmp = path.with_suffix(".tmp")
         tmp.write_text(data, encoding="utf-8")
         _chmod_owner_only(tmp)
         os.replace(tmp, path)
         _chmod_owner_only(path)
         invalidate_settings_cache()
+
+    def _settings_dict(self) -> dict[str, object]:
+        return {
+            f.name: getattr(self, f.name)
+            for f in fields(self)
+            if not f.metadata.get("transient")
+        }
 
 
 # ---------------------------------------------------------------------------

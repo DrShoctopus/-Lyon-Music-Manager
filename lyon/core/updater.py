@@ -54,17 +54,14 @@ _XML_EXCEPTIONS = (ET.ParseError, DefusedXmlException)
 
 def _updater_user_agent() -> str:
     """Identify the app in outbound appcast requests."""
-    from .. import __version__
-    from .settings import DEFAULT_MUSICBRAINZ_CONTACT, get_cached_settings
+    from .settings import Settings, get_cached_settings
+    from .user_agent import component_user_agent
 
-    contact = ""
     try:
-        contact = (get_cached_settings().musicbrainz_contact or "").strip()
+        settings = get_cached_settings()
     except Exception:  # noqa: BLE001
-        contact = ""
-    if not contact:
-        contact = DEFAULT_MUSICBRAINZ_CONTACT
-    return f"Sea Lyon Media Manager/{__version__} (+{contact}) Updater/1.0"
+        settings = Settings()
+    return component_user_agent("Updater", settings)
 
 
 @dataclass(frozen=True)

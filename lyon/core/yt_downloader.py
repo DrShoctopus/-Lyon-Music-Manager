@@ -1,23 +1,11 @@
 """yt-dlp download worker thread."""
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 
 from PySide6.QtCore import QThread, Signal
 
-from .settings import bundled_bin_dir
-
-
-def _find_ffmpeg() -> Path | None:
-    """Return path to ffmpeg binary, checking bundled bin dir first, then PATH."""
-    bin_dir = bundled_bin_dir()
-    for name in ("ffmpeg.exe", "ffmpeg"):
-        candidate = bin_dir / name
-        if candidate.exists():
-            return candidate
-    found = shutil.which("ffmpeg.exe") or shutil.which("ffmpeg")
-    return Path(found) if found else None
+from .ffmpeg import find_ffmpeg_binary
 
 
 _YT_QUALITY_HEIGHT = {"1080p": 1080, "2k": 1440, "4k": 2160}
@@ -128,7 +116,7 @@ class YtDownloadWorker(QThread):
             Path(self.output_dir) / "%(uploader)s" / "%(title)s.%(ext)s"
         )
 
-        ffmpeg_path = _find_ffmpeg()
+        ffmpeg_path = find_ffmpeg_binary()
 
         if self.mode == "audio":
             if not ffmpeg_path:

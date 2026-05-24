@@ -16,6 +16,7 @@ import defusedxml.ElementTree as ET
 from defusedxml.common import DefusedXmlException
 
 from . import settings as _settings
+from .user_agent import musicbrainz_user_agent
 
 
 CTDB_LOOKUP_URL = "http://db.cuetools.net/lookup2.php"
@@ -293,7 +294,7 @@ def lookup_disc(
     for provider_name, provider in providers:
         info = provider()
         provider_attempts.append((provider_name, info))
-        if _has_usable_metadata(info):
+        if _has_basic_metadata(info):
             result = _with_theaudiodb_enrichment(info)
             _cache_put(_disc_lookup_cache, cache_key, result, _DISC_LOOKUP_CACHE_MAX)
             return result
@@ -303,22 +304,6 @@ def lookup_disc(
     if not diagnostics_enabled:
         _cache_put(_disc_lookup_cache, cache_key, None, _DISC_LOOKUP_CACHE_MAX)
     return None
-
-
-def lookup_disc_with_fallback(
-    discid_str: str,
-    toc: str | None = None,
-    *,
-    ctdb_toc: str | None = None,
-    use_cuetools_db: bool | None = None,
-) -> Optional[AlbumInfo]:
-    """Compatibility wrapper for disc lookup with provider fallbacks."""
-    return lookup_disc(
-        discid_str,
-        toc,
-        ctdb_toc=ctdb_toc,
-        use_cuetools_db=use_cuetools_db,
-    )
 
 
 def lookup_musicbrainz_disc(discid_str: str, toc: str | None = None) -> Optional[AlbumInfo]:
@@ -379,7 +364,7 @@ def lookup_cuetools_db_disc(
     for fuzzy in (False, True):
         for layout in layouts:
             info = lookup_cuetools_db_layout(layout, fuzzy=fuzzy)
-            if _has_usable_metadata(info):
+            if _has_basic_metadata(info):
                 return info
     _log_metadata_diagnostic(
         "CUETools DB lookup returned no usable metadata for layouts=%s",
@@ -1285,10 +1270,6 @@ def _use_cuetools_db(value: bool | None) -> bool:
     return bool(getattr(settings, "cuetools_db_metadata_enabled", True))
 
 
-def _has_usable_metadata(info: AlbumInfo | None) -> bool:
-    return _has_basic_metadata(info)
-
-
 def _has_basic_metadata(info: AlbumInfo | None) -> bool:
     return bool(info and (info.artist or info.album or info.tracks or info.artwork_url))
 
@@ -1298,8 +1279,7 @@ def _has_track_metadata(info: AlbumInfo | None) -> bool:
 
 
 def _user_agent() -> str:
-    s = _current_settings()
-    return f"{s.musicbrainz_app}/{s.musicbrainz_version} ({s.musicbrainz_contact})"
+    return musicbrainz_user_agent(_current_settings())
 
 
 def _normalize(value: str) -> str:

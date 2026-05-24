@@ -17,7 +17,32 @@ def test_settings_load_returns_defaults_when_read_fails(monkeypatch, tmp_path):
     loaded = settings.Settings.load()
 
     assert isinstance(loaded, settings.Settings)
-    assert not hasattr(loaded, "_corrupt_backup_path")
+    assert loaded.corrupt_backup_path == ""
+
+
+def test_settings_load_records_corrupt_backup_path_without_saving_it(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "app_data_dir", lambda: tmp_path)
+    (tmp_path / "settings.json").write_text("{bad json", encoding="utf-8")
+
+    loaded = settings.Settings.load()
+    loaded.save()
+    saved = (tmp_path / "settings.json").read_text(encoding="utf-8")
+
+    assert loaded.corrupt_backup_path == str(tmp_path / "settings.json.bad")
+    assert "corrupt_backup_path" not in saved
+
+
+def test_settings_load_ignores_transient_corrupt_backup_path(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "app_data_dir", lambda: tmp_path)
+    (tmp_path / "settings.json").write_text(
+        '{"music_root": "/music", "corrupt_backup_path": "/tmp/stale"}',
+        encoding="utf-8",
+    )
+
+    loaded = settings.Settings.load()
+
+    assert loaded.music_root == "/music"
+    assert loaded.corrupt_backup_path == ""
 
 
 def test_settings_save_uses_owner_only_permissions(monkeypatch, tmp_path):

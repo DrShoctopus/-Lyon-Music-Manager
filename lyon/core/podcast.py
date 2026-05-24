@@ -21,19 +21,17 @@ _ENCLOSURE_REL_VALUES = {"enclosure", "http://www.iana.org/assignments/relation/
 MAX_FEED_SIZE = 10 * 1024 * 1024
 
 
-def _podcast_user_agent() -> str:
+def podcast_user_agent() -> str:
     """Return a Sea Lyon UA string with version + contact for outbound feed fetches."""
-    from .. import __version__
-    from .settings import DEFAULT_MUSICBRAINZ_CONTACT, get_cached_settings
+    from .settings import get_cached_settings
+    from .user_agent import component_user_agent
 
-    contact = ""
     try:
-        contact = (get_cached_settings().musicbrainz_contact or "").strip()
+        settings = get_cached_settings()
     except Exception:  # noqa: BLE001 — UA must never crash a podcast fetch
-        contact = ""
-    if not contact:
-        contact = DEFAULT_MUSICBRAINZ_CONTACT
-    return f"Sea Lyon Media Manager/{__version__} (+{contact}) Podcast/1.0"
+        from .settings import Settings
+        settings = Settings()
+    return component_user_agent("Podcast", settings)
 
 
 @dataclass(frozen=True)
@@ -92,7 +90,7 @@ def fetch_feed(url: str, *, timeout: int = 15) -> PodcastFeed:
     clean_url = _clean_url(url)
     if not _is_http_url(clean_url):
         raise ValueError("Podcast feed URL must be HTTP or HTTPS.")
-    request = Request(clean_url, headers={"User-Agent": _podcast_user_agent()})
+    request = Request(clean_url, headers={"User-Agent": podcast_user_agent()})
     with urlopen(request, timeout=timeout) as response:  # noqa: S310 - user-supplied podcast URLs are expected.
         data = response.read(MAX_FEED_SIZE + 1)
     if len(data) > MAX_FEED_SIZE:
