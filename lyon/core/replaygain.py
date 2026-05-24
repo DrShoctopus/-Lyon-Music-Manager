@@ -180,6 +180,7 @@ def write_replaygain_tags(
         else:
             _write_vorbis_rg(f, track_gain_db, album_gain_db)
         f.save()
+        _read_rg_tag.cache_clear()
         return True
     except Exception:
         return False

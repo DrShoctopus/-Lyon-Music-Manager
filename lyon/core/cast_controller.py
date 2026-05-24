@@ -204,6 +204,7 @@ class CastController(QObject):
         self._player = player
         self._dlna = dlna_server
         self._shuffle_played.clear()
+        self._remember_shuffle_track(track)
         self._remote_playing = True
 
         # Pause local playback before mirroring signals so the pause does not
@@ -343,6 +344,34 @@ class CastController(QObject):
         finally:
             self._suppress_state_mirror = False
 
+    def _remember_shuffle_track(self, track: Track | None = None) -> None:
+        player = self._player
+        if player is None:
+            return
+        try:
+            if not player.shuffle():
+                return
+            queue = player.queue()
+        except (AttributeError, RuntimeError, TypeError):
+            return
+
+        try:
+            index = int(player.current_index())
+        except (TypeError, ValueError):
+            index = -1
+
+        if 0 <= index < len(queue):
+            if track is None or queue[index] is track or queue[index] == track:
+                self._shuffle_played.add(index)
+                return
+
+        if track is None:
+            return
+        for i, queued_track in enumerate(queue):
+            if queued_track is track or queued_track == track:
+                self._shuffle_played.add(i)
+                return
+
     # ------------------------------------------------------------------
     # Player signal handlers
     # ------------------------------------------------------------------
@@ -385,6 +414,7 @@ class CastController(QObject):
             self.stop_cast()
             return
 
+        self._remember_shuffle_track(track)
         self._submit_job(_SoapJob("track-change", [
             (self._renderer.av_transport_url, _AV_TRANSPORT_NS, "SetAVTransportURI", {
                 "InstanceID": "0",
