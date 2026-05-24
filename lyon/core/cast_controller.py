@@ -100,6 +100,7 @@ class CastController(QObject):
         self._remote_playing = False
         self._suppress_state_mirror = False
         self._session_id = 0
+        self._shuffle_played: set[int] = set()
 
         self._thread = QThread()
         self._worker = _SoapWorker()
@@ -202,6 +203,7 @@ class CastController(QObject):
         self._renderer = renderer
         self._player = player
         self._dlna = dlna_server
+        self._shuffle_played.clear()
         self._remote_playing = True
 
         # Pause local playback before mirroring signals so the pause does not
@@ -287,9 +289,22 @@ class CastController(QObject):
             self._select_queue_index(index)
             return
         if player.shuffle():
-            candidates = [i for i in range(len(queue)) if i != index]
+            played = set(self._shuffle_played)
+            if 0 <= index < len(queue):
+                played.add(index)
+            candidates = [
+                i for i in range(len(queue))
+                if i != index and i not in played
+            ]
+            if not candidates and player.repeat() == RepeatMode.ALL:
+                self._shuffle_played.clear()
+                if 0 <= index < len(queue):
+                    self._shuffle_played.add(index)
+                candidates = [i for i in range(len(queue)) if i != index]
             if candidates:
-                self._select_queue_index(random.choice(candidates))
+                nxt = random.choice(candidates)
+                self._shuffle_played.add(nxt)
+                self._select_queue_index(nxt)
             elif player.repeat() == RepeatMode.ALL and 0 <= index < len(queue):
                 self._select_queue_index(index)
             else:

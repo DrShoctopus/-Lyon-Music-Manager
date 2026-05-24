@@ -418,27 +418,35 @@ class VlcPlaybackBackend(PlaybackBackend):
         """Release native libVLC resources. Must be called before the app exits."""
         self._eq_fade_timer.stop()
         self._timer.stop()
+        player = self._player
+        instance = self._instance
+        self._player = None  # type: ignore[assignment]
+        self._instance = None  # type: ignore[assignment]
         try:
-            self._player.stop()
-            self._player.release()
+            player.stop()
+            player.release()
         except Exception as exc:
             LOG.debug("Error releasing VLC player: %s", exc)
         try:
-            self._instance.release()
+            instance.release()
         except Exception as exc:
             LOG.debug("Error releasing VLC instance: %s", exc)
-        self._player = None  # type: ignore[assignment]
-        self._instance = None  # type: ignore[assignment]
 
     def _poll(self) -> None:
+        player = self._player
+        if player is None:
+            self._timer.stop()
+            return
         try:
-            state = self._player.get_state()
+            state = player.get_state()
         except Exception as exc:
             LOG.debug("VLC get_state failed (backend may be shutting down): %s", exc)
             self._timer.stop()
             return
         if state == self._vlc.State.Ended:
-            if not self._has_started_playback and self.position() <= 0 and self.duration() <= 0:
+            pos = max(0, int(player.get_time()))
+            dur = max(0, int(player.get_length()))
+            if not self._has_started_playback and pos <= 0 and dur <= 0:
                 self._timer.stop()
                 self._emit_state("stopped")
                 current = (0, 0)
@@ -458,7 +466,7 @@ class VlcPlaybackBackend(PlaybackBackend):
         elif state in (self._vlc.State.Stopped, self._vlc.State.Error):
             self._emit_state("stopped")
 
-        current = (self.position(), self.duration())
+        current = (max(0, int(player.get_time())), max(0, int(player.get_length())))
         if current != self._last_position:
             self._last_position = current
             self.position_changed.emit(*current)

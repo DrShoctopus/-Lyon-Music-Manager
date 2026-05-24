@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Callable, Optional
 from urllib.parse import unquote, urlparse
 
-from PySide6.QtCore import QObject, QTimer, Signal
+from PySide6.QtCore import QObject, QRunnable, QThreadPool, QTimer, Signal
 
 from .library import Library, Track
 from .equalizer import clamp_preamp, flat_equalizer_bands, normalize_equalizer_bands
@@ -521,6 +521,7 @@ class Player(QObject):
         self._active_source_key = self._track_source_key(self._queue[idx])
         if self._shuffle:
             self._shuffle_played.add(idx)
+        self._precompute_rg_for_upcoming()
         self.track_changed.emit(self._queue[idx])
 
     def _remove_play_tracking_index(self, removed: int) -> None:
@@ -847,6 +848,34 @@ class Player(QObject):
         if gain_db is None:
             return 1.0
         return gain_multiplier(gain_db, self._rg_preamp_db, self._rg_prevent_clipping)
+
+    def _precompute_rg_for_upcoming(self) -> None:
+        """Warm the ReplayGain tag cache for the next few tracks in a background thread."""
+        if self._rg_mode == "off":
+            return
+        upcoming: list[str] = []
+        idx = self._index
+        for offset in range(1, 4):
+            nxt = idx + offset
+            if nxt < len(self._queue):
+                path = getattr(self._queue[nxt], "path", None)
+                if path:
+                    upcoming.append(path)
+        if not upcoming:
+            return
+        mode = self._rg_mode
+
+        class _WarmCache(QRunnable):
+            def run(self):
+                from .replaygain import read_track_gain, read_album_gain
+                for p in upcoming:
+                    if mode == "track":
+                        read_track_gain(p)
+                    else:
+                        read_album_gain(p)
+                        read_track_gain(p)
+
+        QThreadPool.globalInstance().start(_WarmCache())
 
     @staticmethod
     def _rg_applied_vol(raw: int, multiplier: float) -> int:
