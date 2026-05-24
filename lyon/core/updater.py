@@ -41,7 +41,7 @@ from dataclasses import dataclass
 import defusedxml.ElementTree as ET
 import requests
 from defusedxml.common import DefusedXmlException
-from PySide6.QtCore import QObject, QThread, Signal
+from PySide6.QtCore import QObject, Signal
 
 LOG = logging.getLogger(__name__)
 
@@ -205,10 +205,10 @@ def check_for_update(
 class UpdateCheckWorker(QObject):
     """Background worker that fetches the appcast and emits the result.
 
-    Use ``moveToThread`` + ``start()`` rather than calling ``run()`` directly.
+    Move this parentless object to a ``QThread`` before calling ``run()``.
     The worker emits exactly one of ``finished`` (with the parsed
     :class:`UpdateInfo` or ``None``) or ``failed`` (with a short message).
-    Connect ``finished`` and ``failed`` to slots BEFORE calling ``start``.
+    Connect ``finished`` and ``failed`` to slots before starting the thread.
     """
 
     finished = Signal(object)   # UpdateInfo | None
@@ -218,25 +218,12 @@ class UpdateCheckWorker(QObject):
         self,
         appcast_url: str,
         current_version: str,
-        parent: QObject | None = None,
     ) -> None:
-        super().__init__(parent)
+        super().__init__(None)
         self._appcast_url = appcast_url
         self._current_version = current_version
-        self._thread: QThread | None = None
 
-    def start(self) -> None:
-        """Move the worker to a fresh QThread and run the check."""
-        if self._thread is not None:
-            return
-        self._thread = QThread(self)
-        self.moveToThread(self._thread)
-        self._thread.started.connect(self._run)
-        self.finished.connect(self._cleanup)
-        self.failed.connect(self._cleanup)
-        self._thread.start()
-
-    def _run(self) -> None:
+    def run(self) -> None:
         try:
             info = check_for_update(self._appcast_url, self._current_version)
         except UpdaterError as exc:
@@ -248,12 +235,3 @@ class UpdateCheckWorker(QObject):
             self.failed.emit(str(exc))
             return
         self.finished.emit(info)
-
-    def _cleanup(self, *_args: object) -> None:
-        thread = self._thread
-        if thread is None:
-            return
-        self._thread = None
-        thread.quit()
-        thread.wait(2000)
-        thread.deleteLater()

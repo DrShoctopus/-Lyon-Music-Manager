@@ -185,6 +185,18 @@ def test_check_for_update_returns_none_when_appcast_empty():
     assert info is None
 
 
+def test_update_check_worker_can_move_to_qthread(qapp):
+    QtCore = pytest.importorskip("PySide6.QtCore")
+    worker = updater.UpdateCheckWorker("https://example.test/appcast.xml", "1.0.0")
+    thread = QtCore.QThread()
+    try:
+        worker.moveToThread(thread)
+        assert worker.parent() is None
+        assert worker.thread() is thread
+    finally:
+        thread.deleteLater()
+
+
 # ---------------------------------------------------------------------------
 # Settings round-trip for the new updater fields
 # ---------------------------------------------------------------------------

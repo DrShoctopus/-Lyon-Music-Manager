@@ -146,6 +146,7 @@ class MainWindow(QMainWindow):
         # confirmed so we can revert there if they decline the gate.
         self._last_confirmed_tab_idx: int = 0
         # Auto-update plumbing — see _maybe_check_for_update / check_for_updates_now.
+        self._update_thread = None  # type: ignore[assignment]
         self._update_worker = None  # type: ignore[assignment]
         self._update_dialog = None  # type: ignore[assignment]
         self._update_manual_request: bool = False
@@ -1589,12 +1590,21 @@ class MainWindow(QMainWindow):
             if manual:
                 self.show_toast("No update server is configured.", level="warning")
             return
-        worker = UpdateCheckWorker(url, __version__, self)
+        thread = QThread()
+        worker = UpdateCheckWorker(url, __version__)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        thread.finished.connect(thread.deleteLater)
+        worker.finished.connect(worker.deleteLater)
+        worker.failed.connect(worker.deleteLater)
         worker.finished.connect(self._on_update_check_finished)
         worker.failed.connect(self._on_update_check_failed)
+        worker.finished.connect(self._finish_update_thread)
+        worker.failed.connect(self._finish_update_thread)
+        self._update_thread = thread
         self._update_worker = worker
         self._update_manual_request = manual
-        worker.start()
+        thread.start()
 
     def _on_update_check_finished(self, info: object) -> None:
         from ..core.updater import UpdateInfo
@@ -1637,6 +1647,14 @@ class MainWindow(QMainWindow):
                 f"Could not check for updates: {message}",
                 level="warning",
             )
+
+    def _finish_update_thread(self, *_args: object) -> None:
+        thread = self._update_thread
+        if thread is None:
+            return
+        self._update_thread = None
+        thread.quit()
+        thread.wait(2000)
 
     def _show_update_dialog(self, info: object) -> None:
         from .update_dialog import UpdateAvailableDialog
@@ -1773,6 +1791,18 @@ class MainWindow(QMainWindow):
             )
             ev.ignore()
             return
+        if self._update_thread is not None and self._update_thread.isRunning():
+            self._update_thread.quit()
+            if not self._update_thread.wait(3000):
+                self.show_toast(
+                    "Update check is still stopping. Try closing again in a moment.",
+                    level="warning",
+                    duration_ms=5000,
+                )
+                ev.ignore()
+                return
+            self._update_thread = None
+            self._update_worker = None
         self.cast_controller.stop_cast()
         self.cast_controller.shutdown()
         self.player.stop()
