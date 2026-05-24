@@ -494,6 +494,13 @@ class SettingsDialog(QDialog):
         self.dlna_port.setToolTip("Use 0 to let the operating system choose an available port.")
         form.addRow("Port:", self.dlna_port)
 
+        self.dlna_bind_address = QLineEdit(settings.dlna_bind_address)
+        self.dlna_bind_address.setPlaceholderText("0.0.0.0")
+        self.dlna_bind_address.setToolTip(
+            "Use 127.0.0.1 for this computer only, or 0.0.0.0 for local network devices."
+        )
+        form.addRow("Bind address:", self.dlna_bind_address)
+
         note = QLabel(
             "DLNA shares indexed audio and video files with devices on your local network while "
             "Sea Lyon is running. Anyone on that network may be able to browse and stream them."
@@ -830,6 +837,9 @@ class SettingsDialog(QDialog):
         self.result_settings.dlna_port = self.dlna_port.value()
         self.result_settings.dlna_friendly_name = (
             self.dlna_name.text().strip() or "Sea Lyon Media Manager"
+        )
+        self.result_settings.dlna_bind_address = (
+            self.dlna_bind_address.text().strip() or "0.0.0.0"
         )
         self.result_settings.update_check_enabled = self.update_check_enabled.isChecked()
         url = self.update_appcast_url.text().strip()

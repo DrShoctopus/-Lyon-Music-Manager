@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from lyon.core.podcast import parse_feed_text, parse_opml_text, subscription_from_settings
+from lyon.core import podcast
+from lyon.core.podcast import fetch_feed, parse_feed_text, parse_opml_text, subscription_from_settings
 from lyon.core.settings import Settings, normalize_podcast_subscriptions
 
 
@@ -42,6 +43,51 @@ def test_parse_rss_feed_reads_show_metadata_and_audio_enclosures():
     assert episode.guid == "episode-1"
     assert episode.published == "2026-05-19"
     assert episode.duration == "1:02:03"
+
+
+def test_fetch_feed_uses_bounded_response_read(monkeypatch):
+    calls: list[int] = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            pass
+
+        def read(self, size=-1):
+            calls.append(size)
+            return b"<rss><channel><title>Bounded</title></channel></rss>"
+
+    monkeypatch.setattr(podcast, "MAX_FEED_SIZE", 64)
+    monkeypatch.setattr(podcast, "urlopen", lambda _request, timeout: Response())
+
+    feed = fetch_feed("https://podcasts.example.test/feed.xml")
+
+    assert feed.title == "Bounded"
+    assert calls == [65]
+
+
+def test_fetch_feed_rejects_responses_larger_than_limit(monkeypatch):
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            pass
+
+        def read(self, size=-1):
+            return b"x" * size
+
+    monkeypatch.setattr(podcast, "MAX_FEED_SIZE", 64)
+    monkeypatch.setattr(podcast, "urlopen", lambda _request, timeout: Response())
+
+    try:
+        fetch_feed("https://podcasts.example.test/feed.xml")
+    except ValueError as exc:
+        assert "too large" in str(exc)
+    else:
+        raise AssertionError("oversized feed should raise ValueError")
 
 
 def test_parse_rss_feed_quotes_spaces_in_episode_urls():

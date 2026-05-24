@@ -48,6 +48,7 @@ LOG = logging.getLogger(__name__)
 SPARKLE_NS = "http://www.andymatuschak.org/xml-namespaces/sparkle"
 
 _REQUEST_TIMEOUT_SECONDS = 10.0
+_WORKER_REQUEST_TIMEOUT_SECONDS = 2.0
 _XML_EXCEPTIONS = (ET.ParseError, DefusedXmlException)
 
 
@@ -218,14 +219,21 @@ class UpdateCheckWorker(QObject):
         self,
         appcast_url: str,
         current_version: str,
+        *,
+        timeout: float = _WORKER_REQUEST_TIMEOUT_SECONDS,
     ) -> None:
         super().__init__(None)
         self._appcast_url = appcast_url
         self._current_version = current_version
+        self._timeout = timeout
 
     def run(self) -> None:
         try:
-            info = check_for_update(self._appcast_url, self._current_version)
+            info = check_for_update(
+                self._appcast_url,
+                self._current_version,
+                timeout=self._timeout,
+            )
         except UpdaterError as exc:
             LOG.debug("Update check failed: %s", exc)
             self.failed.emit(str(exc))

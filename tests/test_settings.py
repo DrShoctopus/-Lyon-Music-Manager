@@ -34,6 +34,22 @@ def test_settings_save_uses_owner_only_permissions(monkeypatch, tmp_path):
     assert mode == 0o600
 
 
+def test_settings_cache_loads_under_module_lock(monkeypatch):
+    settings.invalidate_settings_cache()
+    observed: list[bool] = []
+
+    def fake_load():
+        observed.append(settings._settings_cache_lock.locked())
+        return settings.Settings(music_root="/cached")
+
+    monkeypatch.setattr(settings.Settings, "load", staticmethod(fake_load))
+
+    cached = settings.get_cached_settings()
+
+    assert cached.music_root == "/cached"
+    assert observed == [True]
+
+
 # --- v1.0 release additions -------------------------------------------------
 
 
@@ -61,6 +77,19 @@ def test_smartscreen_flag_roundtrips_through_save_load(monkeypatch, tmp_path):
     s.save()
     loaded = settings.Settings.load()
     assert loaded.smartscreen_advisory_shown is True
+
+
+def test_dlna_bind_address_defaults_to_all_interfaces():
+    s = settings.Settings()
+    assert s.dlna_bind_address == "0.0.0.0"
+
+
+def test_dlna_bind_address_roundtrips_through_save_load(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "app_data_dir", lambda: tmp_path)
+    s = settings.Settings(dlna_bind_address="127.0.0.1")
+    s.save()
+    loaded = settings.Settings.load()
+    assert loaded.dlna_bind_address == "127.0.0.1"
 
 
 def test_default_musicbrainz_contact_is_real_url():

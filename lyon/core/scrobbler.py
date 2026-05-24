@@ -48,6 +48,7 @@ def _scrobbler_user_agent() -> str:
 _MIN_TRACK_DURATION_S = 30   # Last.fm requires >= 30 s
 _SCROBBLE_CAP_S = 240        # scrobble at 4 min if track is longer than 8 min
 _MAX_LISTENED_DELTA_MS = 10_000
+_BACKWARD_SEEK_RESET_THRESHOLD_MS = 5_000
 
 
 def _lastfm_sign(params: dict[str, str]) -> str:
@@ -172,7 +173,7 @@ class ScrobblerService(QObject):
             return
         delta_ms = pos_ms - self._last_position_ms
         self._last_position_ms = pos_ms
-        if delta_ms < 0:
+        if delta_ms < -_BACKWARD_SEEK_RESET_THRESHOLD_MS:
             self._listened_ms = 0  # backward seek — reset so threshold can't fire from stale time
         elif 0 < delta_ms:
             self._listened_ms += min(delta_ms, _MAX_LISTENED_DELTA_MS)

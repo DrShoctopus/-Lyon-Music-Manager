@@ -467,17 +467,18 @@ class MainWindow(QMainWindow):
         return page
 
     def _activate_tab(self, idx: int) -> None:
-        if 0 <= idx < len(self._TAB_ORDER):
-            name = self._TAB_ORDER[idx]
-            if name == "YouTube" and not self._ensure_youtube_acknowledged():
-                # Revert the tab bar back to the last confirmed tab. Defer
-                # via QTimer so the signal completes before we re-emit.
-                revert_idx = self._last_confirmed_tab_idx
-                if revert_idx == idx:
-                    revert_idx = 0
-                QTimer.singleShot(0, lambda r=revert_idx: self.tab_bar.setCurrentIndex(r))
-                return
-            self._ensure_tab_view(name)
+        if not (0 <= idx < len(self._TAB_ORDER)):
+            return
+        name = self._TAB_ORDER[idx]
+        if name == "YouTube" and not self._ensure_youtube_acknowledged():
+            # Revert the tab bar back to the last confirmed tab. Defer
+            # via QTimer so the signal completes before we re-emit.
+            revert_idx = self._last_confirmed_tab_idx
+            if revert_idx == idx:
+                revert_idx = 0
+            QTimer.singleShot(0, lambda r=revert_idx: self.tab_bar.setCurrentIndex(r))
+            return
+        self._ensure_tab_view(name)
         self._last_confirmed_tab_idx = idx
         self.stack.setCurrentIndex(idx)
 

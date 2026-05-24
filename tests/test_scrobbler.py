@@ -293,6 +293,22 @@ class TestPositionChanged:
             self.svc._on_position_changed(0, 0)
             mock.assert_not_called()
 
+    def test_tiny_backward_seek_keeps_listened_time(self):
+        self.svc._last_position_ms = 240_000
+        self.svc._listened_ms = 100_000
+
+        self.svc._on_position_changed(239_999, 240_000)
+
+        assert self.svc._listened_ms == 100_000
+
+    def test_large_backward_seek_resets_listened_time(self):
+        self.svc._last_position_ms = 240_000
+        self.svc._listened_ms = 100_000
+
+        self.svc._on_position_changed(230_000, 240_000)
+
+        assert self.svc._listened_ms == 0
+
 
 class TestScrobblerUpdateSettings:
     def test_update_settings_replaces_reference(self):

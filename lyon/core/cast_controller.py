@@ -56,6 +56,13 @@ class _SoapWorker(QObject):
     def submit(self, job: _SoapJob) -> None:
         self._jobs.put(job)
 
+    def clear_pending(self) -> None:
+        while True:
+            try:
+                self._jobs.get_nowait()
+            except _queue.Empty:
+                return
+
     def shutdown(self) -> None:
         self._jobs.put(None)  # sentinel: drain remaining, then stop
 
@@ -251,6 +258,7 @@ class CastController(QObject):
                 pass
 
         # State is cleared above; worker only needs the captured renderer URL.
+        self._worker.clear_pending()
         self._submit_job(_SoapJob("stop", [
             (renderer.av_transport_url, _AV_TRANSPORT_NS, "Stop", {
                 "InstanceID": "0",

@@ -707,12 +707,7 @@ class Library:
                 "SELECT id FROM tracks WHERE path = ?", (old_text,)
             ).fetchone()
             if old_row is None:
-                old_missing = True
-            else:
-                old_missing = False
-        if old_missing:
-            return self.index_file(new_text)
-        with self._lock:
+                return self.index_file(new_text)
             existing_dest = self.conn.execute(
                 "SELECT id FROM tracks WHERE path = ?", (new_text,)
             ).fetchone()
@@ -904,27 +899,15 @@ class Library:
         return [_row_to_track(r) for r in rows]
 
     def all_tracks(self, media_type: str | None = None) -> Iterator[Track]:
-        """Yield every track in id order, paging to avoid loading the full table at once."""
+        """Return a consistent snapshot of every track in id order."""
         filter_sql = "" if media_type is None else "AND media_type = ?"
-        last_id = 0
-        while True:
-            params = (
-                (last_id, _PAGE_SIZE)
-                if media_type is None
-                else (last_id, media_type, _PAGE_SIZE)
-            )
-            with self._lock:
-                rows = self.conn.execute(
-                    f"SELECT * FROM tracks WHERE id > ? {filter_sql} ORDER BY id LIMIT ?",
-                    params,
-                ).fetchall()
-            if not rows:
-                break
-            for r in rows:
-                last_id = int(r["id"])
-                yield _row_to_track(r)
-            if len(rows) < _PAGE_SIZE:
-                break
+        params = () if media_type is None else (media_type,)
+        with self._lock:
+            rows = self.conn.execute(
+                f"SELECT * FROM tracks WHERE id > 0 {filter_sql} ORDER BY id",
+                params,
+            ).fetchall()
+        return iter(_row_to_track(r) for r in rows)
 
     def count_tracks(self, media_type: str | None = None) -> int:
         """Return the number of tracks, optionally restricted by media type."""

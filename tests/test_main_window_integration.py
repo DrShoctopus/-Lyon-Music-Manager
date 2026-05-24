@@ -76,6 +76,14 @@ def test_clicking_a_tab_swaps_stack_page(main_window):
     assert main_window.stack.currentWidget() is main_window.library_view
 
 
+def test_activate_tab_ignores_out_of_range_index(main_window):
+    main_window._last_confirmed_tab_idx = main_window._tab_index["Library"]
+
+    main_window._activate_tab(999)
+
+    assert main_window._last_confirmed_tab_idx == main_window._tab_index["Library"]
+
+
 def test_low_coupling_tabs_are_lazy_created_on_first_use(main_window):
     assert main_window._now_playing_view is None
     assert main_window._podcast_view is None

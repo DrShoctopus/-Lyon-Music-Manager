@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import sys
+import threading
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
 from urllib.parse import urlparse
@@ -275,6 +276,7 @@ class Settings:
     dlna_enabled: bool = False
     dlna_port: int = 8200
     dlna_friendly_name: str = "Sea Lyon Media Manager"
+    dlna_bind_address: str = "0.0.0.0"
     last_cast_renderer: str = ""
     radio_stations: list[dict[str, object]] = field(default_factory=list)
     podcast_subscriptions: list[dict[str, object]] = field(default_factory=list)
@@ -318,6 +320,7 @@ class Settings:
         self.dlna_enabled = _bool_value(self.dlna_enabled, False)
         self.dlna_port = _clamp_int(self.dlna_port, 8200, 0, 65535)
         self.dlna_friendly_name = str(self.dlna_friendly_name or "").strip() or "Sea Lyon Media Manager"
+        self.dlna_bind_address = str(self.dlna_bind_address or "").strip() or "0.0.0.0"
         self.last_cast_renderer = str(self.last_cast_renderer or "").strip()
         self.radio_stations = normalize_radio_stations(self.radio_stations)
         self.podcast_subscriptions = normalize_podcast_subscriptions(self.podcast_subscriptions)
@@ -451,20 +454,23 @@ class Settings:
 # diagnostics checks) avoid redundant file I/O on every invocation.
 # ---------------------------------------------------------------------------
 _settings_cache: "Settings | None" = None
+_settings_cache_lock = threading.Lock()
 
 
 def get_cached_settings() -> "Settings":
     """Return cached Settings, loading from disk on first call."""
     global _settings_cache
-    if _settings_cache is None:
-        _settings_cache = Settings.load()
-    return _settings_cache
+    with _settings_cache_lock:
+        if _settings_cache is None:
+            _settings_cache = Settings.load()
+        return _settings_cache
 
 
 def invalidate_settings_cache() -> None:
     """Discard the cached Settings so the next call re-reads from disk."""
     global _settings_cache
-    _settings_cache = None
+    with _settings_cache_lock:
+        _settings_cache = None
 
 
 def _chmod_owner_only(path: Path) -> None:

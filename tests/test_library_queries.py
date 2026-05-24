@@ -104,6 +104,19 @@ def test_video_resume_position_round_trips(tmp_path):
     assert updated.resume_position == 45_000
 
 
+def test_all_tracks_iterates_over_a_consistent_snapshot(tmp_path, monkeypatch):
+    library = Library(tmp_path / "library.db")
+    monkeypatch.setattr(library_module, "_PAGE_SIZE", 1)
+    add_track(library, "/music/first.flac", artist="Artist", album="Album")
+
+    tracks = library.all_tracks()
+    first = next(tracks)
+    add_track(library, "/music/second.flac", artist="Artist", album="Album")
+
+    assert first.path == "/music/first.flac"
+    assert list(tracks) == []
+
+
 def test_resume_position_update_ignores_audio_tracks(tmp_path):
     library = Library(tmp_path / "library.db")
     add_track(library, "/music/song.flac", artist="Artist", album="Album")

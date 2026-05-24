@@ -151,6 +151,7 @@ def test_settings_dialog_persists_dlna_options(app):
             dlna_enabled=False,
             dlna_port=8200,
             dlna_friendly_name="Sea Lyon Media Manager",
+            dlna_bind_address="0.0.0.0",
         ),
         None,
     )
@@ -158,11 +159,13 @@ def test_settings_dialog_persists_dlna_options(app):
     dialog.dlna_enabled.setChecked(True)
     dialog.dlna_port.setValue(0)
     dialog.dlna_name.setText("Living Room Library")
+    dialog.dlna_bind_address.setText("127.0.0.1")
     dialog._accept()
 
     assert dialog.result_settings.dlna_enabled is True
     assert dialog.result_settings.dlna_port == 0
     assert dialog.result_settings.dlna_friendly_name == "Living Room Library"
+    assert dialog.result_settings.dlna_bind_address == "127.0.0.1"
 
 
 def test_settings_dialog_about_tab_mentions_copyright_and_third_parties(app):

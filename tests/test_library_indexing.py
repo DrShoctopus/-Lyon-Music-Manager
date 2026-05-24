@@ -1,4 +1,5 @@
 import os
+import threading
 from pathlib import Path
 
 from lyon.core import library as library_module
@@ -137,6 +138,56 @@ def test_move_path_preserves_playlist_membership_and_rating(tmp_path, monkeypatc
         assert moved.path == str(new_path)
         assert moved.rating == 4
         assert [t.id for t in library.playlist_tracks(playlist_id)] == [track.id]
+    finally:
+        library.close()
+
+
+def test_move_path_keeps_check_and_update_in_one_locked_section(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        library_module,
+        "MutagenFile",
+        lambda path, **_kwargs: _FakeAudio(Path(path).stem),
+    )
+    old_path = tmp_path / "old.flac"
+    new_path = tmp_path / "new.flac"
+    _set_file_state(old_path, b"one", 1_700_000_000_000_000_000)
+
+    library = Library(tmp_path / "library.db")
+
+    class DeleteOldPathAfterFirstCriticalSection:
+        def __init__(self) -> None:
+            self._lock = threading.RLock()
+            self._exited_once = False
+
+        def __enter__(self):
+            self._lock.acquire()
+            if self._exited_once:
+                library.conn.execute("DELETE FROM tracks WHERE path = ?", (str(old_path),))
+                library.conn.commit()
+                self._exited_once = False
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            self._exited_once = True
+            self._lock.release()
+
+    try:
+        assert library.index_file(old_path).status == "added"
+        library.commit()
+        track = next(library.all_tracks())
+        library.update_rating(track.id, 4)
+
+        library._lock = DeleteOldPathAfterFirstCriticalSection()
+        old_path.rename(new_path)
+        os.utime(new_path, ns=(1_700_000_200_000_000_000, 1_700_000_200_000_000_000))
+
+        result = library.move_path(old_path, new_path)
+
+        moved = next(library.all_tracks())
+        assert result.status == "updated"
+        assert moved.id == track.id
+        assert moved.path == str(new_path)
+        assert moved.rating == 4
     finally:
         library.close()
 

@@ -197,6 +197,22 @@ def test_update_check_worker_can_move_to_qthread(qapp):
         thread.deleteLater()
 
 
+def test_update_check_worker_uses_close_safe_timeout(qapp, monkeypatch):
+    calls: list[float] = []
+
+    def fake_check(appcast_url, current_version, *, timeout, session=None):
+        calls.append(float(timeout))
+        return None
+
+    monkeypatch.setattr(updater, "check_for_update", fake_check)
+    worker = updater.UpdateCheckWorker("https://example.test/appcast.xml", "1.0.0")
+
+    worker.run()
+
+    assert calls
+    assert 0 < calls[0] <= 2.5
+
+
 # ---------------------------------------------------------------------------
 # Settings round-trip for the new updater fields
 # ---------------------------------------------------------------------------

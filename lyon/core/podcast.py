@@ -18,6 +18,7 @@ _ATOM_NS = "http://www.w3.org/2005/Atom"
 _MEDIA_NS = "http://search.yahoo.com/mrss/"
 _AUDIO_MIME_PREFIXES = ("audio/", "video/")
 _ENCLOSURE_REL_VALUES = {"enclosure", "http://www.iana.org/assignments/relation/enclosure"}
+MAX_FEED_SIZE = 10 * 1024 * 1024
 
 
 def _podcast_user_agent() -> str:
@@ -93,7 +94,9 @@ def fetch_feed(url: str, *, timeout: int = 15) -> PodcastFeed:
         raise ValueError("Podcast feed URL must be HTTP or HTTPS.")
     request = Request(clean_url, headers={"User-Agent": _podcast_user_agent()})
     with urlopen(request, timeout=timeout) as response:  # noqa: S310 - user-supplied podcast URLs are expected.
-        data = response.read()
+        data = response.read(MAX_FEED_SIZE + 1)
+    if len(data) > MAX_FEED_SIZE:
+        raise ValueError("Podcast feed is too large.")
     text = data.decode("utf-8-sig", errors="replace")
     return parse_feed_text(text, source_url=clean_url)
 

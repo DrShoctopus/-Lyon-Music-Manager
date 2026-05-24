@@ -544,6 +544,27 @@ def test_stop_cast_tolerates_soap_failure(qapp):
         ctrl.shutdown()
 
 
+def test_stop_cast_drops_pending_stale_jobs_before_stop(qapp):
+    renderer = _make_renderer()
+    ctrl = CastController()
+    try:
+        ctrl._renderer = renderer
+        ctrl._session_id = 1
+        ctrl._worker.submit(_SoapJob("stale-track-change", []))
+
+        ctrl.stop_cast()
+
+        pending_labels = [
+            job.label
+            for job in list(ctrl._worker._jobs.queue)
+            if job is not None
+        ]
+        assert "stale-track-change" not in pending_labels
+        assert pending_labels == ["stop"]
+    finally:
+        ctrl.shutdown()
+
+
 # ---------------------------------------------------------------------------
 # is_casting / renderer properties
 # ---------------------------------------------------------------------------
