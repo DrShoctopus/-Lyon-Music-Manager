@@ -29,8 +29,10 @@ when v1.0 ships. Each release ships:
 
 The v1.0 installer is **unsigned** — Windows SmartScreen will show a
 "Windows protected your PC" dialog. Click **More info → Run anyway** to
-proceed. Authenticode code signing is planned for 1.1; see the
-[release plan](IMPLEMENTATION_PLAN_1.0.md#decisions-log-locked-in-before-work-starts).
+proceed, and verify the SHA-256 of the installer matches the value
+shipped in `SeaLyonMediaManager-{version}-SHA256SUMS.txt`. Authenticode
+code signing is planned for 1.1. Full guidance lives in
+[`docs/SMARTSCREEN_NOTES.md`](docs/SMARTSCREEN_NOTES.md).
 
 ### Auto-update
 
@@ -455,7 +457,10 @@ plus a redacted settings snapshot for support.
   in the active environment. ffmpeg is also needed for high-quality
   video merging and audio conversion.
 - **SmartScreen warning at install** — expected for 1.0. Click
-  "More info → Run anyway". A signed build is planned for 1.1.
+  "More info → Run anyway". See
+  [`docs/SMARTSCREEN_NOTES.md`](docs/SMARTSCREEN_NOTES.md) for the
+  full FAQ, including how to verify the SHA-256 hash before running.
+  A signed build is planned for 1.1.
 
 ## Legal & Privacy
 

@@ -17,8 +17,8 @@ pipeline at [`.github/workflows/windows-build.yml`](../.github/workflows/windows
 3. Commit on `LMM-MASTER`: `git commit -am "Release vX.Y.Z"`.
 4. Tag and push: `git tag vX.Y.Z && git push --tags`.
 5. Wait for CI to produce a draft GitHub Release.
-6. **Smoke-test** the installer on a clean Windows VM (use the
-   [release checklist](RELEASE_CHECKLIST.md) when it lands in Week 4).
+6. **Smoke-test** the installer on a clean Windows VM using the
+   [release checklist](RELEASE_CHECKLIST.md).
 7. If green: publish the draft Release. If red: delete the tag, fix,
    re-tag.
 8. Commit the regenerated `appcast.xml` to the `gh-pages` branch (1.0
@@ -110,8 +110,8 @@ Watch the run at
 
 Download the draft Release's installer to a **clean Windows VM** (or
 a fresh user without `%APPDATA%\LyonMusicManager\`). Walk through
-the release checklist in `docs/RELEASE_CHECKLIST.md` (lands in Week
-4). At minimum:
+the full checklist in [`RELEASE_CHECKLIST.md`](RELEASE_CHECKLIST.md).
+At minimum:
 
 - [ ] Installer runs end-to-end (SmartScreen → "More info → Run anyway").
 - [ ] EULA + third-party notices pages render.
