@@ -115,6 +115,7 @@ def main(argv: list[str] | None = None) -> int:
         target = "latest" if args.latest else args.version
         print(f"error: no section found for {target}", file=sys.stderr)
         return 1
+    sys.stdout.reconfigure(encoding="utf-8")
     sys.stdout.write(section)
     if not section.endswith("\n"):
         sys.stdout.write("\n")
