@@ -118,6 +118,7 @@ publish the GitHub Release when every required row is green.
 | I3 | Skip next track. | Renderer follows. | ☐ | ☐ |
 | I4 | Stop cast. | Renderer stops; local playback can resume. | ☐ | ☐ |
 | I5 | Enable DLNA server (Settings → DLNA). | Other LAN devices can browse Sea Lyon's library. | ☐ | ☐ |
+| I6 | Note the DLNA success toast and bind-address setting. | Tester records the advertised URL/bind address and confirms whether VPN, guest, or virtual adapters can reach the server. | ☐ | ☐ |
 
 ## J. Auto-update
 
@@ -128,6 +129,7 @@ publish the GitHub Release when every required row is green.
 | J3 | Override the appcast URL to a fake one with version X.Y.Z+1. | Manual check shows UpdateAvailableDialog with release notes. | ☐ | ☐ |
 | J4 | Click "Download Now". | Default browser opens to the enclosure URL. | ☐ | ☐ |
 | J5 | Re-trigger; click "Skip This Version". | "Stop skipping" link appears in Settings → Updates. | ☐ | ☐ |
+| J6 | Point the appcast URL at an unavailable host and restart twice. | Automatic retries back off; manual Help → Check for Updates still reports the failure on demand. | ☐ | ☐ |
 
 ## K. Diagnostics & support
 

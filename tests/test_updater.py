@@ -83,21 +83,21 @@ class _StubSession:
 
 
 def test_parse_version_basic():
-    assert _parse_version("1.0.0") == (1, 0, 0)
-    assert _parse_version("v1.2.3") == (1, 2, 3)
-    assert _parse_version("0.8.0") == (0, 8, 0)
+    assert _parse_version("1.0.0") == _parse_version("v1.0.0")
+    assert _parse_version("v1.2.3") > _parse_version("1.2.2")
+    assert _parse_version("0.8.0") < _parse_version("1.0.0")
 
 
-def test_parse_version_strips_prerelease():
-    assert _parse_version("1.0.0-rc1") == (1, 0, 0)
-    assert _parse_version("1.0.0+sha") == (1, 0, 0)
-    assert _parse_version("1.0.0-rc1+sha") == (1, 0, 0)
+def test_parse_version_orders_prerelease_before_final():
+    assert _parse_version("1.0.0-rc1") < _parse_version("1.0.0")
+    assert _parse_version("1.0.0+sha") == _parse_version("1.0.0")
+    assert _parse_version("1.0.0-rc1+sha") < _parse_version("1.0.0")
 
 
 def test_parse_version_handles_malformed():
-    assert _parse_version("") == (0,)
-    assert _parse_version("not-a-version") == (0,)
-    assert _parse_version("1.a.0") == (1,)
+    assert _parse_version("") == _parse_version("0.0.0")
+    assert _parse_version("not-a-version") == _parse_version("0.0.0")
+    assert _parse_version("1.a.0") == _parse_version("1.0.0")
 
 
 def test_is_newer():
@@ -105,7 +105,9 @@ def test_is_newer():
     assert _is_newer("2.0.0", "1.99.99") is True
     assert _is_newer("1.0.0", "1.0.0") is False
     assert _is_newer("0.9.0", "1.0.0") is False
-    assert _is_newer("1.0.0-rc1", "1.0.0") is False  # rc1 strips to 1.0.0
+    assert _is_newer("1.0.0-rc1", "1.0.0") is False
+    assert _is_newer("1.0.0", "1.0.0-rc1") is True
+    assert _is_newer("1.0.0-rc2", "1.0.0-rc1") is True
 
 
 # ---------------------------------------------------------------------------

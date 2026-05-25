@@ -291,6 +291,7 @@ class Settings:
         "https://drshoctopus.github.io/Sea-Lyon-Media-Manager/appcast.xml"
     )
     last_update_check_ts: int = 0       # POSIX timestamp; 0 = never
+    last_update_failure_ts: int = 0     # POSIX timestamp; 0 = no recent failure
     skipped_update_version: str = ""    # user said "Skip This Version"
     corrupt_backup_path: str = field(default="", init=False, repr=False, compare=False, metadata={"transient": True})
 
@@ -336,6 +337,7 @@ class Settings:
             "https://drshoctopus.github.io/Sea-Lyon-Media-Manager/appcast.xml"
         )
         self.last_update_check_ts = _nonnegative_int(self.last_update_check_ts, 0)
+        self.last_update_failure_ts = _nonnegative_int(self.last_update_failure_ts, 0)
         self.skipped_update_version = str(self.skipped_update_version or "").strip()
         self.yt_audio_format = str(self.yt_audio_format or "flac").lower()
         if self.yt_audio_format not in _YT_AUDIO_FORMATS:

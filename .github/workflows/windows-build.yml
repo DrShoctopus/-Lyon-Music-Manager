@@ -355,6 +355,19 @@ jobs:
           $notes | Out-File -Encoding UTF8 -FilePath $path
           "path=$path" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
+      - name: Fetch current appcast history
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          $appcastUrl = "https://drshoctopus.github.io/Sea-Lyon-Media-Manager/appcast.xml"
+          $output = "dist\appcast.xml"
+          try {
+            Invoke-WebRequest -Uri $appcastUrl -OutFile $output -UseBasicParsing
+            Write-Host "Fetched existing appcast history from $appcastUrl"
+          } catch {
+            Write-Host "No existing appcast history fetched: $($_.Exception.Message)"
+          }
+
       - name: Generate appcast.xml
         if: startsWith(github.ref, 'refs/tags/')
         shell: pwsh

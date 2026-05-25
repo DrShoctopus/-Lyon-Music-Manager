@@ -84,6 +84,97 @@ def test_activate_tab_ignores_out_of_range_index(main_window):
     assert main_window._last_confirmed_tab_idx == main_window._tab_index["Library"]
 
 
+def test_drop_event_reports_skipped_files(main_window, monkeypatch, tmp_path):
+    from lyon.core.library import IndexResult
+
+    media = tmp_path / "unreadable.mp3"
+    media.write_bytes(b"not real media")
+    toasts: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(
+        main_window.library,
+        "index_file",
+        lambda path, **_kwargs: IndexResult("skipped", str(path), "Unsupported metadata"),
+    )
+    monkeypatch.setattr(main_window.library, "commit", lambda: None)
+    monkeypatch.setattr(main_window.library_view, "refresh", lambda: None)
+    monkeypatch.setattr(main_window.dlna_server, "invalidate_cache", lambda: None)
+    monkeypatch.setattr(
+        main_window,
+        "show_toast",
+        lambda message, level="info", **_kwargs: toasts.append((message, level)),
+    )
+
+    class _MimeData:
+        def urls(self):
+            return [QtCore.QUrl.fromLocalFile(str(media))]
+
+    class _DropEvent:
+        def __init__(self) -> None:
+            self.accepted = False
+
+        def mimeData(self):
+            return _MimeData()
+
+        def acceptProposedAction(self) -> None:
+            self.accepted = True
+
+    event = _DropEvent()
+
+    main_window.dropEvent(event)
+
+    assert event.accepted is True
+    assert toasts == [("No supported files were added. 1 file skipped.", "warning")]
+
+
+def test_failed_auto_update_records_retry_timestamp(main_window, monkeypatch):
+    saves: list[bool] = []
+    main_window._update_manual_request = False
+    monkeypatch.setattr("time.time", lambda: 12_345.0)
+    monkeypatch.setattr(main_window.settings, "save", lambda: saves.append(True))
+
+    main_window._on_update_check_failed("offline")
+
+    assert main_window.settings.last_update_failure_ts == 12_345
+    assert saves == [True]
+
+
+def test_auto_update_failure_backoff_blocks_startup_retry(main_window, monkeypatch):
+    calls: list[bool] = []
+    main_window.settings.update_check_enabled = True
+    main_window.settings.first_run_completed = True
+    main_window.settings.last_update_check_ts = 0
+    main_window.settings.last_update_failure_ts = 10_000
+    monkeypatch.setattr("time.time", lambda: 10_000 + 60)
+    monkeypatch.setattr(
+        main_window,
+        "_start_update_check",
+        lambda *, manual: calls.append(manual),
+    )
+
+    main_window._maybe_check_for_update()
+
+    assert calls == []
+
+
+def test_auto_update_failure_backoff_allows_later_retry(main_window, monkeypatch):
+    calls: list[bool] = []
+    main_window.settings.update_check_enabled = True
+    main_window.settings.first_run_completed = True
+    main_window.settings.last_update_check_ts = 0
+    main_window.settings.last_update_failure_ts = 100_000
+    monkeypatch.setattr("time.time", lambda: 100_000 + main_window._UPDATE_FAILURE_RETRY_INTERVAL_S + 1)
+    monkeypatch.setattr(
+        main_window,
+        "_start_update_check",
+        lambda *, manual: calls.append(manual),
+    )
+
+    main_window._maybe_check_for_update()
+
+    assert calls == [False]
+
+
 def test_low_coupling_tabs_are_lazy_created_on_first_use(main_window):
     assert main_window._now_playing_view is None
     assert main_window._podcast_view is None

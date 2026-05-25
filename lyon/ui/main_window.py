@@ -18,7 +18,7 @@ from ..core import metadata
 from ..core.cd_detect import close_dll_handles as close_cd_dll_handles
 from ..core.cast_controller import CastController
 from ..core.dlna_server import DlnaServer
-from ..core.library import Library, ScanSummary, Track
+from ..core.library import Library, SUPPORTED_EXTS, ScanSummary, Track
 from ..core.library_watcher import (
     LibraryFolderWatcher,
     LibraryIndexThread,
@@ -1302,7 +1302,8 @@ class MainWindow(QMainWindow):
                 self.show_toast("DLNA sharing could not start.", level="warning")
             return
         if show_toast:
-            self.show_toast("DLNA sharing is running.", level="success")
+            detail = f" at {self.dlna_server.base_url}" if self.dlna_server.base_url else ""
+            self.show_toast(f"DLNA sharing is running{detail}.", level="success")
 
     def _confirm_dlna_lan_exposure(self) -> bool:
         result = QMessageBox.question(
@@ -1557,6 +1558,7 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ auto-update
 
     _UPDATE_CHECK_INTERVAL_S = 24 * 60 * 60  # at most once per day on startup
+    _UPDATE_FAILURE_RETRY_INTERVAL_S = 4 * 60 * 60  # back off outage retries
 
     def _maybe_check_for_update(self) -> None:
         """Startup hook: check the appcast if the user has opted in.
@@ -1570,8 +1572,12 @@ class MainWindow(QMainWindow):
         if not self.settings.update_check_enabled:
             return
         import time
-        elapsed = time.time() - max(0, int(self.settings.last_update_check_ts))
+        now = time.time()
+        elapsed = now - max(0, int(self.settings.last_update_check_ts))
         if elapsed < self._UPDATE_CHECK_INTERVAL_S:
+            return
+        failure_ts = max(0, int(self.settings.last_update_failure_ts))
+        if failure_ts and now - failure_ts < self._UPDATE_FAILURE_RETRY_INTERVAL_S:
             return
         self._start_update_check(manual=False)
 
@@ -1616,6 +1622,7 @@ class MainWindow(QMainWindow):
 
         import time
         self.settings.last_update_check_ts = int(time.time())
+        self.settings.last_update_failure_ts = 0
         # Persist the timestamp without churning the whole save path; settings.save()
         # writes the JSON file atomically.
         try:
@@ -1643,6 +1650,12 @@ class MainWindow(QMainWindow):
         self._update_worker = None
         manual = self._update_manual_request
         self._update_manual_request = False
+        import time
+        self.settings.last_update_failure_ts = int(time.time())
+        try:
+            self.settings.save()
+        except Exception:  # noqa: BLE001 — must never crash on save failure
+            pass
         if manual:
             self.show_toast(
                 f"Could not check for updates: {message}",
@@ -1704,9 +1717,7 @@ class MainWindow(QMainWindow):
         )
 
     # ------------------------------------------------------------------ drag-and-drop
-    _AUDIO_EXTENSIONS = frozenset(
-        ".flac .mp3 .ogg .wav .aac .m4a .wma .opus .ape .aiff .alac .mka .mp4 .mkv .webm".split()
-    )
+    _DROP_EXTENSIONS = SUPPORTED_EXTS
 
     def dragEnterEvent(self, ev: QDragEnterEvent) -> None:
         if ev.mimeData().hasUrls():
@@ -1725,7 +1736,7 @@ class MainWindow(QMainWindow):
             p = _Path(path)
             if p.is_dir():
                 folders.append(path)
-            elif p.suffix.lower() in self._AUDIO_EXTENSIONS:
+            elif p.suffix.lower() in self._DROP_EXTENSIONS:
                 files.append(path)
         if folders:
             for folder in folders:
@@ -1735,16 +1746,51 @@ class MainWindow(QMainWindow):
             self._restart_library_watcher()
             self._start_scan(folders, f"Added {len(folders)} folder(s)")
         if files:
-            for f in files:
-                self.library.add_file(f)
+            results = [self.library.index_file(f) for f in files]
             self.library.commit()
-            self.dlna_server.invalidate_cache()
-            self.library_view.refresh()
-            plural = "" if len(files) == 1 else "s"
-            self.show_toast(
-                f"Added {len(files)} file{plural} to library.",
-                level="success",
-            )
+            added = sum(1 for result in results if result.status == "added")
+            updated = sum(1 for result in results if result.status == "updated")
+            unchanged = sum(1 for result in results if result.status == "unchanged")
+            skipped = sum(1 for result in results if result.status == "skipped")
+            failed = sum(1 for result in results if result.status == "failed")
+            if added or updated:
+                self.dlna_server.invalidate_cache()
+                self.library_view.refresh()
+                parts: list[str] = []
+                if added:
+                    plural = "" if added == 1 else "s"
+                    parts.append(f"Added {added} file{plural}")
+                if updated:
+                    parts.append(f"updated {updated}")
+                if unchanged:
+                    parts.append(f"{unchanged} already in library")
+                if skipped:
+                    plural = "" if skipped == 1 else "s"
+                    parts.append(f"{skipped} file{plural} skipped")
+                if failed:
+                    plural = "" if failed == 1 else "s"
+                    parts.append(f"{failed} file{plural} failed")
+                self.show_toast(
+                    "; ".join(parts) + ".",
+                    level="warning" if failed or skipped else "success",
+                )
+            else:
+                detail_parts: list[str] = []
+                if unchanged:
+                    detail_parts.append(f"{unchanged} already in library")
+                if skipped:
+                    plural = "" if skipped == 1 else "s"
+                    detail_parts.append(f"{skipped} file{plural} skipped")
+                if failed:
+                    plural = "" if failed == 1 else "s"
+                    detail_parts.append(f"{failed} file{plural} failed")
+                detail = " ".join(detail_parts) or f"{len(files)} file(s) skipped."
+                if not detail.endswith("."):
+                    detail += "."
+                self.show_toast(
+                    f"No supported files were added. {detail}",
+                    level="warning",
+                )
         ev.acceptProposedAction()
 
     def closeEvent(self, ev) -> None:

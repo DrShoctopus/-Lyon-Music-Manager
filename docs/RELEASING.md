@@ -97,8 +97,10 @@ The push triggers `.github/workflows/windows-build.yml`. The job:
    - `dist/SeaLyonMediaManager-{ver}-SHA256SUMS.txt`
 7. Extracts the matching CHANGELOG section and writes
    `release-notes.md`.
-8. Generates `dist/appcast.xml` from CHANGELOG + the freshly-uploaded
-   installer URL.
+8. Fetches the currently published `appcast.xml` from GitHub Pages into
+   `dist/appcast.xml`, then regenerates it from CHANGELOG + the
+   freshly-uploaded installer URL so appcast history is preserved when
+   possible.
 9. Creates a **draft** GitHub Release with the installer, zip,
    SHA256SUMS, and `appcast.xml` attached. The appcast is not published
    to GitHub Pages until the draft Release is manually published.

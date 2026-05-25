@@ -36,6 +36,7 @@ Appcast format (Sparkle 2.0; signatures omitted for the v1.0 unsigned ship):
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 
 import defusedxml.ElementTree as ET
@@ -50,6 +51,7 @@ SPARKLE_NS = "http://www.andymatuschak.org/xml-namespaces/sparkle"
 _REQUEST_TIMEOUT_SECONDS = 10.0
 _WORKER_REQUEST_TIMEOUT_SECONDS = 2.0
 _XML_EXCEPTIONS = (ET.ParseError, DefusedXmlException)
+_PRERELEASE_TOKEN_RE = re.compile(r"[0-9]+|[A-Za-z]+")
 
 
 def _updater_user_agent() -> str:
@@ -80,27 +82,36 @@ class UpdaterError(Exception):
     """Raised when the appcast cannot be fetched or parsed."""
 
 
-def _parse_version(value: str) -> tuple[int, ...]:
-    """Return a comparable tuple of ints from a dotted version string.
+def _parse_version(value: str) -> tuple[tuple[int, ...], int, tuple[tuple[int, int | str], ...]]:
+    """Return a comparable version key.
 
-    Falls back to ``(0,)`` on malformed input rather than raising, so a
+    Falls back to a zero version on malformed input rather than raising, so a
     typo in the appcast can't break the startup check. Pre-release suffixes
-    (e.g. ``1.0.0-rc1``) are stripped to the numeric prefix.
+    sort before the matching final version so ``1.0.0`` updates
+    ``1.0.0-rc1``.
     """
     if not value:
-        return (0,)
-    head = value.strip().lstrip("vV")
-    # Strip pre-release / build metadata: "1.0.0-rc1+sha" -> "1.0.0".
-    for sep in ("-", "+"):
-        if sep in head:
-            head = head.split(sep, 1)[0]
+        return ((0, 0, 0), 1, ())
+    head = value.strip().lstrip("vV").split("+", 1)[0]
+    numeric_head, prerelease = (head.split("-", 1) + [""])[:2] if "-" in head else (head, "")
     parts: list[int] = []
-    for component in head.split("."):
+    for component in numeric_head.split("."):
         try:
             parts.append(int(component))
         except ValueError:
             break
-    return tuple(parts) if parts else (0,)
+    if not parts:
+        return ((0, 0, 0), 1, ())
+    while len(parts) < 3:
+        parts.append(0)
+    prerelease_rank = 0 if prerelease else 1
+    tokens: list[tuple[int, int | str]] = []
+    for token in _PRERELEASE_TOKEN_RE.findall(prerelease.casefold()):
+        if token.isdigit():
+            tokens.append((0, int(token)))
+        else:
+            tokens.append((1, token))
+    return (tuple(parts), prerelease_rank, tuple(tokens))
 
 
 def _is_newer(candidate: str, current: str) -> bool:

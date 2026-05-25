@@ -124,10 +124,18 @@ The CI pipeline:
 7. Zips the bundle, installs Inno Setup, compiles `build\lyon.iss`,
    and computes a SHA-256 manifest.
 8. Uploads the installer, zip, and SHA256SUMS as a single artifact.
-9. On tag builds, attaches release artifacts and `appcast.xml` to a
-   draft GitHub Release. The appcast is published by
+9. On tag builds, fetches the current Pages-hosted `appcast.xml` into
+   `dist\appcast.xml` before regenerating the feed so older release
+   items are preserved when possible.
+10. Attaches release artifacts and `appcast.xml` to a draft GitHub
+   Release. The appcast is published by
    `.github/workflows/publish-appcast.yml` only after the Release is
    published.
+
+The repository includes a conservative Ruff configuration in
+`pyproject.toml` for release-hardening checks. It intentionally focuses
+on syntax/import hazards first; broader formatting or typing rules should
+be tightened after the 1.0 release branch is stable.
 
 ## 7. Inno Setup details
 
