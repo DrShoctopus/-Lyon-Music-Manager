@@ -41,6 +41,10 @@ Set-Location $Root
 Write-Host "==> Lyon Music Manager - Windows build" -ForegroundColor Green
 Write-Host "    Project root: $Root"
 
+$ChromaprintVersion = '1.5.1'
+$FpcalcArchive = 'chromaprint-fpcalc-1.5.1-windows-x86_64.zip'
+$FpcalcUrl = 'https://github.com/acoustid/chromaprint/releases/download/v1.5.1/chromaprint-fpcalc-1.5.1-windows-x86_64.zip'
+
 function Get-ExpectedSha256FromText {
     param(
         [Parameter(Mandatory = $true)][string]$Text,
@@ -108,27 +112,6 @@ function Invoke-VerifiedDownload {
     Invoke-WebRequest -Uri $Uri -OutFile $OutFile -UseBasicParsing -ErrorAction Stop
     $expected = Get-ExpectedSha256 -Uri $ChecksumUri -FileName $ChecksumFileName
     Assert-FileSha256 -Path $OutFile -Expected $expected -Label ([System.IO.Path]::GetFileName($OutFile))
-}
-
-function Get-LatestFpcalcRelease {
-    Write-Host "==> Resolving latest fpcalc release" -ForegroundColor Cyan
-    $release = Invoke-RestMethod `
-        -Uri 'https://api.github.com/repos/acoustid/chromaprint/releases/latest' `
-        -Headers @{ 'User-Agent' = 'SeaLyonMediaManager-Build' } `
-        -ErrorAction Stop
-    $asset = $release.assets |
-        Where-Object { $_.name -match '^chromaprint-fpcalc-.+-windows-x86_64\.zip$' } |
-        Select-Object -First 1
-    if (-not $asset) {
-        throw "Latest Chromaprint release did not include a Windows x86_64 fpcalc zip."
-    }
-    $version = ([string]$release.tag_name) -replace '^v', ''
-    Write-Host "    Latest fpcalc: $version ($($asset.name))"
-    [pscustomobject]@{
-        Version = $version
-        Name = [string]$asset.name
-        Url = [string]$asset.browser_download_url
-    }
 }
 
 function Test-FpcalcVersion {
@@ -220,7 +203,11 @@ New-Item -ItemType Directory -Force -Path $bin | Out-Null
 
 $needFfmpeg = -not (Test-Path (Join-Path $bin 'ffmpeg.exe'))
 $fpcalcPath = Join-Path $bin 'fpcalc.exe'
-$fpcalcRelease = $null
+$fpcalcRelease = [pscustomobject]@{
+    Version = $ChromaprintVersion
+    Name = $FpcalcArchive
+    Url = $FpcalcUrl
+}
 $needFpcalc = -not (Test-Path $fpcalcPath)
 $needDiscid = -not (Test-Path (Join-Path $bin 'discid.dll'))
 $vlcDir = Join-Path $bin 'vlc'
@@ -229,7 +216,6 @@ $needVlc = -not (Test-Path (Join-Path $vlcDir 'libvlc.dll')) -or
            -not (Test-Path (Join-Path $vlcDir 'plugins'))
 
 if (-not $SkipBinaries) {
-    $fpcalcRelease = Get-LatestFpcalcRelease
     if (Test-Path $fpcalcPath) {
         if (Test-FpcalcVersion -Path $fpcalcPath -ExpectedVersion $fpcalcRelease.Version) {
             $needFpcalc = $false
@@ -268,7 +254,6 @@ if ($SkipBinaries) {
     }
 
     if ($needFpcalc) {
-        if (-not $fpcalcRelease) { $fpcalcRelease = Get-LatestFpcalcRelease }
         Write-Host "==> Downloading fpcalc.exe (Chromaprint $($fpcalcRelease.Version))" -ForegroundColor Cyan
         $tmp = Join-Path $env:TEMP $fpcalcRelease.Name
         $extract = Join-Path $env:TEMP 'lyon-fpcalc-extract'

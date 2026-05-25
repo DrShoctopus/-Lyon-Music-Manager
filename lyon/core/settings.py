@@ -267,6 +267,8 @@ class Settings:
     audio_output: str = ""              # VLC audio output module ID (e.g. "wasapi", "directsound")
     audio_output_device: str = ""       # VLC device ID string; "" = VLC default
     gapless_playback: bool = False      # pre-buffer next track to minimize inter-track gap; no-op when crossfade > 0
+    lastfm_api_key: str = ""            # user-provided Last.fm API key
+    lastfm_api_secret: str = ""         # user-provided Last.fm shared secret
     lastfm_session_key: str = ""        # per-user session key obtained via auth.getSession
     lastfm_username: str = ""           # display name for the connected Last.fm account
     lastfm_scrobbling_enabled: bool = False
@@ -314,6 +316,8 @@ class Settings:
         self.gapless_playback = _bool_value(self.gapless_playback, False)
         self.lastfm_scrobbling_enabled = _bool_value(self.lastfm_scrobbling_enabled, False)
         self.listenbrainz_scrobbling_enabled = _bool_value(self.listenbrainz_scrobbling_enabled, False)
+        self.lastfm_api_key = str(self.lastfm_api_key or "").strip()
+        self.lastfm_api_secret = str(self.lastfm_api_secret or "").strip()
         self.lastfm_session_key = str(self.lastfm_session_key or "").strip()
         self.lastfm_username = str(self.lastfm_username or "").strip()
         self.listenbrainz_token = str(self.listenbrainz_token or "").strip()

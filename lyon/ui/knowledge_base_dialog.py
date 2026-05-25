@@ -1159,6 +1159,9 @@ SCROBBLING = _wrap(
 
     <h2>Last.fm</h2>
     <ol>
+      <li>Create a Last.fm API account at
+      <a href="https://www.last.fm/api/account/create">last.fm/api/account/create</a>,
+      then paste your API key and shared secret into the Settings fields.</li>
       <li>Tick <b>Enable Last.fm scrobbling</b>.</li>
       <li>Click <b>Connect Last.fm…</b>. The app gets a token, opens your
       browser, and waits for you to click <i>"Allow"</i> on the Last.fm

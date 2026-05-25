@@ -157,6 +157,25 @@ class TestScrobblerHttpHelpers:
         assert _lbz_post({"payload": []}, "token") is False
 
 
+class TestLastFmCredentials:
+    def test_settings_credentials_configure_lastfm(self):
+        import lyon.core.scrobbler as scrobbler
+
+        settings = Settings(lastfm_api_key="user-key", lastfm_api_secret="user-secret")
+
+        assert scrobbler.lastfm_api_configured(settings) is True
+        assert scrobbler.lastfm_auth_url("token-123", settings) == (
+            "https://www.last.fm/api/auth/?api_key=user-key&token=token-123"
+        )
+
+    def test_missing_settings_secret_keeps_lastfm_unconfigured(self):
+        import lyon.core.scrobbler as scrobbler
+
+        settings = Settings(lastfm_api_key="user-key", lastfm_api_secret="")
+
+        assert scrobbler.lastfm_api_configured(settings) is False
+
+
 class TestScrobblerServiceInit:
     def test_connects_to_player(self):
         player = _make_player()
@@ -191,26 +210,26 @@ class TestTrackChanged:
 
     def test_now_playing_submitted_when_enabled(self):
         settings = _make_settings(
+            lastfm_api_key="testkey",
+            lastfm_api_secret="testsecret",
             lastfm_scrobbling_enabled=True,
             lastfm_session_key="sk123",
         )
         self.svc.update_settings(settings)
-        with patch("lyon.core.scrobbler._LASTFM_API_KEY", "testkey"), \
-             patch("lyon.core.scrobbler._LASTFM_API_SECRET", "testsecret"), \
-             patch("lyon.core.scrobbler.QThreadPool") as mock_pool:
+        with patch("lyon.core.scrobbler.QThreadPool") as mock_pool:
             mock_pool.globalInstance.return_value = MagicMock()
             self.svc._on_track_changed(_make_track())
             mock_pool.globalInstance.return_value.start.assert_called_once()
 
     def test_now_playing_not_submitted_without_lastfm_secret(self):
         settings = _make_settings(
+            lastfm_api_key="testkey",
+            lastfm_api_secret="",
             lastfm_scrobbling_enabled=True,
             lastfm_session_key="sk123",
         )
         self.svc.update_settings(settings)
-        with patch("lyon.core.scrobbler._LASTFM_API_KEY", "testkey"), \
-             patch("lyon.core.scrobbler._LASTFM_API_SECRET", ""), \
-             patch("lyon.core.scrobbler.QThreadPool") as mock_pool:
+        with patch("lyon.core.scrobbler.QThreadPool") as mock_pool:
             mock_pool.globalInstance.return_value = MagicMock()
             self.svc._on_track_changed(_make_track())
             mock_pool.globalInstance.return_value.start.assert_not_called()

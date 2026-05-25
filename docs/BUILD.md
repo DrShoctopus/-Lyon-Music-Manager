@@ -207,14 +207,16 @@ and compare against the value in `SHA256SUMS.txt`.
 To get byte-identical artefacts on two machines, you need:
 
 1. The same Python 3.11.x point release.
-2. The locked transitive dependency list. Before tagging a release,
-   regenerate `requirements.txt` with `pip-compile --generate-hashes`
-   from `requirements.in` on a Windows venv:
+2. The locked transitive dependency lists. Before tagging a release,
+   regenerate `requirements.txt` and `requirements-build.txt` with `uv`
+   from the `.in` files:
    ```pwsh
-   pip install pip-tools
-   pip-compile --generate-hashes --output-file=requirements.txt requirements.in
+   pip install uv
+   uv pip compile requirements.in --universal --python-version 3.11 --generate-hashes --output-file requirements.txt
+   uv pip compile requirements-build.in --universal --python-version 3.11 --generate-hashes --output-file requirements-build.txt
    ```
-3. The pinned binary runtimes from `windows-build.yml`'s `env:` block.
+3. The pinned binary runtimes from `windows-build.yml`'s `env:` block
+   and `scripts/build-windows.ps1`.
 
 PyInstaller is mostly deterministic but timestamps and a few caches
 may differ; the SHA-256 of the unzipped `LyonMusicManager.exe` is

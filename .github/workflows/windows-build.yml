@@ -34,7 +34,9 @@ jobs:
           python-version: "3.11"
           cache: "pip"
           cache-dependency-path: |
+            requirements.in
             requirements.txt
+            requirements-build.in
             requirements-build.txt
 
       - name: Install Python dependencies
@@ -226,15 +228,6 @@ jobs:
               throw "Required build input missing: $required"
             }
           }
-
-      - name: Write API secrets
-        shell: pwsh
-        env:
-          LASTFM_KEY: ${{ secrets.LYON_LASTFM_API_KEY }}
-          LASTFM_SECRET: ${{ secrets.LYON_LASTFM_API_SECRET }}
-        run: |
-          $content = "LASTFM_API_KEY = `"$env:LASTFM_KEY`"`nLASTFM_API_SECRET = `"$env:LASTFM_SECRET`""
-          $content | Out-File -FilePath "lyon\core\_secrets.py" -Encoding utf8 -NoNewline
 
       - name: Build with PyInstaller
         run: python -m PyInstaller --noconfirm build/lyon.spec

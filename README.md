@@ -12,7 +12,7 @@ Sea Lyon is written in Python with PySide6 and uses SQLite, Mutagen,
 libVLC, ffmpeg, yt-dlp, CUETools DB, MusicBrainz, TheAudioDB, Cover Art
 Archive, LRCLIB, and libdiscid.
 
-**Current version:** `0.8.0` (LMM-DEV) — see [`lyon/__init__.py`](lyon/__init__.py).
+**Current version:** `0.9.0-rc1` (LMM-DEV) — see [`lyon/__init__.py`](lyon/__init__.py).
 **Targeted public release:** `1.0.0` — see [`IMPLEMENTATION_PLAN_1.0.md`](IMPLEMENTATION_PLAN_1.0.md).
 
 ## Downloads & Installation
@@ -209,13 +209,11 @@ cover **running from source** for development.
 pip install -r requirements.txt
 ```
 
-Pinned runtime packages currently include `PySide6-Essentials`,
-`mutagen`, `musicbrainzngs`, `requests`, `defusedxml`, `python-vlc`,
-`discid` (Windows), `yt-dlp`, `watchdog`, and `pyacoustid`.
-
-Build machines should install `requirements-build.txt`, which layers
-PyInstaller, pytest, and build-only icon tooling on top of the runtime
-dependencies.
+Runtime installs use the hashed lock in `requirements.txt`, generated
+from `requirements.in`. Build machines should install the hashed
+`requirements-build.txt`, generated from `requirements-build.in`, which
+layers PyInstaller, pytest, and build-only icon tooling on top of the
+runtime dependencies.
 
 ### Native Runtime Files
 
@@ -337,9 +335,11 @@ build/lyon.spec                 PyInstaller spec
 build/lyon.iss                  Inno Setup script
 scripts/build-windows.ps1       Windows build automation
 scripts/README.md               Build-script notes
-tests/                          Pytest suite (660+ tests)
-requirements.txt                Python runtime dependencies
-requirements.in                 Top-level deps (input for pip-compile)
+tests/                          Pytest suite (700+ tests)
+requirements.txt                Hashed Python runtime dependency lock
+requirements.in                 Runtime deps input for uv pip compile
+requirements-build.txt          Hashed build/test dependency lock
+requirements-build.in           Build/test deps input for uv pip compile
 CHANGELOG.md                    Release notes (Keep a Changelog format)
 EULA.txt                        End-user license agreement (MIT + tail)
 PRIVACY.md                      Privacy policy (no telemetry)

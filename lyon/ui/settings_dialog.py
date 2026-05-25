@@ -424,6 +424,16 @@ class SettingsDialog(QDialog):
         self.lastfm_enabled.setChecked(settings.lastfm_scrobbling_enabled)
         layout.addWidget(self.lastfm_enabled)
 
+        lfm_creds = QFormLayout()
+        self.lastfm_api_key = QLineEdit(settings.lastfm_api_key)
+        self.lastfm_api_key.setPlaceholderText("Last.fm API key")
+        lfm_creds.addRow("API key", self.lastfm_api_key)
+        self.lastfm_api_secret = QLineEdit(settings.lastfm_api_secret)
+        self.lastfm_api_secret.setPlaceholderText("Last.fm shared secret")
+        self.lastfm_api_secret.setEchoMode(QLineEdit.Password)
+        lfm_creds.addRow("Shared secret", self.lastfm_api_secret)
+        layout.addLayout(lfm_creds)
+
         lfm_status_row = QHBoxLayout()
         self._lastfm_status_label = QLabel(self._lastfm_status_text(settings))
         lfm_status_row.addWidget(self._lastfm_status_label)
@@ -617,6 +627,9 @@ class SettingsDialog(QDialog):
         if self._scrobbler is None:
             QMessageBox.warning(self, "Last.fm", "Scrobbler service is unavailable.")
             return
+        self.result_settings.lastfm_api_key = self.lastfm_api_key.text().strip()
+        self.result_settings.lastfm_api_secret = self.lastfm_api_secret.text().strip()
+        self._scrobbler.update_settings(self.result_settings)
         self._lastfm_connect_btn.setEnabled(False)
         self._lastfm_status_label.setText("Getting token…")
         self._scrobbler.start_lastfm_auth()
@@ -624,8 +637,9 @@ class SettingsDialog(QDialog):
     def _on_lastfm_token_ready(self, token: str) -> None:
         from PySide6.QtCore import QUrl
         from PySide6.QtGui import QDesktopServices
-        from ..core.scrobbler import lastfm_auth_url
-        QDesktopServices.openUrl(QUrl(lastfm_auth_url(token)))
+        if self._scrobbler is None:
+            return
+        QDesktopServices.openUrl(QUrl(self._scrobbler.lastfm_auth_url(token)))
         self._lastfm_status_label.setText("Waiting for browser authorisation…")
         if self._lastfm_poll_timer is None:
             self._lastfm_poll_timer = QTimer(self)
@@ -830,6 +844,8 @@ class SettingsDialog(QDialog):
         self.result_settings.yt_video_quality = self.yt_video_quality.currentData() or "best"
         self.result_settings.yt_output_dir = self.yt_save_dir.text().strip()
         self.result_settings.yt_auto_add = self.yt_auto_add.isChecked()
+        self.result_settings.lastfm_api_key = self.lastfm_api_key.text().strip()
+        self.result_settings.lastfm_api_secret = self.lastfm_api_secret.text().strip()
         self.result_settings.lastfm_scrobbling_enabled = self.lastfm_enabled.isChecked()
         self.result_settings.listenbrainz_scrobbling_enabled = self.lbz_enabled.isChecked()
         self.result_settings.listenbrainz_token = self.lbz_token.text().strip()
