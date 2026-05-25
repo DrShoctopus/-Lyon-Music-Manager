@@ -24,8 +24,6 @@ jobs:
     runs-on: windows-latest
     permissions:
       contents: write
-      pages: write
-      id-token: write
 
     steps:
       - uses: actions/checkout@v4
@@ -347,7 +345,9 @@ jobs:
       # matching CHANGELOG section, regenerate the appcast feed, and create
       # (or update) a draft GitHub Release with the installer + zip +
       # SHA256SUMS attached. The release stays draft so a human can
-      # smoke-test before publishing.
+      # smoke-test before publishing. Do not deploy appcast.xml from this
+      # workflow; .github/workflows/publish-appcast.yml publishes it only
+      # after the GitHub Release is public.
       - name: Extract release notes from CHANGELOG
         if: startsWith(github.ref, 'refs/tags/')
         id: release-notes
@@ -394,20 +394,3 @@ jobs:
             dist/SeaLyonMediaManager-${{ steps.appver.outputs.version }}-windows.zip
             dist/SeaLyonMediaManager-${{ steps.appver.outputs.version }}-SHA256SUMS.txt
             dist/appcast.xml
-
-      - name: Prepare GitHub Pages content
-        if: startsWith(github.ref, 'refs/tags/')
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path pages-content | Out-Null
-          Copy-Item dist\appcast.xml pages-content\appcast.xml -Force
-
-      - name: Upload Pages artifact
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: pages-content
-
-      - name: Deploy appcast to GitHub Pages
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: actions/deploy-pages@v4

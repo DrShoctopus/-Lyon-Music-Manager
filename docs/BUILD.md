@@ -103,15 +103,15 @@ Flags:
 `windows-latest`. Triggers:
 
 - `workflow_dispatch` — manual; useful for verifying CI before tagging.
-- (planned for v1.0) `push: tags: ['v*.*.*']` — auto-creates a draft
-  GitHub Release with the installer, portable zip, and SHA-256 manifest
+- `push: tags: ['v*.*.*']` — auto-creates a draft GitHub Release with
+  the installer, portable zip, SHA-256 manifest, and `appcast.xml`
   attached.
 
 The CI pipeline:
 
 1. Installs Python deps from `requirements-build.txt`.
 2. **Runs `pytest`** (must pass and collect at least `PYTEST_FLOOR`
-   tests — currently 645). The build aborts if any test fails or the
+   tests — currently 680). The build aborts if any test fails or the
    collected count drops, to catch silently-skipped tests.
 3. Hash-verifies and downloads ffmpeg, libdiscid, VLC, and fpcalc.
    fpcalc is pinned to a known Chromaprint version
@@ -124,6 +124,10 @@ The CI pipeline:
 7. Zips the bundle, installs Inno Setup, compiles `build\lyon.iss`,
    and computes a SHA-256 manifest.
 8. Uploads the installer, zip, and SHA256SUMS as a single artifact.
+9. On tag builds, attaches release artifacts and `appcast.xml` to a
+   draft GitHub Release. The appcast is published by
+   `.github/workflows/publish-appcast.yml` only after the Release is
+   published.
 
 ## 7. Inno Setup details
 

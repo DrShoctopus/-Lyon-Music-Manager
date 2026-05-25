@@ -21,20 +21,19 @@ pipeline at [`.github/workflows/windows-build.yml`](../.github/workflows/windows
    [release checklist](RELEASE_CHECKLIST.md).
 7. If green: publish the draft Release. If red: delete the tag, fix,
    re-tag.
-8. Commit the regenerated `appcast.xml` to the `gh-pages` branch (1.0
-   is manual; automation lands in 1.1).
+8. Wait for `.github/workflows/publish-appcast.yml` to publish the
+   release's attached `appcast.xml` to GitHub Pages, then verify it.
 
 ## Pre-flight (do this once)
 
 - A GitHub Personal Access Token with `repo` scope is **not** required
   for tag pushes — the workflow uses `GITHUB_TOKEN` automatically.
-- `gh-pages` branch should exist with at minimum:
+- GitHub Pages should be configured to deploy from GitHub Actions. The
+  `publish-appcast.yml` workflow publishes:
   ```
   /appcast.xml      <-- the in-app updater reads this
   /PRIVACY.md       <-- linked from the app
   ```
-  If `gh-pages` doesn't exist yet, create it with the contents of the
-  first release's `dist/appcast.xml` artifact.
 
 ## 1. Update the CHANGELOG
 
@@ -101,7 +100,8 @@ The push triggers `.github/workflows/windows-build.yml`. The job:
 8. Generates `dist/appcast.xml` from CHANGELOG + the freshly-uploaded
    installer URL.
 9. Creates a **draft** GitHub Release with the installer, zip,
-   SHA256SUMS, and `appcast.xml` attached.
+   SHA256SUMS, and `appcast.xml` attached. The appcast is not published
+   to GitHub Pages until the draft Release is manually published.
 
 Watch the run at
 <https://github.com/DrShoctopus/Sea-Lyon-Media-Manager/actions>.
@@ -125,7 +125,9 @@ At minimum:
 
 ## 6. Publish (or roll back)
 
-**If green**, hit "Publish release" on the draft Release page.
+**If green**, hit "Publish release" on the draft Release page. That
+triggers `.github/workflows/publish-appcast.yml`, which downloads the
+release's attached `appcast.xml` and deploys it to GitHub Pages.
 
 **If red**, do not publish. Instead:
 
@@ -137,20 +139,11 @@ git push origin :refs/tags/v1.0.0
 Fix the issue, re-tag, push again. Avoid amending or force-pushing
 the release tag once it's been public.
 
-## 7. Update the appcast on gh-pages
+## 7. Verify automated appcast publication
 
-For v1.0 this step is manual; automate in 1.1.
-
-```cmd
-git fetch origin gh-pages
-git worktree add ../sealyon-ghpages gh-pages
-copy dist\appcast.xml ..\sealyon-ghpages\appcast.xml
-cd ..\sealyon-ghpages
-git commit -am "Appcast: v1.0.0"
-git push origin gh-pages
-cd ..\Sea-Lyon-Media-Manager
-git worktree remove ../sealyon-ghpages
-```
+After the release is published, wait for the `Publish appcast` workflow
+to finish. It should deploy the release asset named `appcast.xml` to
+GitHub Pages.
 
 Verify the feed is reachable:
 
