@@ -1059,30 +1059,43 @@ def _fetch_artwork_url(url: str) -> bytes | None:
         return None
     try:
         response = _http_get(url, timeout=HTTP_TIMEOUT_SECONDS, stream=True)
-        byte_count = 0
-        if response.status_code == 200:
-            content_length = response.headers.get("Content-Length") if hasattr(response, "headers") else None
-            if content_length and _safe_int(content_length, 0) > MAX_ARTWORK_BYTES:
-                _log_metadata_diagnostic(
-                    "Artwork request skipped for %s: Content-Length exceeds %s bytes",
-                    url,
-                    MAX_ARTWORK_BYTES,
-                )
-                return None
-            content = _limited_response_content(response, MAX_ARTWORK_BYTES)
-            byte_count = len(content)
-            if content:
-                return content
-        _log_metadata_diagnostic(
-            "Artwork request failed for %s: HTTP %s %s (bytes=%s)",
-            url,
-            response.status_code,
-            _text(getattr(response, "reason", "")),
-            byte_count,
-        )
+        try:
+            byte_count = 0
+            if response.status_code == 200:
+                content_length = response.headers.get("Content-Length") if hasattr(response, "headers") else None
+                if content_length and _safe_int(content_length, 0) > MAX_ARTWORK_BYTES:
+                    _log_metadata_diagnostic(
+                        "Artwork request skipped for %s: Content-Length exceeds %s bytes",
+                        url,
+                        MAX_ARTWORK_BYTES,
+                    )
+                    return None
+                content = _limited_response_content(response, MAX_ARTWORK_BYTES)
+                byte_count = len(content)
+                if content:
+                    return content
+            _log_metadata_diagnostic(
+                "Artwork request failed for %s: HTTP %s %s (bytes=%s)",
+                url,
+                response.status_code,
+                _text(getattr(response, "reason", "")),
+                byte_count,
+            )
+        finally:
+            _close_streaming_response(response, url)
     except requests.RequestException as exc:
         _log_metadata_diagnostic("Artwork request failed for %s: %s", url, exc)
     return None
+
+
+def _close_streaming_response(response: Any, url: str) -> None:
+    close = getattr(response, "close", None)
+    if not callable(close):
+        return
+    try:
+        close()
+    except Exception as exc:  # pragma: no cover - defensive cleanup path
+        LOG.debug("Could not close artwork response for %s: %s", url, exc)
 
 
 def _limited_response_content(response: requests.Response, limit: int) -> bytes:

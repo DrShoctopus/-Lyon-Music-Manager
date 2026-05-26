@@ -49,6 +49,17 @@ from .toast import Toast
 from .yt_download_dialog import YtDownloadDialog
 
 
+def _dlna_settings_signature(settings: Settings) -> tuple[object, ...]:
+    return (
+        settings.dlna_enabled,
+        settings.dlna_port,
+        settings.dlna_friendly_name,
+        settings.dlna_bind_address,
+        settings.music_root,
+        tuple(settings.library_paths),
+    )
+
+
 class _LibraryScanThread(QThread):
     finished_with = Signal(int, int, int, str)  # (new_tracks, updated_tracks, removed_tracks, label)
     failed_with = Signal(str, str)         # (label, error)
@@ -1167,11 +1178,8 @@ class MainWindow(QMainWindow):
         from .settings_dialog import SettingsDialog
         old_paths = list(self.settings.library_paths)
         old_watch = self.settings.watch_library_folders
-        old_dlna = (
-            self.settings.dlna_enabled,
-            self.settings.dlna_port,
-            self.settings.dlna_friendly_name,
-        )
+        old_dlna_enabled = self.settings.dlna_enabled
+        old_dlna = _dlna_settings_signature(self.settings)
         audio_outputs = self.player.list_audio_outputs()
         audio_devices_map: dict[str, list[tuple[str, str]]] = {}
         for out_id, _desc in audio_outputs:
@@ -1190,7 +1198,7 @@ class MainWindow(QMainWindow):
         if accepted and result_settings is not None:
             if (
                 result_settings.dlna_enabled
-                and not old_dlna[0]
+                and not old_dlna_enabled
                 and not self._confirm_dlna_lan_exposure()
             ):
                 result_settings.dlna_enabled = False
@@ -1224,11 +1232,7 @@ class MainWindow(QMainWindow):
             )
             self.player.set_gapless(self.settings.gapless_playback)
             self.scrobbler.update_settings(self.settings)
-            new_dlna = (
-                self.settings.dlna_enabled,
-                self.settings.dlna_port,
-                self.settings.dlna_friendly_name,
-            )
+            new_dlna = _dlna_settings_signature(self.settings)
             if new_dlna != old_dlna:
                 self._restart_dlna_server(show_toast=True)
             self._apply_video_equalizer_if_loaded(

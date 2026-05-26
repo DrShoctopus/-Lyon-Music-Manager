@@ -635,6 +635,48 @@ def test_fetch_artwork_rejects_oversized_content_length(monkeypatch):
     assert captured["kwargs"]["stream"] is True
 
 
+def test_fetch_artwork_closes_streaming_response_on_oversized_content_length(monkeypatch):
+    class FakeResponse:
+        status_code = 200
+        headers = {"Content-Length": str(metadata.MAX_ARTWORK_BYTES + 1)}
+        content = b""
+
+        def __init__(self):
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    response = FakeResponse()
+    monkeypatch.setattr(metadata, "_http_get", lambda *args, **kwargs: response)
+
+    assert metadata._fetch_artwork_url("https://example.test/huge.jpg") is None
+    assert response.closed is True
+
+
+def test_fetch_artwork_closes_streaming_response_after_success(monkeypatch):
+    class FakeResponse:
+        status_code = 200
+        headers = {}
+        reason = "OK"
+
+        def __init__(self):
+            self.closed = False
+
+        def iter_content(self, chunk_size):
+            assert chunk_size > 0
+            yield b"image-bytes"
+
+        def close(self):
+            self.closed = True
+
+    response = FakeResponse()
+    monkeypatch.setattr(metadata, "_http_get", lambda *args, **kwargs: response)
+
+    assert metadata._fetch_artwork_url("https://example.test/cover.jpg") == b"image-bytes"
+    assert response.closed is True
+
+
 def test_fetch_artwork_rejects_stream_that_exceeds_limit(monkeypatch):
     class FakeResponse:
         status_code = 200

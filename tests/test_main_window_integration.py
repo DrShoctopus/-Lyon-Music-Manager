@@ -14,6 +14,8 @@ Phases 1–7 still holds together:
 """
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 QtCore = pytest.importorskip("PySide6.QtCore", exc_type=ImportError)
@@ -58,6 +60,36 @@ def main_window(qapp, fake_backend, monkeypatch, tmp_path):
     w.player.stop()
     w.library.close()
     w.deleteLater()
+
+
+def _accept_settings_dialog(monkeypatch, **changes):
+    from lyon.ui import settings_dialog as settings_dialog_mod
+
+    class FakeSettingsDialog:
+        def __init__(self, settings, *_args, **_kwargs):
+            self.result_settings = replace(settings)
+            for name, value in changes.items():
+                setattr(self.result_settings, name, value)
+
+        def exec(self):
+            return QtWidgets.QDialog.Accepted
+
+        def deleteLater(self):
+            pass
+
+    monkeypatch.setattr(settings_dialog_mod, "SettingsDialog", FakeSettingsDialog)
+
+
+def _stub_settings_save_side_effects(main_window, monkeypatch):
+    from lyon.core.settings import Settings
+    from lyon.ui import main_window as main_window_mod
+
+    monkeypatch.setattr(Settings, "save", lambda self: None)
+    monkeypatch.setattr(main_window_mod.metadata, "reset_musicbrainz_useragent", lambda: None)
+    monkeypatch.setattr(main_window_mod.metadata, "clear_metadata_cache", lambda: None)
+    monkeypatch.setattr(main_window, "_restart_library_watcher", lambda: None)
+    monkeypatch.setattr(main_window, "_start_scan", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(main_window, "show_toast", lambda *_args, **_kwargs: None)
 
 
 def test_tab_bar_renders_documented_order(main_window):
@@ -139,6 +171,43 @@ def test_failed_auto_update_records_retry_timestamp(main_window, monkeypatch):
     assert saves == [True]
 
 
+def test_settings_dlna_bind_address_change_restarts_running_server(main_window, monkeypatch):
+    restarts: list[bool] = []
+    main_window.settings.dlna_enabled = True
+    main_window.settings.dlna_port = 8200
+    main_window.settings.dlna_friendly_name = "Sea Lyon"
+    main_window.settings.dlna_bind_address = "0.0.0.0"
+    _accept_settings_dialog(monkeypatch, dlna_bind_address="127.0.0.1")
+    _stub_settings_save_side_effects(main_window, monkeypatch)
+    monkeypatch.setattr(
+        main_window,
+        "_restart_dlna_server",
+        lambda *, show_toast: restarts.append(show_toast),
+    )
+
+    main_window.open_settings()
+
+    assert restarts == [True]
+
+
+def test_settings_library_path_change_restarts_running_dlna_server(main_window, monkeypatch, tmp_path):
+    restarts: list[bool] = []
+    media_dir = str(tmp_path / "Shared Music")
+    main_window.settings.dlna_enabled = True
+    main_window.settings.library_paths = []
+    _accept_settings_dialog(monkeypatch, library_paths=[media_dir])
+    _stub_settings_save_side_effects(main_window, monkeypatch)
+    monkeypatch.setattr(
+        main_window,
+        "_restart_dlna_server",
+        lambda *, show_toast: restarts.append(show_toast),
+    )
+
+    main_window.open_settings()
+
+    assert restarts == [True]
+
+
 def test_auto_update_failure_backoff_blocks_startup_retry(main_window, monkeypatch):
     calls: list[bool] = []
     main_window.settings.update_check_enabled = True
@@ -152,9 +221,12 @@ def test_auto_update_failure_backoff_blocks_startup_retry(main_window, monkeypat
         lambda *, manual: calls.append(manual),
     )
 
-    main_window._maybe_check_for_update()
+    try:
+        main_window._maybe_check_for_update()
 
-    assert calls == []
+        assert calls == []
+    finally:
+        main_window.settings.update_check_enabled = False
 
 
 def test_auto_update_failure_backoff_allows_later_retry(main_window, monkeypatch):
@@ -170,9 +242,12 @@ def test_auto_update_failure_backoff_allows_later_retry(main_window, monkeypatch
         lambda *, manual: calls.append(manual),
     )
 
-    main_window._maybe_check_for_update()
+    try:
+        main_window._maybe_check_for_update()
 
-    assert calls == [False]
+        assert calls == [False]
+    finally:
+        main_window.settings.update_check_enabled = False
 
 
 def test_low_coupling_tabs_are_lazy_created_on_first_use(main_window):
