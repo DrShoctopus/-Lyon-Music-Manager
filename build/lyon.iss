@@ -49,7 +49,7 @@ Compression=lzma2/ultra64
 SolidCompression=yes
 ; Appearance
 WizardStyle=modern
-WizardImageFile=..\docs\brand\lyon-splash.png
+WizardImageFile=..\docs\brand\lyon-installer-wizard.png
 WizardSmallImageFile=..\docs\brand\lyon-app-icon.png
 ; Legal / informational pages.
 LicenseFile=..\EULA.txt
