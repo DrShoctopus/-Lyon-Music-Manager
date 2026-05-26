@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from lyon.core.radio import parse_playlist_file, parse_playlist_text, station_from_url
+from lyon.core.radio import (
+    parse_playlist_file,
+    parse_playlist_text,
+    parse_stream_title,
+    station_from_url,
+)
 from lyon.core.settings import Settings, normalize_radio_stations
 
 
@@ -112,3 +117,38 @@ def test_radio_station_settings_normalize_and_merge():
         {"name": "One Updated", "url": "https://one.example.test/live", "genre": "News", "bitrate": 128},
         {"name": "Two", "url": "https://two.example.test/live", "genre": "", "bitrate": 0},
     ]
+
+
+# ---- parse_stream_title (ICY metadata helper) -------------------------------
+
+def test_parse_stream_title_splits_artist_and_title():
+    assert parse_stream_title("Daft Punk - One More Time") == ("Daft Punk", "One More Time")
+
+
+def test_parse_stream_title_strips_whitespace():
+    assert parse_stream_title("  Daft Punk  -  One More Time  ") == ("Daft Punk", "One More Time")
+
+
+def test_parse_stream_title_uses_first_separator_only():
+    # Real ICY values often contain extra dashes inside the song title —
+    # only the first " - " should split artist from the rest.
+    assert parse_stream_title("Artist - Song - Live Version") == (
+        "Artist",
+        "Song - Live Version",
+    )
+
+
+def test_parse_stream_title_without_separator_returns_title_only():
+    assert parse_stream_title("Just A Song Title") == ("", "Just A Song Title")
+
+
+def test_parse_stream_title_empty_returns_empty_pair():
+    assert parse_stream_title("") == ("", "")
+    assert parse_stream_title("   ") == ("", "")
+
+
+def test_parse_stream_title_leading_dash_kept_when_no_real_separator():
+    # The leading "- " is not " - " (space-dash-space) once whitespace is
+    # stripped, so we conservatively treat the whole thing as a title rather
+    # than guess at the broadcaster's intent.
+    assert parse_stream_title(" - Title Only") == ("", "- Title Only")

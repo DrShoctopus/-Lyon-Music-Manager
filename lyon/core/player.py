@@ -13,6 +13,7 @@ from PySide6.QtCore import QObject, QRunnable, QThreadPool, QTimer, Signal
 from .library import Library, Track
 from .equalizer import clamp_preamp, flat_equalizer_bands, normalize_equalizer_bands
 from .playback_backend import PlaybackBackend, create_playback_backend
+from .radio import parse_stream_title
 
 
 _GAPLESS_PREBUFFER_MS = 2000
@@ -453,13 +454,20 @@ class Player(QObject):
         backend.position_changed.connect(self._on_position_changed)
         backend.state_changed.connect(self.state_changed.emit)
         backend.end_reached.connect(self._on_track_ended)
+        metadata_signal = getattr(backend, "metadata_changed", None)
+        if metadata_signal is not None:
+            metadata_signal.connect(self._on_backend_metadata)
 
     def _disconnect_backend(self, backend: PlaybackBackend) -> None:
-        for signal, slot in (
+        slots: list[tuple[object, object]] = [
             (backend.position_changed, self._on_position_changed),
             (backend.state_changed, self.state_changed.emit),
             (backend.end_reached, self._on_track_ended),
-        ):
+        ]
+        metadata_signal = getattr(backend, "metadata_changed", None)
+        if metadata_signal is not None:
+            slots.append((metadata_signal, self._on_backend_metadata))
+        for signal, slot in slots:
             try:
                 signal.disconnect(slot)
             except (RuntimeError, TypeError):
@@ -553,6 +561,51 @@ class Player(QObject):
         self.position_changed.emit(pos_ms, dur_ms)
         self._maybe_auto_crossfade(pos_ms, dur_ms)
         self._maybe_gapless_prebuffer(pos_ms, dur_ms)
+
+    def _on_backend_metadata(self, meta: dict) -> None:
+        """Apply ICY/HLS metadata updates to the currently-streaming track.
+
+        Library tracks always own their own tags, so we ignore metadata
+        callbacks for them. Streams (``is_library_item=False`` with a remote
+        ``playback_uri``) get their ``title`` / ``artist`` updated in place so
+        the transport bar and Now Playing view refresh via ``track_changed``.
+        """
+        track = self.current()
+        if track is None or track.is_library_item:
+            return
+        if not track.playback_is_location:
+            return
+        if not isinstance(meta, dict):
+            return
+
+        now_playing = str(meta.get("now_playing") or "").strip()
+        artist = str(meta.get("artist") or "").strip()
+        title = str(meta.get("title") or "").strip()
+
+        # Prefer the explicit Artist/Title pair when VLC has parsed them.
+        # Otherwise fall back to splitting the "Artist - Title" form that ICY
+        # NowPlaying typically carries.
+        if not artist and now_playing:
+            parsed_artist, parsed_title = parse_stream_title(now_playing)
+            if parsed_artist or parsed_title:
+                artist = parsed_artist
+                if parsed_title:
+                    title = parsed_title
+
+        # The station name is the user-facing label; preserve it as the album
+        # so the transport bar's "{artist} — {album}" line reads
+        # "Stream Artist — Station Name".
+        if track.album == "" and track.title:
+            track.album = track.title
+
+        if artist:
+            track.artist = artist
+        if title:
+            track.title = title
+        elif now_playing:
+            track.title = now_playing
+
+        self.track_changed.emit(track)
 
     def _on_track_ended(self) -> None:
         if 0 <= self._index < len(self._queue):
