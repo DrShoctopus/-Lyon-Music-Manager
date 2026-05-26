@@ -27,6 +27,7 @@ from ..core.library_watcher import (
 )
 from ..core.playback_backend import close_dll_handles
 from ..core.podcast import podcast_user_agent
+from ..core.radio import radio_user_agent
 from ..core.player import Player
 from ..core.replaygain import ReplayGainScanner
 from ..core.scrobbler import ScrobblerService
@@ -142,6 +143,9 @@ class MainWindow(QMainWindow):
         self._now_playing_view = None
         self._podcast_view = None
         self._radio_view = None
+        # Remembered most recently requested radio (url, title) for friendly
+        # error reporting; cleared once a different source plays.
+        self._last_radio_request: tuple[str, str] | None = None
         # YouTube acknowledgement: tracks the last tab the user actually
         # confirmed so we can revert there if they decline the gate.
         self._last_confirmed_tab_idx: int = 0
@@ -295,6 +299,7 @@ class MainWindow(QMainWindow):
             lambda m: self.show_toast(m, level="warning"))
         self.player.track_changed.connect(self.library_view.highlight_track)
         self.player.playback_unavailable.connect(self._on_playback_unavailable)
+        self._connect_backend_error_toast()
         self.library_view.request_add_folder.connect(self.add_folder)
         self.library_view.request_youtube_search.connect(self._search_youtube_for_track)
         self.library_view.request_open_settings.connect(self.open_settings)
@@ -650,6 +655,28 @@ class MainWindow(QMainWindow):
         )
         self.statusBar().showMessage(reason, 6000)
 
+    def _connect_backend_error_toast(self) -> None:
+        """Subscribe to backend ``error_occurred`` to surface stream failures."""
+        backend = getattr(self.player, "_backend", None)
+        signal = getattr(backend, "error_occurred", None)
+        if signal is None:
+            return
+        try:
+            signal.connect(self._on_stream_error)
+        except (RuntimeError, TypeError):
+            pass
+
+    def _on_stream_error(self, url: str) -> None:
+        last = self._last_radio_request
+        if last is None or last[0] != url:
+            return
+        _, title = last
+        self.show_toast(
+            f'Could not connect to "{title}".',
+            level="error",
+            duration_ms=5000,
+        )
+
     # ------------------------------------------------------------------ toasts
     def show_toast(
         self,
@@ -821,7 +848,16 @@ class MainWindow(QMainWindow):
 
     def _play_radio_station(self, url: str, title: str) -> None:
         self._pause_video_playback_if_loaded()
-        self.player.play_url(url, title=title)
+        self._last_radio_request = (url, title)
+        self.player.play_url(
+            url,
+            title=title,
+            options=(
+                f":http-user-agent={radio_user_agent()}",
+                ":network-caching=2000",
+                ":http-reconnect",
+            ),
+        )
         self.show_toast(f"Playing radio: {title}", level="info")
 
     def _play_podcast_episode(self, url: str, title: str) -> None:

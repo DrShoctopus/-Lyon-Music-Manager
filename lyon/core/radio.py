@@ -8,6 +8,39 @@ from urllib.parse import urljoin, urlparse
 from .settings import normalize_stream_urls
 
 
+def radio_user_agent() -> str:
+    """Return a Sea Lyon UA string for outbound radio stream requests."""
+    from .settings import Settings, get_cached_settings
+    from .user_agent import component_user_agent
+
+    try:
+        settings = get_cached_settings()
+    except Exception:  # noqa: BLE001 — UA must never crash a stream start
+        settings = Settings()
+    return component_user_agent("Radio", settings)
+
+
+def parse_stream_title(text: str) -> tuple[str, str]:
+    """Split an ICY ``StreamTitle`` value into ``(artist, title)``.
+
+    The dominant convention encoded in ``StreamTitle`` is ``"Artist - Title"``,
+    so we split on the first ``" - "`` separator. Anything without a separator
+    is treated as a title with no artist.
+    """
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return "", ""
+    separator = " - "
+    index = cleaned.find(separator)
+    if index <= 0:
+        return "", cleaned
+    artist = cleaned[:index].strip()
+    title = cleaned[index + len(separator):].strip()
+    if not title:
+        return "", artist
+    return artist, title
+
+
 @dataclass(frozen=True)
 class RadioStation:
     name: str

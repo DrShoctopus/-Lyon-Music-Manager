@@ -48,6 +48,18 @@ _MIN_TRACK_DURATION_S = 30   # Last.fm requires >= 30 s
 _SCROBBLE_CAP_S = 240        # scrobble at 4 min if track is longer than 8 min
 _MAX_LISTENED_DELTA_MS = 10_000
 _BACKWARD_SEEK_RESET_THRESHOLD_MS = 5_000
+# Placeholder artist names assigned to one-shot URL plays before live
+# stream metadata arrives; never submit these as scrobbles.
+_PLACEHOLDER_STREAM_ARTISTS = frozenset({"network stream", ""})
+
+
+def _has_scrobbleable_metadata(track: "Track") -> bool:
+    """Return True if a track has real Artist + Title worth submitting."""
+    title = (track.title or "").strip()
+    artist = (track.display_artist or "").strip()
+    if not title or not artist:
+        return False
+    return artist.casefold() not in _PLACEHOLDER_STREAM_ARTISTS
 
 
 def _lastfm_sign(params: dict[str, str]) -> str:
@@ -187,6 +199,8 @@ class ScrobblerService(QObject):
     # ------------------------------------------------------------------ submissions
 
     def _submit_now_playing(self, track: "Track") -> None:
+        if not _has_scrobbleable_metadata(track):
+            return
         if (
             self._settings.lastfm_scrobbling_enabled
             and self._settings.lastfm_session_key
@@ -216,6 +230,8 @@ class ScrobblerService(QObject):
             QThreadPool.globalInstance().start(_HttpTask(lambda p=payload, t=token: _lbz_post(p, t)))
 
     def _submit_scrobble(self, track: "Track", timestamp: int) -> None:
+        if not _has_scrobbleable_metadata(track):
+            return
         if (
             self._settings.lastfm_scrobbling_enabled
             and self._settings.lastfm_session_key

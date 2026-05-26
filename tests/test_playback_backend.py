@@ -470,3 +470,215 @@ def test_vlc_backend_lists_audio_devices_from_pointer_list(qapp):
         assert vlc.released is vlc.head
     finally:
         backend.cleanup()
+
+
+# ---- ICY metadata + error event plumbing -----------------------------------
+
+
+class _FakeEventManager:
+    """Fake VLC event manager that records attach/detach calls."""
+
+    def __init__(self):
+        self.attached = []   # list[(event_type, callback)]
+        self.detached = []   # list[event_type]
+
+    def event_attach(self, event_type, callback):
+        self.attached.append((event_type, callback))
+
+    def event_detach(self, event_type):
+        self.detached.append(event_type)
+
+
+class _FakeMetaMedia:
+    """Fake VLC media supporting get_meta + event_manager."""
+
+    def __init__(self, meta=None):
+        self._meta = dict(meta or {})
+        self.event_mgr = _FakeEventManager()
+        self.options = []
+        self.released = False
+
+    def add_option(self, option):
+        self.options.append(option)
+
+    def get_meta(self, attr):
+        return self._meta.get(attr, "")
+
+    def event_manager(self):
+        return self.event_mgr
+
+    def release(self):
+        self.released = True
+
+
+def _fake_meta_vlc(media_factory):
+    """Build a fake vlc module wired with the given media factory."""
+
+    class Player:
+        def __init__(self):
+            self.media = None
+            self.state = Vlc.State.Playing
+
+        def set_media(self, media):
+            self.media = media
+
+        def get_state(self):
+            return self.state
+
+        def get_time(self):
+            return 0
+
+        def get_length(self):
+            return 0
+
+        def play(self):
+            return 0
+
+        def pause(self): pass
+        def stop(self): pass
+        def release(self): pass
+        def audio_set_volume(self, _value): pass
+        def audio_set_mute(self, _value): pass
+        def set_equalizer(self, _value): pass
+
+    class MetaCls:
+        NowPlaying = "now_playing"
+        Title = "title"
+        Artist = "artist"
+        ArtworkURL = "artwork_url"
+
+    class EventTypeCls:
+        MediaMetaChanged = "media-meta-changed"
+
+    class Vlc:
+        class State:
+            Ended = object()
+            Playing = object()
+            Paused = object()
+            Stopped = object()
+            Error = object()
+
+        def __init__(self):
+            self.player = Player()
+            self.location_calls = []
+
+        def Instance(self):
+            return self
+
+        def media_player_new(self):
+            return self.player
+
+        def media_new_path(self, _path):
+            return media_factory()
+
+        def media_new_location(self, uri):
+            self.location_calls.append(uri)
+            return media_factory()
+
+        def release(self): pass
+        def AudioEqualizer(self):
+            return object()
+
+    Vlc.Meta = MetaCls
+    Vlc.EventType = EventTypeCls
+    return Vlc()
+
+
+def test_vlc_backend_emits_metadata_on_meta_event(qapp):
+    media_holder = {}
+
+    def factory():
+        media = _FakeMetaMedia({
+            "now_playing": "Daft Punk - One More Time",
+            "title": "One More Time",
+            "artist": "Daft Punk",
+        })
+        media_holder["last"] = media
+        return media
+
+    vlc = _fake_meta_vlc(factory)
+    backend = VlcPlaybackBackend(vlc)
+    received = []
+    backend.metadata_changed.connect(received.append)
+    try:
+        backend.set_source("http://stream.example/audio", is_location=True)
+        media = media_holder["last"]
+        assert media.event_mgr.attached, "media event handler should be attached"
+
+        event_type, handler = media.event_mgr.attached[0]
+        assert event_type == "media-meta-changed"
+
+        # Simulate VLC firing the meta event and the QTimer dispatching.
+        handler(object())
+        backend._emit_pending_metadata()
+
+        assert received == [{
+            "now_playing": "Daft Punk - One More Time",
+            "title": "One More Time",
+            "artist": "Daft Punk",
+            "artwork_url": "",
+        }]
+    finally:
+        backend.cleanup()
+
+
+def test_vlc_backend_does_not_re_emit_unchanged_metadata(qapp):
+    def factory():
+        return _FakeMetaMedia({"title": "Same Song", "artist": "Same Artist"})
+
+    vlc = _fake_meta_vlc(factory)
+    backend = VlcPlaybackBackend(vlc)
+    received = []
+    backend.metadata_changed.connect(received.append)
+    try:
+        backend.set_source("http://stream.example/audio", is_location=True)
+        backend._emit_pending_metadata()
+        backend._emit_pending_metadata()
+        assert len(received) == 1
+    finally:
+        backend.cleanup()
+
+
+def test_vlc_backend_detaches_meta_events_on_new_source(qapp):
+    media_holder = {"all": []}
+
+    def factory():
+        media = _FakeMetaMedia()
+        media_holder["all"].append(media)
+        return media
+
+    vlc = _fake_meta_vlc(factory)
+    backend = VlcPlaybackBackend(vlc)
+    try:
+        backend.set_source("http://one.example/audio", is_location=True)
+        backend.set_source("http://two.example/audio", is_location=True)
+        first = media_holder["all"][0]
+        assert first.event_mgr.detached == ["media-meta-changed"]
+    finally:
+        backend.cleanup()
+
+
+def test_vlc_backend_emits_error_event_when_state_becomes_error(qapp):
+    def factory():
+        return _FakeMetaMedia()
+
+    vlc = _fake_meta_vlc(factory)
+    backend = VlcPlaybackBackend(vlc)
+    received = []
+    backend.error_occurred.connect(received.append)
+    try:
+        backend.set_source("http://broken.example/audio", is_location=True)
+        vlc.player.state = vlc.State.Error
+        backend._poll()
+        backend._poll()  # second poll must not re-emit for the same source
+        assert received == ["http://broken.example/audio"]
+
+        backend.set_source("http://other.example/audio", is_location=True)
+        vlc.player.state = vlc.State.Error
+        backend._poll()
+        assert received == [
+            "http://broken.example/audio",
+            "http://other.example/audio",
+        ]
+    finally:
+        backend.cleanup()
