@@ -553,7 +553,7 @@ def test_rip_worker_filters_retry_tracks_without_shrinking_album_metadata(monkey
         out.write_bytes(b"audio")
         return None
 
-    def fake_write_tags(path, tagged_album, track, artwork):
+    def fake_write_tags(path, tagged_album, track, artwork, **_kw):
         tag_calls.append((track.number, len(tagged_album.tracks), path.name))
         return True
 
@@ -602,7 +602,7 @@ def test_rip_worker_reports_tag_failures_as_failed_not_finished(monkeypatch, tmp
     monkeypatch.setitem(
         sys.modules,
         "lyon.core.tagger",
-        types.SimpleNamespace(write_tags=lambda *_: False),
+        types.SimpleNamespace(write_tags=lambda *_, **__: False),
     )
     worker.track_failed.connect(lambda n, reason: failed.append((n, reason)))
     worker.track_finished.connect(lambda n, path: completed.append((n, path)))
@@ -656,7 +656,7 @@ def test_rip_worker_reuses_one_raw_reader_for_multiple_tracks(monkeypatch, tmp_p
         out.write_bytes(b"audio")
         return None
 
-    def fake_write_tags(*_):
+    def fake_write_tags(*_, **__):
         return True
 
     monkeypatch.setattr(sys, "platform", "win32")

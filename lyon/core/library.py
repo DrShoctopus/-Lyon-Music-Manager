@@ -12,10 +12,16 @@ from pathlib import Path
 from typing import Callable, Iterable, Iterator, Literal
 
 from mutagen import File as MutagenFile
+from mutagen.easymp4 import EasyMP4Tags
 
 from .settings import app_data_dir
 
 LOG = logging.getLogger(__name__)
+
+try:
+    EasyMP4Tags.RegisterFreeformKey("musicbrainz_discid", "MusicBrainz Disc Id")
+except ValueError:
+    pass  # already registered
 
 SUPPORTED_AUDIO_EXTS = {
     ".flac",
@@ -421,7 +427,7 @@ class Library:
                 meta["samplerate"],
                 str(art) if art else None,
                 media_type,
-                disc_id or (row["disc_id"] if row is not None and "disc_id" in row.keys() else None),
+                disc_id or meta.get("disc_id") or (row["disc_id"] if row is not None and "disc_id" in row.keys() else None),
                 int(stat.st_size),
                 int(stat.st_mtime_ns),
                 now,
@@ -946,6 +952,35 @@ class Library:
                 f"SELECT {DISPLAY_ARTIST_SQL} AS a, {DISPLAY_ALBUM_SQL} AS b"
                 " FROM tracks WHERE disc_id = ? LIMIT 1",
                 (disc_id,),
+            ).fetchone()
+        return (row["a"], row["b"]) if row else None
+
+    def find_album_match(
+        self,
+        artist: str,
+        album: str,
+        track_count: int,
+    ) -> tuple[str, str] | None:
+        """Return (display_artist, display_album) if the library already has an
+        album whose artist, album name, and track count all match the given
+        values.  Comparison is case-insensitive.  Returns None when no match is
+        found.
+        """
+        if not artist or not album or track_count < 1:
+            return None
+        with self._lock:
+            row = self.conn.execute(
+                f"""SELECT {DISPLAY_ARTIST_SQL} AS a,
+                           {DISPLAY_ALBUM_SQL}  AS b,
+                           COUNT(*)             AS cnt
+                    FROM tracks
+                    WHERE media_type = 'audio'
+                    GROUP BY a, b
+                    HAVING a = ? COLLATE NOCASE
+                       AND b = ? COLLATE NOCASE
+                       AND cnt = ?
+                    LIMIT 1""",
+                (artist, album, track_count),
             ).fetchone()
         return (row["a"], row["b"]) if row else None
 
@@ -1619,6 +1654,9 @@ def _read_tags(path: str) -> dict | None:
                 return int(s[:4])
             except ValueError:
                 return 0
+    disc_id = first("musicbrainz_discid")
+    if not disc_id:
+        disc_id = first("MusicBrainz/Disc Id")
     return {
         "title": first("title") or Path(path).stem,
         "artist": first("artist"),
@@ -1632,6 +1670,7 @@ def _read_tags(path: str) -> dict | None:
         "duration": float(getattr(info, "length", 0.0) or 0.0),
         "bitrate": int(getattr(info, "bitrate", 0) or 0),
         "samplerate": int(getattr(info, "sample_rate", 0) or 0),
+        "disc_id": disc_id,
     }
 
 

@@ -539,6 +539,7 @@ class RipRequest:
     leadout_sector: int = 0
     ctdb_toc: str = ""
     track_numbers: tuple[int, ...] = ()
+    disc_id: str = ""
 
 
 @dataclass
@@ -815,7 +816,7 @@ class RipWorker(QObject):
                     continue
 
                 from .tagger import write_tags
-                if not write_tags(out, album, tr, art_bytes):
+                if not write_tags(out, album, tr, art_bytes, disc_id=self.request.disc_id):
                     success = False
                     reason = "Track ripped but audio tags could not be written."
                     failures.append(RipFailure(tr.number, tr.title, out, reason))

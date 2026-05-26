@@ -440,3 +440,41 @@ def test_watchdog_handler_emits_folder_refresh_for_artwork_sidecars(qapp):
     _WatchdogHandler(watcher).on_modified(Event("/music/Album/cover.jpg"))
 
     assert captured == ["/music/Album"]
+
+
+def test_index_file_recovers_disc_id_from_audio_tags(tmp_path, monkeypatch):
+    """When a file's tags contain a musicbrainz_discid, index_file should
+    populate the disc_id column even without an explicit disc_id argument.
+    This is the key fix for the fresh-install-then-scan edge case.
+    """
+
+    class _FakeAudioWithDiscId(dict):
+        info = _FakeInfo()
+
+        def get(self, key):
+            return {
+                "title": ["Track 01"],
+                "artist": ["Artist"],
+                "albumartist": ["Artist"],
+                "album": ["Album"],
+                "tracknumber": ["1"],
+                "discnumber": ["1"],
+                "date": ["2024"],
+                "genre": ["Rock"],
+                "musicbrainz_discid": ["abc123XYZ"],
+                "grouping": [""],
+            }.get(key)
+
+    monkeypatch.setattr(
+        library_module, "MutagenFile",
+        lambda *_a, **_kw: _FakeAudioWithDiscId(),
+    )
+    path = tmp_path / "track01.flac"
+    _set_file_state(path, b"audio", 1_700_000_000_000_000_000)
+
+    library = Library(tmp_path / "library.db")
+    result = library.index_file(path)
+    library.commit()
+
+    assert result.status == "added"
+    assert library.has_disc("abc123XYZ", 1)

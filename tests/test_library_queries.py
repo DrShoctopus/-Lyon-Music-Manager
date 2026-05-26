@@ -200,6 +200,41 @@ def test_add_file_backfills_disc_id_for_existing_track(tmp_path):
     assert library.has_disc("DISCID123", 1)
 
 
+def test_find_album_match_returns_match_on_artist_album_track_count(tmp_path):
+    library = Library(tmp_path / "library.db")
+    for i in range(1, 11):
+        add_track(library, f"/music/track{i:02d}.flac", artist="Artist", album="Album")
+    assert library.find_album_match("Artist", "Album", 10) == ("Artist", "Album")
+
+
+def test_find_album_match_is_case_insensitive(tmp_path):
+    library = Library(tmp_path / "library.db")
+    for i in range(1, 4):
+        add_track(library, f"/music/t{i}.flac", artist="The Band", album="Greatest Hits")
+    assert library.find_album_match("the band", "greatest hits", 3) is not None
+
+
+def test_find_album_match_returns_none_when_track_count_differs(tmp_path):
+    library = Library(tmp_path / "library.db")
+    for i in range(1, 6):
+        add_track(library, f"/music/t{i}.flac", artist="Artist", album="Album")
+    assert library.find_album_match("Artist", "Album", 10) is None
+
+
+def test_find_album_match_returns_none_when_no_matching_album(tmp_path):
+    library = Library(tmp_path / "library.db")
+    add_track(library, "/music/t1.flac", artist="Artist", album="Album")
+    assert library.find_album_match("Artist", "Other Album", 1) is None
+
+
+def test_find_album_match_ignores_empty_inputs(tmp_path):
+    library = Library(tmp_path / "library.db")
+    add_track(library, "/music/t1.flac", artist="Artist", album="Album")
+    assert library.find_album_match("", "Album", 1) is None
+    assert library.find_album_match("Artist", "", 1) is None
+    assert library.find_album_match("Artist", "Album", 0) is None
+
+
 def test_video_file_prefers_same_stem_thumbnail_sidecar(tmp_path):
     library = Library(tmp_path / "library.db")
     media_dir = tmp_path / "YouTube" / "Uploader"

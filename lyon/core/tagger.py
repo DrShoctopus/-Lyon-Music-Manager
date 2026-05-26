@@ -154,21 +154,22 @@ def write_tags(
     album: AlbumInfo,
     track: TrackInfo,
     artwork: bytes | None,
+    disc_id: str = "",
 ) -> bool:
     """Write tags to *path* using the appropriate format handler."""
     ext = path.suffix.lower()
     if ext == ".flac":
-        return write_flac_tags(path, album, track, artwork)
+        return write_flac_tags(path, album, track, artwork, disc_id=disc_id)
     if ext == ".mp3":
-        return _write_id3_tags(path, album, track, artwork)
+        return _write_id3_tags(path, album, track, artwork, disc_id=disc_id)
     if ext == ".m4a":
-        return _write_mp4_tags(path, album, track, artwork)
+        return _write_mp4_tags(path, album, track, artwork, disc_id=disc_id)
     if ext in (".ogg", ".opus"):
-        return _write_vorbis_comment_tags(path, album, track, artwork)
+        return _write_vorbis_comment_tags(path, album, track, artwork, disc_id=disc_id)
     if ext in (".wav", ".aiff", ".aif"):
-        return _write_id3_tags(path, album, track, artwork)
+        return _write_id3_tags(path, album, track, artwork, disc_id=disc_id)
     if ext == ".wma":
-        return _write_asf_tags(path, album, track, artwork)
+        return _write_asf_tags(path, album, track, artwork, disc_id=disc_id)
     return True  # unsupported container — rip succeeded, tags silently skipped
 
 
@@ -177,6 +178,7 @@ def write_flac_tags(
     album: AlbumInfo,
     track: TrackInfo,
     artwork: bytes | None,
+    disc_id: str = "",
 ) -> bool:
     try:
         f = FLAC(str(path))
@@ -193,6 +195,8 @@ def write_flac_tags(
     f["tracktotal"] = str(len(album.tracks))
     if album.musicbrainz_albumid:
         f["musicbrainz_albumid"] = album.musicbrainz_albumid
+    if disc_id:
+        f["musicbrainz_discid"] = disc_id
     if album.genre:
         f["genre"] = album.genre
     if album.grouping:
@@ -219,6 +223,7 @@ def _write_id3_tags(
     album: AlbumInfo,
     track: TrackInfo,
     artwork: bytes | None,
+    disc_id: str = "",
 ) -> bool:
     """Write ID3v2 tags into an MP3, WAV, or AIFF container.
 
@@ -227,7 +232,7 @@ def _write_id3_tags(
     ``ID3.save(path)`` directly would corrupt WAV/AIFF files.
     """
     try:
-        from mutagen.id3 import APIC, TALB, TDRC, TIT1, TIT2, TCON, TRCK, TPE1, TPE2
+        from mutagen.id3 import APIC, TALB, TDRC, TIT1, TIT2, TCON, TRCK, TPE1, TPE2, TXXX
         audio = mutagen.File(str(path))
         if audio is None:
             return False
@@ -246,6 +251,10 @@ def _write_id3_tags(
             tags["TCON"] = TCON(encoding=3, text=album.genre)
         if album.grouping:
             tags["TIT1"] = TIT1(encoding=3, text=album.grouping)
+        if disc_id:
+            tags["TXXX:MusicBrainz Disc Id"] = TXXX(
+                encoding=3, desc="MusicBrainz Disc Id", text=disc_id,
+            )
         if artwork:
             mime = "image/png" if artwork[:4] == _PNG_MAGIC else "image/jpeg"
             tags["APIC"] = APIC(encoding=3, mime=mime, type=3, desc="Cover", data=artwork)
@@ -261,9 +270,10 @@ def _write_mp4_tags(
     album: AlbumInfo,
     track: TrackInfo,
     artwork: bytes | None,
+    disc_id: str = "",
 ) -> bool:
     try:
-        from mutagen.mp4 import MP4, MP4Cover
+        from mutagen.mp4 import MP4, MP4Cover, MP4FreeForm
         audio = MP4(str(path))
         audio["\xa9nam"] = [track.title]
         audio["\xa9ART"] = [track.artist or album.artist]
@@ -276,6 +286,10 @@ def _write_mp4_tags(
             audio["\xa9gen"] = [album.genre]
         if album.grouping:
             audio["\xa9grp"] = [album.grouping]
+        if disc_id:
+            audio["----:com.apple.iTunes:MusicBrainz Disc Id"] = [
+                MP4FreeForm(disc_id.encode("utf-8"), MP4FreeForm.FORMAT_UTF8)
+            ]
         if artwork:
             fmt = MP4Cover.FORMAT_PNG if artwork[:4] == _PNG_MAGIC else MP4Cover.FORMAT_JPEG
             audio["covr"] = [MP4Cover(artwork, imageformat=fmt)]
@@ -290,6 +304,7 @@ def _write_vorbis_comment_tags(
     album: AlbumInfo,
     track: TrackInfo,
     artwork: bytes | None,
+    disc_id: str = "",
 ) -> bool:
     try:
         audio = mutagen.File(str(path))
@@ -303,6 +318,8 @@ def _write_vorbis_comment_tags(
             audio["date"] = [album.date]
         audio["tracknumber"] = [str(track.number)]
         audio["tracktotal"] = [str(len(album.tracks))]
+        if disc_id:
+            audio["musicbrainz_discid"] = [disc_id]
         if album.genre:
             audio["genre"] = [album.genre]
         if album.grouping:
@@ -327,6 +344,7 @@ def _write_asf_tags(
     album: AlbumInfo,
     track: TrackInfo,
     artwork: bytes | None,
+    disc_id: str = "",
 ) -> bool:
     try:
         from mutagen.asf import ASF
@@ -338,6 +356,8 @@ def _write_asf_tags(
         if album.date:
             audio["WM/Year"] = [album.date]
         audio["WM/TrackNumber"] = [str(track.number)]
+        if disc_id:
+            audio["MusicBrainz/Disc Id"] = [disc_id]
         if album.genre:
             audio["WM/Genre"] = [album.genre]
         if album.grouping:
