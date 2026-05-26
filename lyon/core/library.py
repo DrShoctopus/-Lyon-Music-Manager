@@ -1087,6 +1087,17 @@ class Library:
         return [_row_to_track(r) for r in rows]
 
     # ------------------------------------------------------------------ virtual collections
+    def liked(self, media_type: str | None = None) -> list[Track]:
+        filter_sql = "" if media_type is None else "AND media_type = ?"
+        params: tuple = (media_type,) if media_type is not None else ()
+        with self._lock:
+            rows = self.conn.execute(
+                f"""SELECT * FROM tracks WHERE liked = 1 {filter_sql}
+                    ORDER BY {DISPLAY_ARTIST_SQL}, {DISPLAY_ALBUM_SQL}, track_number""",
+                params,
+            ).fetchall()
+        return [_row_to_track(r) for r in rows]
+
     def recently_added(self, limit: int = 50, media_type: str | None = None) -> list[Track]:
         filter_sql = "" if media_type is None else "AND media_type = ?"
         params: tuple = (media_type, limit) if media_type is not None else (limit,)
