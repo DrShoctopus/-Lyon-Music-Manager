@@ -356,6 +356,11 @@ class Library:
         if row is not None and not force and _row_matches_stat(row, stat):
             if disc_id:
                 self._backfill_disc_id(path, disc_id)
+            elif media_type == "audio" and not _row_disc_id(row):
+                meta = _read_tags(path)
+                tag_disc_id = meta.get("disc_id") if meta is not None else ""
+                if tag_disc_id:
+                    self._backfill_disc_id(path, tag_disc_id)
             return IndexResult("unchanged", path)
 
         meta = _read_tags(path)
@@ -1627,6 +1632,12 @@ def _row_matches_stat(row: sqlite3.Row, stat: os.stat_result) -> bool:
         and int(row["file_mtime_ns"] or 0) == int(stat.st_mtime_ns)
         and not (row["scan_error"] if "scan_error" in keys else None)
     )
+
+
+def _row_disc_id(row: sqlite3.Row) -> str:
+    if "disc_id" not in row.keys():
+        return ""
+    return str(row["disc_id"] or "").strip()
 
 
 def _read_tags(path: str) -> dict | None:

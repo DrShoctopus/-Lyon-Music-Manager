@@ -506,6 +506,29 @@ def test_ripper_track_rows_do_not_resize_status_column_per_row(qapp, monkeypatch
     assert calls == []
 
 
+def test_soft_album_duplicate_cancel_disables_rip_button(qapp, monkeypatch, tmp_path):
+    monkeypatch.setattr(ripper_view_module.cd_detect, "list_cd_drives", lambda: [])
+    monkeypatch.setattr(
+        ripper_view_module.QMessageBox,
+        "question",
+        lambda *_args, **_kwargs: ripper_view_module.QMessageBox.No,
+    )
+
+    class FakeLibrary:
+        def find_album_match(self, *_args):
+            return ("Artist", "Album")
+
+    view = RipperView(Settings(music_root=str(tmp_path)), FakeLibrary())
+    view._toc = DiscToc(drive="D:", discid="disc-123", track_count=1)
+    album = AlbumInfo(artist="Artist", album="Album")
+    album.tracks = [TrackInfo(number=1, title="Track 01")]
+
+    view._apply_album(album)
+
+    assert view._toc is None
+    assert not view.start_btn.isEnabled()
+
+
 def test_rip_request_reuses_detected_disc_toc(tmp_path):
     album = AlbumInfo(artist="Artist", album="Album")
     toc = DiscToc(

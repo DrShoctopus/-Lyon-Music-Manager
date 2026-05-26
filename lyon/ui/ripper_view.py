@@ -657,6 +657,7 @@ class RipperView(QWidget):
         )
         if answer != QMessageBox.Yes:
             self._reset_disc_state()
+            self.start_btn.setEnabled(False)
             self.status_label.setText("Rip cancelled — album already in library.")
 
     def _set_cover_art(self, art: bytes) -> None:

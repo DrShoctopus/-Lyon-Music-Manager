@@ -60,7 +60,7 @@ def test_index_file_skips_unchanged_files_without_rereading_tags(tmp_path, monke
 
     library = Library(tmp_path / "library.db")
     try:
-        added = library.index_file(path)
+        added = library.index_file(path, disc_id="known-disc")
         library.commit()
         title["value"] = "Should Not Be Read"
         unchanged = library.index_file(path)
@@ -478,3 +478,47 @@ def test_index_file_recovers_disc_id_from_audio_tags(tmp_path, monkeypatch):
 
     assert result.status == "added"
     assert library.has_disc("abc123XYZ", 1)
+
+
+def test_index_file_backfills_disc_id_from_tags_for_unchanged_existing_row(tmp_path, monkeypatch):
+    """A rescan should recover disc_id tags even when size/mtime are unchanged."""
+
+    class _FakeAudioWithMutableDiscId(dict):
+        info = _FakeInfo()
+        disc_id = ""
+
+        def get(self, key):
+            return {
+                "title": ["Track 01"],
+                "artist": ["Artist"],
+                "albumartist": ["Artist"],
+                "album": ["Album"],
+                "tracknumber": ["1"],
+                "discnumber": ["1"],
+                "date": ["2024"],
+                "genre": ["Rock"],
+                "musicbrainz_discid": [self.disc_id] if self.disc_id else None,
+                "grouping": [""],
+            }.get(key)
+
+    fake_audio = _FakeAudioWithMutableDiscId()
+    monkeypatch.setattr(
+        library_module, "MutagenFile",
+        lambda *_a, **_kw: fake_audio,
+    )
+    path = tmp_path / "track01.flac"
+    _set_file_state(path, b"audio", 1_700_000_000_000_000_000)
+
+    library = Library(tmp_path / "library.db")
+    try:
+        assert library.index_file(path).status == "added"
+        library.commit()
+        assert not library.has_disc("abc123XYZ", 1)
+
+        fake_audio.disc_id = "abc123XYZ"
+        assert library.index_file(path).status == "unchanged"
+        library.commit()
+
+        assert library.has_disc("abc123XYZ", 1)
+    finally:
+        library.close()

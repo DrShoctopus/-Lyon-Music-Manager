@@ -288,7 +288,7 @@ def _write_mp4_tags(
             audio["\xa9grp"] = [album.grouping]
         if disc_id:
             audio["----:com.apple.iTunes:MusicBrainz Disc Id"] = [
-                MP4FreeForm(disc_id.encode("utf-8"), MP4FreeForm.FORMAT_UTF8)
+                MP4FreeForm(disc_id.encode("utf-8"), MP4FreeForm.FORMAT_TEXT)
             ]
         if artwork:
             fmt = MP4Cover.FORMAT_PNG if artwork[:4] == _PNG_MAGIC else MP4Cover.FORMAT_JPEG
