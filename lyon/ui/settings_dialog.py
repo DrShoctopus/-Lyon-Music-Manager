@@ -10,7 +10,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFileDialog,
     QFormLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QMessageBox,
-    QPushButton, QSpinBox, QTabWidget, QVBoxLayout, QWidget,
+    QPushButton, QScrollArea, QSpinBox, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from .. import __app_name__, __version__
@@ -35,7 +35,7 @@ _RIP_FORMATS = [
 ]
 _LOSSY_FORMATS = {"mp3", "aac", "opus", "ogg", "wma"}
 _FLAC_FORMAT = "flac"
-_DIALOG_DEFAULT_HEIGHT = 460
+_DIALOG_DEFAULT_HEIGHT = 520
 
 
 class SettingsDialog(QDialog):
@@ -61,15 +61,15 @@ class SettingsDialog(QDialog):
         self._lastfm_poll_timer: QTimer | None = None
 
         tabs = QTabWidget()
-        tabs.addTab(self._build_library_tab(settings), "Library")
-        tabs.addTab(self._build_playback_tab(settings), "Playback")
-        tabs.addTab(self._build_ripping_tab(settings), "CD Ripping")
-        tabs.addTab(self._build_metadata_tab(settings), "Metadata")
-        tabs.addTab(self._build_youtube_tab(settings), "YouTube")
-        tabs.addTab(self._build_scrobbling_tab(settings), "Scrobbling")
-        tabs.addTab(self._build_dlna_tab(settings), "DLNA")
-        tabs.addTab(self._build_updates_tab(settings), "Updates")
-        tabs.addTab(self._build_about_tab(), "About")
+        tabs.addTab(self._scrollable(self._build_library_tab(settings)), "Library")
+        tabs.addTab(self._scrollable(self._build_playback_tab(settings)), "Playback")
+        tabs.addTab(self._scrollable(self._build_ripping_tab(settings)), "CD Ripping")
+        tabs.addTab(self._scrollable(self._build_metadata_tab(settings)), "Metadata")
+        tabs.addTab(self._scrollable(self._build_youtube_tab(settings)), "YouTube")
+        tabs.addTab(self._scrollable(self._build_scrobbling_tab(settings)), "Scrobbling")
+        tabs.addTab(self._scrollable(self._build_dlna_tab(settings)), "DLNA")
+        tabs.addTab(self._scrollable(self._build_updates_tab(settings)), "Updates")
+        tabs.addTab(self._scrollable(self._build_about_tab()), "About")
 
         layout = QVBoxLayout(self)
         layout.addWidget(tabs)
@@ -81,12 +81,20 @@ class SettingsDialog(QDialog):
 
     # ------------------------------------------------------------------ tabs
 
+    @staticmethod
+    def _scrollable(tab: QWidget) -> QScrollArea:
+        area = QScrollArea()
+        area.setWidget(tab)
+        area.setWidgetResizable(True)
+        area.setFrameShape(QScrollArea.NoFrame)
+        return area
+
     def _fit_width_to_tabs(self, tabs: QTabWidget) -> None:
-        """Open the dialog no wider than the complete top tab strip."""
+        """Open the dialog wide enough for the complete top tab strip."""
         margins = self.layout().contentsMargins()
         tab_width = tabs.tabBar().sizeHint().width()
         dialog_width = tab_width + margins.left() + margins.right()
-        self.setMinimumWidth(dialog_width)
+        self.setMinimumSize(dialog_width, _DIALOG_DEFAULT_HEIGHT)
         self.resize(dialog_width, _DIALOG_DEFAULT_HEIGHT)
 
     def _build_library_tab(self, settings: Settings) -> QWidget:
@@ -424,16 +432,6 @@ class SettingsDialog(QDialog):
         self.lastfm_enabled.setChecked(settings.lastfm_scrobbling_enabled)
         layout.addWidget(self.lastfm_enabled)
 
-        lfm_creds = QFormLayout()
-        self.lastfm_api_key = QLineEdit(settings.lastfm_api_key)
-        self.lastfm_api_key.setPlaceholderText("Last.fm API key")
-        lfm_creds.addRow("API key", self.lastfm_api_key)
-        self.lastfm_api_secret = QLineEdit(settings.lastfm_api_secret)
-        self.lastfm_api_secret.setPlaceholderText("Last.fm shared secret")
-        self.lastfm_api_secret.setEchoMode(QLineEdit.Password)
-        lfm_creds.addRow("Shared secret", self.lastfm_api_secret)
-        layout.addLayout(lfm_creds)
-
         lfm_status_row = QHBoxLayout()
         self._lastfm_status_label = QLabel(self._lastfm_status_text(settings))
         lfm_status_row.addWidget(self._lastfm_status_label)
@@ -627,9 +625,6 @@ class SettingsDialog(QDialog):
         if self._scrobbler is None:
             QMessageBox.warning(self, "Last.fm", "Scrobbler service is unavailable.")
             return
-        self.result_settings.lastfm_api_key = self.lastfm_api_key.text().strip()
-        self.result_settings.lastfm_api_secret = self.lastfm_api_secret.text().strip()
-        self._scrobbler.update_settings(self.result_settings)
         self._lastfm_connect_btn.setEnabled(False)
         self._lastfm_status_label.setText("Getting token…")
         self._scrobbler.start_lastfm_auth()
@@ -844,8 +839,6 @@ class SettingsDialog(QDialog):
         self.result_settings.yt_video_quality = self.yt_video_quality.currentData() or "best"
         self.result_settings.yt_output_dir = self.yt_save_dir.text().strip()
         self.result_settings.yt_auto_add = self.yt_auto_add.isChecked()
-        self.result_settings.lastfm_api_key = self.lastfm_api_key.text().strip()
-        self.result_settings.lastfm_api_secret = self.lastfm_api_secret.text().strip()
         self.result_settings.lastfm_scrobbling_enabled = self.lastfm_enabled.isChecked()
         self.result_settings.listenbrainz_scrobbling_enabled = self.lbz_enabled.isChecked()
         self.result_settings.listenbrainz_token = self.lbz_token.text().strip()

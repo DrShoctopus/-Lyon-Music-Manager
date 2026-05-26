@@ -21,8 +21,6 @@ from .settings import app_data_dir, bundled_bin_dir
 # Settings keys whose values are secrets and must be redacted from any
 # diagnostics bundle a user might share with support.
 _REDACTED_SETTINGS_KEYS = (
-    "lastfm_api_key",
-    "lastfm_api_secret",
     "lastfm_session_key",
     "listenbrainz_token",
     "theaudiodb_api_key",

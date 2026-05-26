@@ -229,6 +229,18 @@ jobs:
             }
           }
 
+      - name: Write Last.fm API secrets
+        shell: pwsh
+        env:
+          LASTFM_KEY: ${{ secrets.LYON_LASTFM_API_KEY }}
+          LASTFM_SECRET: ${{ secrets.LYON_LASTFM_API_SECRET }}
+        run: |
+          $path = "lyon\core\_secrets.py"
+          "LASTFM_API_KEY = `"$env:LASTFM_KEY`"" | Out-File -Encoding utf8 $path
+          "LASTFM_API_SECRET = `"$env:LASTFM_SECRET`"" | Out-File -Encoding utf8 -Append $path
+          if (-not (Test-Path $path)) { throw "_secrets.py was not created." }
+          Write-Host "Wrote Last.fm API secrets to $path"
+
       - name: Build with PyInstaller
         run: python -m PyInstaller --noconfirm build/lyon.spec
 

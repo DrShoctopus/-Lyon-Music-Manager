@@ -104,8 +104,6 @@ def test_excepthook_logs_uncaught_exception(clean_root_logger, monkeypatch):
 
 def test_collect_diagnostics_bundle_redacts_secrets(monkeypatch):
     s = settings.Settings(
-        lastfm_api_key="LFM_API_KEY",
-        lastfm_api_secret="LFM_API_SECRET",
         lastfm_session_key="LFM_SECRET_KEY",
         listenbrainz_token="LBZ_SECRET_TOKEN",
         theaudiodb_api_key="ADB_SECRET_KEY",
@@ -115,8 +113,6 @@ def test_collect_diagnostics_bundle_redacts_secrets(monkeypatch):
     bundle = diagnostics.collect_diagnostics_bundle()
 
     # The literal secrets must not appear anywhere in the bundle.
-    assert "LFM_API_KEY" not in bundle
-    assert "LFM_API_SECRET" not in bundle
     assert "LFM_SECRET_KEY" not in bundle
     assert "LBZ_SECRET_TOKEN" not in bundle
     assert "ADB_SECRET_KEY" not in bundle
@@ -159,8 +155,6 @@ def test_collect_diagnostics_bundle_caps_log_tail(monkeypatch, tmp_path):
 
 def test_redacted_settings_json_keeps_non_secret_fields():
     s = settings.Settings(
-        lastfm_api_key="API_KEY",
-        lastfm_api_secret="API_SECRET",
         lastfm_session_key="SECRET",
         listenbrainz_token="ALSO_SECRET",
         library_paths=["/music/main", "/music/extra"],
@@ -168,8 +162,6 @@ def test_redacted_settings_json_keeps_non_secret_fields():
     s.save()
     text = diagnostics._redacted_settings_json()
     data = json.loads(text)
-    assert data["lastfm_api_key"] == "<redacted>"
-    assert data["lastfm_api_secret"] == "<redacted>"
     assert data["lastfm_session_key"] == "<redacted>"
     assert data["listenbrainz_token"] == "<redacted>"
     assert "/music/main" in text

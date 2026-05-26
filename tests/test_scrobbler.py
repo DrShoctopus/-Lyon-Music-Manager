@@ -158,22 +158,24 @@ class TestScrobblerHttpHelpers:
 
 
 class TestLastFmCredentials:
-    def test_settings_credentials_configure_lastfm(self):
+    def test_module_level_credentials_configure_lastfm(self, monkeypatch):
         import lyon.core.scrobbler as scrobbler
 
-        settings = Settings(lastfm_api_key="user-key", lastfm_api_secret="user-secret")
+        monkeypatch.setattr(scrobbler, "_LASTFM_API_KEY", "build-key")
+        monkeypatch.setattr(scrobbler, "_LASTFM_API_SECRET", "build-secret")
 
-        assert scrobbler.lastfm_api_configured(settings) is True
-        assert scrobbler.lastfm_auth_url("token-123", settings) == (
-            "https://www.last.fm/api/auth/?api_key=user-key&token=token-123"
+        assert scrobbler.lastfm_api_configured() is True
+        assert scrobbler.lastfm_auth_url("token-123") == (
+            "https://www.last.fm/api/auth/?api_key=build-key&token=token-123"
         )
 
-    def test_missing_settings_secret_keeps_lastfm_unconfigured(self):
+    def test_missing_secret_keeps_lastfm_unconfigured(self, monkeypatch):
         import lyon.core.scrobbler as scrobbler
 
-        settings = Settings(lastfm_api_key="user-key", lastfm_api_secret="")
+        monkeypatch.setattr(scrobbler, "_LASTFM_API_KEY", "build-key")
+        monkeypatch.setattr(scrobbler, "_LASTFM_API_SECRET", "")
 
-        assert scrobbler.lastfm_api_configured(settings) is False
+        assert scrobbler.lastfm_api_configured() is False
 
 
 class TestScrobblerServiceInit:
@@ -208,10 +210,11 @@ class TestTrackChanged:
         self.svc._on_track_changed(None)
         assert self.svc._current_track is None
 
-    def test_now_playing_submitted_when_enabled(self):
+    def test_now_playing_submitted_when_enabled(self, monkeypatch):
+        import lyon.core.scrobbler as scrobbler
+        monkeypatch.setattr(scrobbler, "_LASTFM_API_KEY", "testkey")
+        monkeypatch.setattr(scrobbler, "_LASTFM_API_SECRET", "testsecret")
         settings = _make_settings(
-            lastfm_api_key="testkey",
-            lastfm_api_secret="testsecret",
             lastfm_scrobbling_enabled=True,
             lastfm_session_key="sk123",
         )
@@ -221,10 +224,11 @@ class TestTrackChanged:
             self.svc._on_track_changed(_make_track())
             mock_pool.globalInstance.return_value.start.assert_called_once()
 
-    def test_now_playing_not_submitted_without_lastfm_secret(self):
+    def test_now_playing_not_submitted_without_lastfm_secret(self, monkeypatch):
+        import lyon.core.scrobbler as scrobbler
+        monkeypatch.setattr(scrobbler, "_LASTFM_API_KEY", "testkey")
+        monkeypatch.setattr(scrobbler, "_LASTFM_API_SECRET", "")
         settings = _make_settings(
-            lastfm_api_key="testkey",
-            lastfm_api_secret="",
             lastfm_scrobbling_enabled=True,
             lastfm_session_key="sk123",
         )

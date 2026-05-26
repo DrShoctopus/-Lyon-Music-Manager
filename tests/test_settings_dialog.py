@@ -169,32 +169,15 @@ def test_settings_dialog_persists_dlna_options(app):
     assert dialog.result_settings.dlna_bind_address == "127.0.0.1"
 
 
-def test_settings_dialog_persists_lastfm_api_credentials(app):
-    dialog = SettingsDialog(Settings(), None)
-
-    dialog.lastfm_api_key.setText("lastfm-key")
-    dialog.lastfm_api_secret.setText("lastfm-secret")
-    dialog._accept()
-
-    assert dialog.result_settings.lastfm_api_key == "lastfm-key"
-    assert dialog.result_settings.lastfm_api_secret == "lastfm-secret"
-
-
-def test_settings_dialog_syncs_lastfm_credentials_before_connect(app):
+def test_settings_dialog_connect_lastfm_starts_auth(app):
     scrobbler = MagicMock()
     scrobbler.lastfm_token_ready.connect = MagicMock()
     scrobbler.lastfm_auth_complete.connect = MagicMock()
     scrobbler.lastfm_auth_failed.connect = MagicMock()
     dialog = SettingsDialog(Settings(), None, scrobbler=scrobbler)
 
-    dialog.lastfm_api_key.setText("connect-key")
-    dialog.lastfm_api_secret.setText("connect-secret")
     dialog._connect_lastfm()
 
-    scrobbler.update_settings.assert_called_once()
-    synced_settings = scrobbler.update_settings.call_args.args[0]
-    assert synced_settings.lastfm_api_key == "connect-key"
-    assert synced_settings.lastfm_api_secret == "connect-secret"
     scrobbler.start_lastfm_auth.assert_called_once()
 
 
