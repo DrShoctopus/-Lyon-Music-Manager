@@ -4,12 +4,15 @@ from __future__ import annotations
 import ctypes.util
 import importlib.util
 import shutil
+import socket
 import sys
 from dataclasses import dataclass
 from enum import Enum
 from functools import lru_cache
+from ipaddress import ip_address
 from pathlib import Path
 
+from .dlna_server import _local_ip
 from .settings import bundled_bin_dir
 
 
@@ -184,6 +187,46 @@ def check_ytdlp() -> DependencyCheck:
     )
 
 
+def check_dlna_network() -> DependencyCheck:
+    """Check whether DLNA can use local UDP/multicast discovery."""
+    sock: socket.socket | None = None
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 2)
+        sock.bind(("", 0))
+    except OSError as exc:
+        return DependencyCheck(
+            "DLNA local network",
+            DiagnosticStatus.WARNING,
+            f"Local UDP/multicast sockets are not available: {exc}. DLNA discovery and casting will not work.",
+            "Allow Local Network access for Sea Lyon/Python and avoid launching it from a network-restricted sandbox.",
+        )
+    finally:
+        if sock is not None:
+            sock.close()
+
+    advertised = _local_ip()
+    try:
+        address = ip_address(advertised.split("%", 1)[0])
+    except ValueError:
+        address = None
+    if address is None or address.is_loopback:
+        return DependencyCheck(
+            "DLNA local network",
+            DiagnosticStatus.WARNING,
+            f"DLNA would advertise {advertised}, which other devices on the LAN cannot reach.",
+            "Run Sea Lyon with LAN access on the same network as your devices, then restart DLNA sharing.",
+        )
+
+    return DependencyCheck(
+        "DLNA local network",
+        DiagnosticStatus.OK,
+        f"DLNA can open a UDP discovery socket and advertise {advertised}.",
+        "No action needed.",
+    )
+
+
 def run_dependency_checks() -> list[DependencyCheck]:
     """Return setup checks in the order users should review them."""
     return [
@@ -191,6 +234,7 @@ def run_dependency_checks() -> list[DependencyCheck]:
         check_libdiscid(),
         check_vlc(),
         check_ytdlp(),
+        check_dlna_network(),
     ]
 
 

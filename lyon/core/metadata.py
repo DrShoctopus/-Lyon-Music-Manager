@@ -12,10 +12,8 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 from urllib.parse import urljoin, urlparse
 
-try:
-    import defusedxml.ElementTree as ET
-except ImportError:  # defusedxml is an optional hardening layer
-    import xml.etree.ElementTree as ET  # type: ignore[no-redef]
+import defusedxml.ElementTree as ET
+from defusedxml.common import DefusedXmlException
 
 from . import settings as _settings
 
@@ -24,7 +22,7 @@ CTDB_LOOKUP_URL = "http://db.cuetools.net/lookup2.php"
 CTDB_BASE_URL = "http://db.cuetools.net/"
 CTDB_TIMEOUT_SECONDS = 20
 THEAUDIODB_API_BASE = "https://www.theaudiodb.com/api/v1/json"
-THEAUDIODB_DEFAULT_API_KEY = "123"
+THEAUDIODB_DEFAULT_API_KEY = ""   # empty → TheAudioDB lookups are skipped
 HTTP_TIMEOUT_SECONDS = 15
 MAX_ARTWORK_BYTES = 5 * 1024 * 1024
 DISC_METADATA_PROVIDER_ORDER = ("cuetools_db", "musicbrainz")
@@ -449,7 +447,7 @@ def lookup_cuetools_db_layout(ctdb_toc: str | None, *, fuzzy: bool = False) -> O
 
     try:
         root = ET.fromstring(response.content)
-    except ET.ParseError as exc:
+    except (ET.ParseError, DefusedXmlException) as exc:
         _log_metadata_diagnostic(
             "CUETools DB %s lookup returned invalid XML for layout=%s: %s",
             "fuzzy" if fuzzy else "exact",
@@ -624,7 +622,13 @@ def download_cover_art(mbid: str) -> bytes | None:
 
 
 def search_theaudiodb_album(artist: str, album: str) -> Optional[AlbumInfo]:
-    """Search TheAudioDB by album and optional artist name."""
+    """Search TheAudioDB by album and optional artist name.
+
+    Returns ``None`` immediately when no API key is configured so that the
+    caller's provider-fallback chain simply moves on to the next source.
+    """
+    if not _theaudiodb_api_key():
+        return None
     artist = artist.strip()
     album = album.strip()
     if not album:
@@ -656,7 +660,12 @@ def search_theaudiodb_album(artist: str, album: str) -> Optional[AlbumInfo]:
 
 
 def lookup_artist_info(artist: str) -> Optional[ArtistInfo]:
-    """Look up artist biography and image data from TheAudioDB."""
+    """Look up artist biography and image data from TheAudioDB.
+
+    Returns ``None`` immediately when no API key is configured.
+    """
+    if not _theaudiodb_api_key():
+        return None
     artist = artist.strip()
     if not artist or artist.casefold() == "unknown artist":
         return None
@@ -1264,8 +1273,9 @@ def _theaudiodb_url(endpoint: str) -> str:
 
 
 def _theaudiodb_api_key() -> str:
+    """Return the configured TheAudioDB API key, or '' if none is set."""
     settings = _current_settings()
-    return getattr(settings, "theaudiodb_api_key", "") or THEAUDIODB_DEFAULT_API_KEY
+    return (getattr(settings, "theaudiodb_api_key", "") or "").strip()
 
 
 def _use_cuetools_db(value: bool | None) -> bool:

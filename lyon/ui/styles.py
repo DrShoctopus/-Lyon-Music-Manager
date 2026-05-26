@@ -605,9 +605,21 @@ def apply_app_styles(widget=None) -> None:
     optional widget fallback keeps tests and early construction paths safe when
     a QApplication has not been created yet.
     """
+    from pathlib import Path
+
     from PySide6.QtWidgets import QApplication
+
+    assets = Path(__file__).resolve().parent / "assets"
+    up_svg = str(assets / "chevron_up.svg").replace("\\", "/")
+    down_svg = str(assets / "chevron_down.svg").replace("\\", "/")
+    arrow_rules = (
+        f'\nQSpinBox::up-arrow, QDoubleSpinBox::up-arrow'
+        f' {{ image: url("{up_svg}"); width: 10px; height: 7px; }}'
+        f'\nQSpinBox::down-arrow, QDoubleSpinBox::down-arrow'
+        f' {{ image: url("{down_svg}"); width: 10px; height: 7px; }}'
+    )
 
     app = QApplication.instance()
     target = app if app is not None else widget
     if target is not None:
-        target.setStyleSheet(WMP_QSS)
+        target.setStyleSheet(WMP_QSS + arrow_rules)

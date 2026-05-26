@@ -359,6 +359,50 @@ def test_transport_controls_route_to_cast_controller_while_casting(main_window, 
     assert calls == ["toggle_cast", "previous_cast", "next_cast", "stop_cast"]
 
 
+def test_cast_from_video_tab_uses_current_video_track(main_window, monkeypatch):
+    from lyon.core.library import Track
+
+    renderer = object()
+    track = Track(
+        id=77,
+        path="/videos/clip.mp4",
+        title="Clip",
+        artist="",
+        album_artist="",
+        album="",
+        track_no=0,
+        disc_no=0,
+        year=2026,
+        genre="",
+        duration=120.0,
+        media_type="video",
+    )
+    calls = []
+    pauses: list[bool] = []
+
+    main_window.tab_bar.setCurrentIndex(main_window._tab_index["Video"])
+    monkeypatch.setattr(main_window.video_player_view, "current_library_track", lambda: track)
+    monkeypatch.setattr(main_window.video_player_view, "pause_playback", lambda: pauses.append(True))
+    monkeypatch.setattr(
+        main_window.cast_controller,
+        "start_cast_track",
+        lambda renderer_arg, track_arg, dlna_arg, pause_local=None: (
+            calls.append(("video", renderer_arg, track_arg, dlna_arg)),
+            pause_local() if pause_local is not None else None,
+        ),
+    )
+    monkeypatch.setattr(
+        main_window.cast_controller,
+        "start_cast",
+        lambda *_args: calls.append(("audio",)),
+    )
+
+    main_window._start_cast(renderer)
+
+    assert calls == [("video", renderer, track, main_window.dlna_server)]
+    assert pauses == [True]
+
+
 def test_video_disc_handoff_reports_unavailable_video_player(main_window, monkeypatch):
     from lyon.core.disc_playback import DiscKind, VideoDiscSource
 
@@ -504,6 +548,23 @@ def test_status_bar_carries_scan_progress_widgets(main_window):
     # Sanity: the permanent widgets are children of the status bar.
     assert main_window._scan_progress.parent() is sb
     assert main_window._scan_status_label.parent() is sb
+
+
+def test_media_key_handler_is_closed_during_shutdown(main_window):
+    class Handler:
+        def __init__(self):
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    handler = Handler()
+    main_window._media_key_handler = handler
+
+    main_window._shutdown_media_key_handler()
+
+    assert handler.closed is True
+    assert main_window._media_key_handler is None
 
 
 def test_close_event_waits_for_replaygain_scanner_to_stop(main_window):

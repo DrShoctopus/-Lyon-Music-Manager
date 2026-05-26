@@ -144,11 +144,23 @@ def _cache_thumb(key: tuple[Any, ...], pixmap: QPixmap) -> None:
 # ---------------------------------------------------------------------------
 
 def _video_card_signature(track: Any) -> tuple[Any, ...]:
+    sources: list[str] = []
+    artwork_path = track.artwork_path or None
+    if artwork_path:
+        sources.append(artwork_path)
+    parent = Path(track.path).parent
+    stem = Path(track.path).stem
+    for ext in (".jpg", ".jpeg", ".webp", ".png"):
+        sidecar = parent / (stem + ext)
+        if sidecar.exists():
+            sources.append(str(sidecar))
+            break
     return (
         track.path,
         track.title or Path(track.path).stem,
         float(track.duration or 0.0),
         track.artwork_path or None,
+        tuple(_thumb_source_state(src) for src in sources),
     )
 
 
@@ -787,7 +799,9 @@ class VideoPlayerView(QWidget):
         for track in batch:
             card = _VideoCard(track)
             card.load_requested.connect(self.load_path)
-            # Insert before the trailing stretch
+            # Catalog is ordered by tracks.id (see Library.all_tracks); genuinely new
+            # videos always have a higher id than existing cards, so appending before
+            # the trailing stretch keeps the catalog correctly sorted.
             self._catalog_layout.insertWidget(self._catalog_layout.count() - 1, card)
             self._catalog_cards.append(card)
             self._catalog_card_by_path[track.path] = card
@@ -1072,6 +1086,12 @@ class VideoPlayerView(QWidget):
 
     def unavailable_reason(self) -> str:
         return self._unavailable_reason
+
+    def current_library_track(self) -> Any | None:
+        """Return the loaded local library video track, if one is active."""
+        if not self._current_path or self._current_is_location:
+            return None
+        return self._video_track_for_path(self._current_path)
 
     def _load_media_source(
         self,

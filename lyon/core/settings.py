@@ -23,6 +23,7 @@ LOG = logging.getLogger(__name__)
 _RIP_FORMATS = {"flac", "mp3", "aac", "opus", "ogg", "alac", "wav", "aiff", "wma"}
 _YT_AUDIO_FORMATS = {"flac", "mp3"}
 _YT_VIDEO_FORMATS = {"mp4", "mkv", "webm"}
+_YT_VIDEO_QUALITIES = {"best", "1080p", "2k", "4k"}
 _STREAM_URL_SCHEMES = {
     "http",
     "https",
@@ -223,7 +224,7 @@ class Settings:
     musicbrainz_app: str = "LyonMusicManager"
     musicbrainz_version: str = field(default_factory=_app_version)
     musicbrainz_contact: str = "https://example.invalid/lyon"
-    theaudiodb_api_key: str = "123"
+    theaudiodb_api_key: str = ""    # blank → TheAudioDB disabled; enter "123" for free tier
     eject_after_rip: bool = True
     auto_lookup_metadata: bool = True
     cuetools_db_metadata_enabled: bool = True
@@ -241,6 +242,7 @@ class Settings:
     first_run_completed: bool = False
     yt_audio_format: str = "flac"        # flac | mp3
     yt_video_format: str = "mp4"         # mp4 | mkv | webm
+    yt_video_quality: str = "best"       # best | 1080p | 2k | 4k
     yt_output_dir: str = ""              # defaults to music_root/YouTube at runtime
     yt_auto_add: bool = True             # add downloaded files to library automatically
     queue_track_paths: list[str] = field(default_factory=list)
@@ -304,6 +306,9 @@ class Settings:
         self.yt_video_format = str(self.yt_video_format or "mp4").lower()
         if self.yt_video_format not in _YT_VIDEO_FORMATS:
             self.yt_video_format = "mp4"
+        self.yt_video_quality = str(self.yt_video_quality or "best").lower()
+        if self.yt_video_quality not in _YT_VIDEO_QUALITIES:
+            self.yt_video_quality = "best"
         self.library_paths = normalize_library_paths(self.library_paths)
         self.watch_library_folders = _bool_value(self.watch_library_folders, True)
         self.equalizer_preamp = clamp_preamp(self.equalizer_preamp)
@@ -406,7 +411,9 @@ class Settings:
         data = json.dumps(asdict(self), indent=2)
         tmp = path.with_suffix(".tmp")
         tmp.write_text(data, encoding="utf-8")
+        _chmod_owner_only(tmp)
         os.replace(tmp, path)
+        _chmod_owner_only(path)
         invalidate_settings_cache()
 
 
@@ -429,3 +436,10 @@ def invalidate_settings_cache() -> None:
     """Discard the cached Settings so the next call re-reads from disk."""
     global _settings_cache
     _settings_cache = None
+
+
+def _chmod_owner_only(path: Path) -> None:
+    try:
+        path.chmod(0o600)
+    except OSError:
+        LOG.debug("Could not set owner-only permissions on %s", path)

@@ -5,7 +5,6 @@ import base64
 import logging
 import mimetypes
 import os
-import platform
 import socket
 import stat as stat_module
 import threading
@@ -30,9 +29,10 @@ LOG = logging.getLogger(__name__)
 
 _SSDP_ADDR = ("239.255.255.250", 1900)
 _CHUNK_SIZE = 256 * 1024
-_MAX_SOAP_BODY = 1024 * 1024
+_MAX_SOAP_BODY = 256 * 1024
 _MAX_BROWSE_ITEMS = 500
 _TRACK_CACHE_TTL = 5.0
+DLNA_CONTENT_FEATURES = "DLNA.ORG_OP=01;DLNA.ORG_CI=0"
 
 _MIME_BY_EXT = {
     ".flac": "audio/flac",
@@ -83,6 +83,8 @@ class DlnaServer:
 
     def media_url_for_track(self, track: Track) -> str | None:
         """Return a playable media URL for a library track, or None if unavailable."""
+        if not self.running or not self._base_url:
+            return None
         if not track.is_library_item:
             return None
         stored = self.library.track_by_id(track.id)
@@ -259,29 +261,37 @@ class DlnaServer:
         handler.send_header("Accept-Ranges", "bytes")
         handler.send_header("Content-Length", str(length))
         handler.send_header("transferMode.dlna.org", "Streaming")
-        handler.send_header("contentFeatures.dlna.org", "DLNA.ORG_OP=01;DLNA.ORG_CI=0")
+        handler.send_header("contentFeatures.dlna.org", DLNA_CONTENT_FEATURES)
         if status == HTTPStatus.PARTIAL_CONTENT:
             handler.send_header("Content-Range", f"bytes {start}-{end}/{size}")
         handler.end_headers()
         if not send_body:
             return
-        with path.open("rb") as fh:
-            fh.seek(start)
-            _copy_limited(fh, handler.wfile, length)
+        try:
+            with path.open("rb") as fh:
+                fh.seek(start)
+                _copy_limited(fh, handler.wfile, length)
+        except (BrokenPipeError, ConnectionResetError):
+            LOG.debug("DLNA client disconnected while streaming %s", path)
 
     def _browse_response(self, root) -> bytes:
         object_id = _xml_text(root, "ObjectID", "0")
         flag = _xml_text(root, "BrowseFlag", "BrowseDirectChildren")
         start = _nonnegative_xml_int(root, "StartingIndex", 0)
         count = _nonnegative_xml_int(root, "RequestedCount", 0)
-        items = self._browse_items(object_id, flag)
         limit = _MAX_BROWSE_ITEMS if count <= 0 else min(count, _MAX_BROWSE_ITEMS)
-        visible = items[start:start + limit]
+        page = self._browse_track_page(object_id, flag, start, limit)
+        if page is None:
+            items = self._browse_items(object_id, flag)
+            visible = items[start:start + limit]
+            total = len(items)
+        else:
+            visible, total = page
         didl = _didl_xml(visible)
         payload = (
             f"<Result>{escape(didl)}</Result>"
             f"<NumberReturned>{len(visible)}</NumberReturned>"
-            f"<TotalMatches>{len(items)}</TotalMatches>"
+            f"<TotalMatches>{total}</TotalMatches>"
             "<UpdateID>1</UpdateID>"
         )
         return _soap_envelope(
@@ -302,16 +312,16 @@ class DlnaServer:
             if query
             else self._tracks_for_container(container_id, media_type)
         )
-        items = self._track_items_from_tracks(
-            tracks,
+        limit = _MAX_BROWSE_ITEMS if count <= 0 else min(count, _MAX_BROWSE_ITEMS)
+        visible_tracks = tracks[start:start + limit]
+        visible = self._track_items_from_tracks(
+            visible_tracks,
             parent_id=_track_parent_for_container(container_id, media_type),
         )
-        limit = _MAX_BROWSE_ITEMS if count <= 0 else min(count, _MAX_BROWSE_ITEMS)
-        visible = items[start:start + limit]
         payload = (
             f"<Result>{escape(_didl_xml(visible))}</Result>"
             f"<NumberReturned>{len(visible)}</NumberReturned>"
-            f"<TotalMatches>{len(items)}</TotalMatches>"
+            f"<TotalMatches>{len(tracks)}</TotalMatches>"
             "<UpdateID>1</UpdateID>"
         )
         return _soap_envelope(
@@ -437,6 +447,49 @@ class DlnaServer:
             return self._track_items("video", parent_id="video:all")
         return []
 
+    def _browse_track_page(
+        self,
+        object_id: str,
+        flag: str,
+        start: int,
+        limit: int,
+    ) -> tuple[list[_BrowseItem], int] | None:
+        if flag != "BrowseDirectChildren":
+            return None
+        parent_id: str
+        if object_id == "audio:all":
+            tracks = self._tracks("audio")
+            parent_id = "audio:all"
+        elif object_id == "video:all":
+            tracks = self._tracks("video")
+            parent_id = "video:all"
+        elif object_id.startswith("artist:"):
+            artist = _decode_object_value(object_id.removeprefix("artist:"))
+            if not artist:
+                return ([], 0)
+            tracks = self._tracks_for_artist(artist, "audio")
+            parent_id = object_id
+        elif object_id.startswith("album:"):
+            decoded = _decode_object_value(object_id.removeprefix("album:"))
+            artist, album = _split_pair(decoded)
+            if not (artist and album):
+                return ([], 0)
+            tracks = self._tracks_for_album(artist, album, "audio")
+            parent_id = object_id
+        elif object_id.startswith("genre:"):
+            genre = _decode_object_value(object_id.removeprefix("genre:"))
+            if not genre:
+                return ([], 0)
+            tracks = self._tracks_for_genre(genre, "audio")
+            parent_id = object_id
+        else:
+            return None
+        visible_tracks = tracks[start:start + limit]
+        return (
+            self._track_items_from_tracks(visible_tracks, parent_id=parent_id),
+            len(tracks),
+        )
+
     def _track_items(
         self, media_type: str | None = None, *, parent_id: str | None = None
     ) -> list[_BrowseItem]:
@@ -490,7 +543,7 @@ class DlnaServer:
         tracks = [
             track
             for track in self._tracks(media_type)
-            if track.display_artist == artist and (track.album or "Unknown Album") == album
+            if track.display_artist == artist and track.display_album == album
         ]
         return sorted(tracks, key=_track_number_sort_key)
 
@@ -534,7 +587,7 @@ class DlnaServer:
     def _album_counts(self, media_type: str) -> dict[tuple[str, str], int]:
         counts: dict[tuple[str, str], int] = {}
         for track in self._tracks(media_type):
-            key = (track.display_artist, track.album or "Unknown Album")
+            key = (track.display_artist, track.display_album)
             counts[key] = counts.get(key, 0) + 1
         return dict(
             sorted(
@@ -588,7 +641,7 @@ class DlnaServer:
         parent = parent_id or ("video:all" if track.media_type == "video" else "audio:all")
         upnp_class = "object.item.videoItem" if track.media_type == "video" else "object.item.audioItem.musicTrack"
         url = f"{self.base_url}/media/{track.id}/{quote(path.name)}"
-        attrs = f'protocolInfo="http-get:*:{escape(mime)}:*" size="{stat.st_size}"'
+        attrs = f'protocolInfo="{escape(dlna_protocol_info(path))}" size="{stat.st_size}"'
         if track.duration > 0:
             attrs += f' duration="{_duration_text(track.duration)}"'
         title = escape(track.title or path.stem)
@@ -711,6 +764,15 @@ class _SsdpResponder:
                 sock.bind(("", 1900))
             except OSError:
                 sock.bind(("", 0))
+            # Join the SSDP multicast group so we receive M-SEARCH queries from
+            # control points even when another process on this host has already
+            # joined the group (macOS activates IGMP filtering once any socket
+            # joins, and only delivers multicast to joined sockets thereafter).
+            try:
+                mreq = socket.inet_aton("239.255.255.250") + socket.inet_aton("0.0.0.0")
+                sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+            except OSError as exc:
+                LOG.warning("DLNA SSDP: could not join multicast group: %s", exc)
             self._socket = sock
         except OSError as exc:
             LOG.info("DLNA SSDP unavailable: %s", exc)
@@ -886,6 +948,10 @@ def _path_is_under_roots(path: Path, roots: list[Path]) -> bool:
 
 def _mime_type(path: Path) -> str:
     return _MIME_BY_EXT.get(path.suffix.lower()) or mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+
+
+def dlna_protocol_info(path: str | Path) -> str:
+    return f"http-get:*:{_mime_type(Path(path))}:*"
 
 
 def _duration_text(seconds: float) -> str:
@@ -1116,7 +1182,7 @@ def _local_ip() -> str:
 
 
 def _server_header() -> str:
-    return f"{platform.system()}/{platform.release()} UPnP/1.0 SeaLyon/{__version__}"
+    return f"UPnP/1.0 SeaLyon/{__version__}"
 
 
 def _ssdp_search_matches(text: str) -> bool:

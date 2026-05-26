@@ -16,7 +16,7 @@ YouTube downloading, and UI work can still be developed on macOS or Linux when t
 
 Python packages and native runtimes are available.
 
-Current application version: `0.6.0` in `lyon/__init__.py`.
+Current application version: `0.8.0` in `lyon/__init__.py`.
 
 ## Status
 
@@ -69,6 +69,8 @@ assets.
 - Crossfade support with configurable overlap.
 - Sleep timer from the main toolbar.
 - macOS media-key hook when the optional platform support is available.
+- Cast local playback to a DLNA/UPnP MediaRenderer (smart TV / AV receiver)
+  via the Cast toolbar button; all AVTransport SOAP runs off the UI thread.
 - Playback-unavailable fallback so the app can still open when VLC/libVLC is
   missing.
 

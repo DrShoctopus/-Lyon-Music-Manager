@@ -118,9 +118,11 @@ def safe_path_component(name: str) -> str:
     # stable across rips of the same album.
     name = name.strip().rstrip(" .")
     name = SAFE_CHARS_RE.sub("_", name)
-    if not name:
+    if not name or name in {".", ".."}:
         return "Unknown"
     stem, dot, ext = name.partition(".")
+    if stem in {".", ".."}:
+        return "Unknown"
     if stem.upper() in _WINDOWS_RESERVED_NAMES:
         name = f"{stem}_{dot}{ext}" if dot else f"{stem}_"
     return name
@@ -193,7 +195,17 @@ def _album_folder_base(settings: Settings, album: AlbumInfo) -> Path:
     name = safe_path_component(album.album or "Unknown Album")
     if album.year:
         name = f"{album.year} - {name}"
-    return Path(settings.music_root) / artist / name
+    return _assert_under_music_root(Path(settings.music_root) / artist / name, settings)
+
+
+def _assert_under_music_root(path: Path, settings: Settings) -> Path:
+    root = Path(settings.music_root).expanduser().resolve(strict=False)
+    resolved = path.expanduser().resolve(strict=False)
+    try:
+        resolved.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("Rip destination must stay inside the music folder.") from exc
+    return path
 
 
 def _album_needs_unique_unknown_folder(album: AlbumInfo) -> bool:

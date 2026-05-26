@@ -168,7 +168,7 @@ def test_list_album_art_uses_async_loader(app, monkeypatch, tmp_path):
             started.append(runnable)
 
     class FakeLoader:
-        def __init__(self, gen, path, signals):
+        def __init__(self, gen, path, signals, get_gen=None):
             self.gen = gen
             self.path = path
             self.signals = signals
@@ -242,7 +242,7 @@ def test_video_double_click_emits_embedded_video_request(app):
     view.artists.setCurrentIndex(view.artists_model.index(0, 0))
     view.albums.setCurrentIndex(view.albums_model.index(0, 0))
 
-    view._on_track_double(view.tracks_model.index(0, 0))
+    view._on_track_double(view._tracks_proxy.index(0, 0))
 
     assert emitted == [video]
 
@@ -257,7 +257,7 @@ def test_video_play_selected_emits_embedded_video_request(app):
     view._show_videos_cb.setChecked(True)
     view.artists.setCurrentIndex(view.artists_model.index(0, 0))
     view.albums.setCurrentIndex(view.albums_model.index(0, 0))
-    view.tracks.setCurrentIndex(view.tracks_model.index(0, 0))
+    view.tracks.setCurrentIndex(view._tracks_proxy.index(0, 0))
 
     view._play_selected()
 
@@ -276,10 +276,11 @@ def test_tracks_table_is_sortable_by_title(view):
     view.albums.setCurrentIndex(view.albums_model.index(1, 0))  # First Album
     assert view.tracks_model.rowCount() == 2
 
+    # Sorting is handled by the proxy; check visual row 0 title via the proxy.
     view.tracks.sortByColumn(1, QtCore.Qt.AscendingOrder)
-    assert view.tracks_model.item(0, 1).text() == "Aardvark"
+    assert view._tracks_proxy.index(0, 1).data() == "Aardvark"
     view.tracks.sortByColumn(1, QtCore.Qt.DescendingOrder)
-    assert view.tracks_model.item(0, 1).text() == "Zebra"
+    assert view._tracks_proxy.index(0, 1).data() == "Zebra"
 
 
 def test_track_columns_are_resizable_and_title_gets_priority_width(view):
@@ -294,8 +295,8 @@ def test_tracks_sort_by_time_is_numeric(view):
     view.artists.setCurrentIndex(view.artists_model.index(0, 0))
     view.albums.setCurrentIndex(view.albums_model.index(1, 0))  # First Album
     view.tracks.sortByColumn(4, QtCore.Qt.AscendingOrder)
-    # 180s (Aardvark) < 240s (Zebra)
-    assert view.tracks_model.item(0, 1).text() == "Aardvark"
+    # 180s (Aardvark) < 240s (Zebra) — check via proxy (proxy holds sort order)
+    assert view._tracks_proxy.index(0, 1).data() == "Aardvark"
 
 
 def test_displayed_tracks_respects_sort_order(view):
@@ -311,10 +312,11 @@ def test_playing_indicator_replaces_track_number(view):
     view.albums.setCurrentIndex(view.albums_model.index(1, 0))
     view.tracks.sortByColumn(0, QtCore.Qt.AscendingOrder)
 
-    target = view._track_at_row(1)  # Zebra
+    target = view._track_at_row(1)  # proxy row 1 → Zebra (track_no=2)
     view.highlight_track(target)
-    assert view.tracks_model.item(1, 0).text() == _PLAYING_GLYPH
-    assert view.tracks_model.item(0, 0).text() == "1"  # other row keeps number
+    # Playing indicator is stored in the source model; source row 1 is Zebra.
+    assert view.tracks_model.index(1, 0).data() == _PLAYING_GLYPH
+    assert view.tracks_model.index(0, 0).data() == "1"  # other row keeps number
 
 
 def test_playing_indicator_clears_when_track_is_none(view):
@@ -323,7 +325,7 @@ def test_playing_indicator_clears_when_track_is_none(view):
     target = view._track_at_row(1)
     view.highlight_track(target)
     view.highlight_track(None)
-    assert view.tracks_model.item(1, 0).text() == "2"
+    assert view.tracks_model.index(1, 0).data() == "2"
 
 
 def test_search_clear_button_is_enabled(view):

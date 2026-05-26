@@ -28,6 +28,8 @@ class DuplicateDialog(QDialog):
         self.setWindowTitle("Find Duplicates")
         self.resize(860, 560)
         self._groups: list[list[Track]] = []
+        self._hash_scan_token = 0
+        self._pending_keep_best_check = False
         self._build_ui()
         self._refresh_groups()
 
@@ -85,12 +87,12 @@ class DuplicateDialog(QDialog):
         layout.addWidget(self._tree, 1)
 
         controls = QHBoxLayout()
-        keep_best_btn = QPushButton("Keep Highest Quality (Remove Others)")
-        keep_best_btn.clicked.connect(self._keep_best)
+        self._keep_best_btn = QPushButton("Keep Highest Quality (Remove Others)")
+        self._keep_best_btn.clicked.connect(self._keep_best)
         keep_all_btn = QPushButton("Keep All")
         keep_all_btn.setToolTip("Close without making any changes")
         keep_all_btn.clicked.connect(self.accept)
-        controls.addWidget(keep_best_btn)
+        controls.addWidget(self._keep_best_btn)
         controls.addWidget(keep_all_btn)
         controls.addStretch(1)
         layout.addLayout(controls)
@@ -112,7 +114,7 @@ class DuplicateDialog(QDialog):
                 self._fp_warn.setVisible(True)
             elif not is_lookup_configured():
                 self._fp_warn.setText(
-                    "AcoustID API key not configured. Set ACOUSTID_API_KEY "
+                    "AcoustID API key not configured. Set LYON_ACOUSTID_API_KEY "
                     "to enable fingerprint lookup."
                 )
                 self._fp_warn.setVisible(True)
@@ -125,12 +127,66 @@ class DuplicateDialog(QDialog):
     def _refresh_groups(self) -> None:
         mode = self._mode_combo.currentData()
         if mode == self._MODE_HASH:
-            self._groups = self.library.find_duplicates_by_hash()
-        elif mode == self._MODE_FINGERPRINT:
+            self._refresh_groups_hash_async()
+            return
+        if mode == self._MODE_FINGERPRINT:
             self._groups = self.library.find_duplicates_by_fingerprint()
         else:
             self._groups = self.library.find_duplicates()
         self._update_summary()
+        self._populate_tree()
+
+    def _refresh_groups_hash_async(self) -> None:
+        """Run the hash backfill + duplicate scan off the UI thread (disk I/O)."""
+        self._hash_scan_token += 1
+        token = self._hash_scan_token
+        self._groups = []
+        self._set_hash_scan_busy(True)
+        library = self.library
+        signals = _HashScanSignals(self)
+        signals.finished.connect(self._on_hash_scan_finished)
+        signals.failed.connect(self._on_hash_scan_failed)
+
+        class _HashTask(QRunnable):
+            def __init__(self) -> None:
+                super().__init__()
+                self.setAutoDelete(True)
+
+            def run(self) -> None:
+                try:
+                    groups = library.find_duplicates_by_hash()
+                except Exception as exc:
+                    signals.failed.emit(token, str(exc))
+                    return
+                signals.finished.emit(token, groups)
+
+        QThreadPool.globalInstance().start(_HashTask())
+
+    def _set_hash_scan_busy(self, busy: bool) -> None:
+        self._mode_combo.setEnabled(not busy)
+        self._keep_best_btn.setEnabled(not busy)
+        if busy:
+            self._tree.clear()
+            self._summary_label.setText("Computing file hashes — this may take a moment…")
+
+    def _on_hash_scan_finished(self, token: object, groups: object) -> None:
+        if token != self._hash_scan_token:
+            return  # superseded by a later mode switch
+        self._groups = groups if isinstance(groups, list) else []
+        self._set_hash_scan_busy(False)
+        self._update_summary()
+        self._populate_tree()
+        if self._pending_keep_best_check and not self._groups:
+            self._pending_keep_best_check = False
+            QMessageBox.information(self, "Done", "All duplicates removed.")
+            self.accept()
+
+    def _on_hash_scan_failed(self, token: object, message: str) -> None:
+        if token != self._hash_scan_token:
+            return
+        self._groups = []
+        self._set_hash_scan_busy(False)
+        self._summary_label.setText(f"Hash scan failed: {message}")
         self._populate_tree()
 
     def _update_summary(self) -> None:
@@ -223,10 +279,16 @@ class DuplicateDialog(QDialog):
         for group in self._groups:
             for track in group[1:]:
                 self.library.delete_track(track.id)
-        self._refresh_groups()
-        if not self._groups:
-            QMessageBox.information(self, "Done", "All duplicates removed.")
-            self.accept()
+        mode = self._mode_combo.currentData()
+        if mode == self._MODE_HASH:
+            # The refresh is async; defer the "all removed" check to _on_hash_scan_finished.
+            self._pending_keep_best_check = True
+            self._refresh_groups()
+        else:
+            self._refresh_groups()
+            if not self._groups:
+                QMessageBox.information(self, "Done", "All duplicates removed.")
+                self.accept()
 
     # ------------------------------------------------------------------ fingerprint scan
 
@@ -238,7 +300,7 @@ class DuplicateDialog(QDialog):
         if not is_lookup_configured():
             QMessageBox.warning(
                 self, "API Key Required",
-                "Set ACOUSTID_API_KEY first."
+                "Set LYON_ACOUSTID_API_KEY first."
             )
             return
 
@@ -250,6 +312,11 @@ class DuplicateDialog(QDialog):
         dlg = _FingerprintScanDialog(tracks, self.library, self)
         dlg.exec()
         self._refresh_groups()
+
+
+class _HashScanSignals(QObject):
+    finished = Signal(object, object)  # (token, list[list[Track]])
+    failed = Signal(object, str)       # (token, message)
 
 
 class _ScanSignals(QObject):

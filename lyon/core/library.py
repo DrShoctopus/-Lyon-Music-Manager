@@ -34,7 +34,11 @@ SUPPORTED_EXTS = SUPPORTED_AUDIO_EXTS | SUPPORTED_VIDEO_EXTS
 SUPPORTED_CUE_EXT = ".cue"
 
 DISPLAY_ARTIST_SQL = "COALESCE(NULLIF(album_artist,''), NULLIF(artist,''), 'Unknown Artist')"
-DISPLAY_ALBUM_SQL = "COALESCE(NULLIF(album,''), 'Unknown Album')"
+DISPLAY_ALBUM_SQL = (
+    "CASE WHEN album IS NOT NULL AND album != '' THEN album"
+    " WHEN media_type = 'video' THEN 'YouTube Downloads'"
+    " ELSE 'Unknown Album' END"
+)
 
 # Original table shape at first release (version 0).
 # Never add migrated columns here — keep them in _MIGRATIONS so that
@@ -146,6 +150,10 @@ class Track:
     @property
     def display_artist(self) -> str:
         return self.album_artist or self.artist or "Unknown Artist"
+
+    @property
+    def display_album(self) -> str:
+        return self.album or ("YouTube Downloads" if self.is_video else "Unknown Album")
 
     @property
     def is_video(self) -> bool:
@@ -540,6 +548,7 @@ class Library:
         art = _find_local_artwork(cue_path.parent)
         now = time.time()
         new_paths: set[str] = set()
+        image_duration = _audio_duration_seconds(cue_sheet.image_path)
 
         with self._lock:
             for track in cue_sheet.tracks:
@@ -548,6 +557,9 @@ class Library:
 
                 if track.end_sectors is not None:
                     duration = (track.end_sectors - track.start_sectors) / 75.0
+                elif image_duration is not None:
+                    computed = image_duration - (track.start_sectors / 75.0)
+                    duration = computed if computed >= 0.5 else 0.0
                 else:
                     duration = 0.0  # last track: length unknown without decoding
 
@@ -954,6 +966,29 @@ class Library:
             ).fetchone()
         return (row["a"], row["b"]) if row else None
 
+    def library_stats(self) -> dict:
+        """Return aggregate statistics for the entire library."""
+        with self._lock:
+            row = self.conn.execute(
+                f"""SELECT
+                        COUNT(DISTINCT {DISPLAY_ARTIST_SQL}) AS artist_count,
+                        COUNT(*) AS track_count,
+                        COALESCE(SUM(duration), 0) AS total_duration,
+                        COALESCE(SUM(file_size), 0) AS total_file_size
+                    FROM tracks""",
+            ).fetchone()
+            album_count = self.conn.execute(
+                f"""SELECT COUNT(*) FROM
+                        (SELECT DISTINCT {DISPLAY_ARTIST_SQL}, {DISPLAY_ALBUM_SQL} FROM tracks)""",
+            ).fetchone()[0]
+        return {
+            "artist_count": int(row["artist_count"]),
+            "album_count": int(album_count),
+            "track_count": int(row["track_count"]),
+            "total_duration": float(row["total_duration"]),
+            "total_file_size": int(row["total_file_size"]),
+        }
+
     def update_track(self, track_id: int, fields: dict) -> None:
         allowed = {"title", "artist", "album_artist", "album", "track_no", "disc_no", "year", "genre", "grouping", "artwork_path"}
         safe = {k: v for k, v in fields.items() if k in allowed}
@@ -1013,6 +1048,49 @@ class Library:
                 params,
             ).fetchall()
         return [r["g"] for r in rows]
+
+    def media_counts_by_artist(self, media_type: str | None = None) -> list[tuple[str, int]]:
+        """Return (display_artist, track_count) pairs, artist-sorted, via SQL GROUP BY."""
+        filter_sql = "" if media_type is None else "WHERE media_type = ?"
+        params: tuple = () if media_type is None else (media_type,)
+        with self._lock:
+            rows = self.conn.execute(
+                f"""SELECT {DISPLAY_ARTIST_SQL} AS a, COUNT(*) AS n
+                    FROM tracks {filter_sql}
+                    GROUP BY a
+                    ORDER BY a COLLATE NOCASE""",
+                params,
+            ).fetchall()
+        return [(r["a"], int(r["n"])) for r in rows]
+
+    def media_counts_by_album(self, media_type: str | None = None) -> list[tuple[str, str, int]]:
+        """Return (display_artist, display_album, track_count) triples, sorted."""
+        filter_sql = "" if media_type is None else "WHERE media_type = ?"
+        params: tuple = () if media_type is None else (media_type,)
+        with self._lock:
+            rows = self.conn.execute(
+                f"""SELECT {DISPLAY_ARTIST_SQL} AS a, {DISPLAY_ALBUM_SQL} AS b, COUNT(*) AS n
+                    FROM tracks {filter_sql}
+                    GROUP BY a, b
+                    ORDER BY a COLLATE NOCASE, b COLLATE NOCASE""",
+                params,
+            ).fetchall()
+        return [(r["a"], r["b"], int(r["n"])) for r in rows]
+
+    def media_counts_by_genre(self, media_type: str | None = None) -> list[tuple[str, int]]:
+        """Return (genre, track_count) pairs for non-empty genres, sorted."""
+        filter_sql = "" if media_type is None else "AND media_type = ?"
+        params: tuple = () if media_type is None else (media_type,)
+        with self._lock:
+            rows = self.conn.execute(
+                f"""SELECT genre AS g, COUNT(*) AS n
+                    FROM tracks
+                    WHERE genre IS NOT NULL AND genre != '' {filter_sql}
+                    GROUP BY g
+                    ORDER BY g COLLATE NOCASE""",
+                params,
+            ).fetchall()
+        return [(r["g"], int(r["n"])) for r in rows]
 
     def tracks_for_genre(self, genre: str, media_type: str | None = None) -> list[Track]:
         filter_sql = "" if media_type is None else "AND media_type = ?"
@@ -1561,6 +1639,22 @@ def _read_tags(path: str) -> dict | None:
         "bitrate": int(getattr(info, "bitrate", 0) or 0),
         "samplerate": int(getattr(info, "sample_rate", 0) or 0),
     }
+
+
+def _audio_duration_seconds(path: Path | None) -> float | None:
+    """Return an audio file duration for CUE boundary calculation, if readable."""
+    if path is None:
+        return None
+    try:
+        f = MutagenFile(path, easy=True)
+    except Exception as exc:
+        LOG.debug("Failed to read CUE image duration from %s: %s", path, exc)
+        return None
+    if f is None:
+        return None
+    info = getattr(f, "info", None)
+    duration = float(getattr(info, "length", 0.0) or 0.0)
+    return duration if duration > 0 else None
 
 
 def _find_video_artwork(path: Path) -> Path | None:

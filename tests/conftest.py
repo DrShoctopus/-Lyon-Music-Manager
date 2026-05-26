@@ -24,6 +24,21 @@ if str(ROOT) not in sys.path:
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 
+@pytest.fixture(autouse=True)
+def isolated_app_data_dir(monkeypatch, tmp_path):
+    """Keep tests from reading or writing the user's real app settings."""
+    from lyon.core import library as library_mod
+    from lyon.core import settings as settings_mod
+
+    app_data = tmp_path / "app-data"
+    app_data.mkdir()
+    monkeypatch.setattr(settings_mod, "app_data_dir", lambda: app_data)
+    monkeypatch.setattr(library_mod, "app_data_dir", lambda: app_data)
+    settings_mod.invalidate_settings_cache()
+    yield
+    settings_mod.invalidate_settings_cache()
+
+
 @pytest.fixture(scope="module")
 def qapp():
     """Module-scoped QApplication — only one can exist per process."""
