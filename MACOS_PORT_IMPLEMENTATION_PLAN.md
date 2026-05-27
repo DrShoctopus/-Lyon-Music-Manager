@@ -15,7 +15,6 @@
 ### 0.1 Branch hygiene
 
 - Continue on `claude/macos-apple-silicon-port-SXySX` for development.
-- Reconcile the existing `LMM-MACOS` branch (which has `PORT_PLAN_MACOS_ARM64.md` and a 47-line diff to `build/lyon.spec`) — either cherry-pick anything useful, then delete that branch, or close it as superseded by this plan.
 - Land each phase as its own PR into `LMM-DEV`. The Windows build must stay green throughout.
 
 ### 0.2 One-time accounts and assets

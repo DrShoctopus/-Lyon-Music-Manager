@@ -34,12 +34,6 @@ release work. A single tree is cheaper to maintain and easier to test.
 
 The user-perceived macOS UI/UX problems trace to **one stylesheet line** (`lyon/ui/styles.py:13`) plus shortcut conventions and window-mode defaults — all fixable inside the single tree.
 
-> **Sibling branch note:** there is already a `LMM-MACOS` branch in this
-> repository with a `PORT_PLAN_MACOS_ARM64.md` document and 47 lines changed
-> in `build/lyon.spec`. This report was written from `LMM-DEV` per your
-> instruction; the existing macOS branch should be reconciled into the
-> recommendations here before more work diverges.
-
 ---
 
 ## 2. Architecture Snapshot
@@ -516,7 +510,7 @@ Add a macOS pytest job to CI before shipping.
 - Reviewers must keep both platforms in mind on every PR.
 - Slightly larger source tree (entitlements, .icns, .iss, .ps1 all coexist).
 
-### Option B — Hard fork (`LMM-MACOS-DEV` branch as the macOS line)
+### Option B — Hard fork (a dedicated macOS branch as the macOS line)
 
 **Pros**
 - Aggressive Mac-only refactors (e.g. ripping out the disc subsystem entirely) become easier.
@@ -526,7 +520,7 @@ Add a macOS pytest job to CI before shipping.
 - **Every Windows feature must be manually re-applied to the macOS branch** indefinitely. You described Windows UI/UX as "perfect" — preserving that drift-free is meaningful ongoing work.
 - Double release cadence, double tagging, double appcast logic.
 - The shared 85% (UI, library, scrobbling, YouTube, podcasts, radio, equalizer) duplicates rot.
-- Merges from `LMM-DEV` into `LMM-MACOS-DEV` will get progressively harder.
+- Merges from `LMM-DEV` into a separate macOS branch will get progressively harder.
 
 ### Option C — Plugin/extras architecture
 
@@ -536,10 +530,10 @@ Restructure so disc / Windows-only code is an installable extra (e.g. `pip insta
 
 **Adopt Option A.** Specifically:
 
-1. Merge `LMM-MACOS` (the existing branch with the port plan) back into `LMM-DEV` once the immediate critical fixes land, then delete `LMM-MACOS`.
-2. Use `LMM-DEV` as the single development line going forward.
+1. Use `LMM-DEV` as the single development line going forward.
+2. Land each macOS port phase as its own PR into `LMM-DEV`. The Windows build must stay green throughout.
 3. Add release tags that trigger **both** the Windows workflow and a new macOS workflow in parallel — both produce platform-specific artifacts attached to the same GitHub Release.
-4. Keep an `LMM-MASTER` (or `main`) that is the released-stable branch, same for both platforms.
+4. Keep `LMM-MASTER` (or `main`) as the released-stable branch, shared across both platforms.
 
 This matches what the codebase is already doing (per-platform branches in `app.py`, `media_keys.py`, `playback_backend.py`, `settings.py`). You'd be finishing the existing pattern, not replacing it.
 
@@ -613,7 +607,6 @@ This matches what the codebase is already doing (per-platform branches in `app.p
 3. **Optical features.** You should explicitly decide before Phase 1: do macOS users see Disc/Rip tabs at all? Recommend hiding (Option A above). Hiding is one-line in `_TAB_ORDER`.
 4. **HiDPI / Retina.** `QApplication.setHighDpiScaleFactorRoundingPolicy(PassThrough)` at `app.py:107-109` is correct, but several hardcoded pixel values in QSS (e.g. `min-height: 32px`, `width: 12px` for scrollbars) may feel off on Retina. Visual QA pass needed.
 5. **Hardened Runtime + python-vlc.** Some Python C extensions are stripped by codesign's `--options runtime`. Test extensively after notarization; you may need `--entitlements` allowing dyld interposing.
-6. **Existing `LMM-MACOS` branch.** Diff (`git diff --stat LMM-DEV..LMM-MACOS`) shows extensive deletions of CHANGELOG, EULA, RELEASE_*, and additions of `PORT_PLAN_MACOS_ARM64.md`, `lyon-installer-wizard.png` removed, etc. Resolve whether to merge that branch's intent or discard it before starting fresh work.
 
 ---
 
