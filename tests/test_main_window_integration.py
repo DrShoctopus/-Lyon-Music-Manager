@@ -14,6 +14,8 @@ Phases 1–7 still holds together:
 """
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 QtCore = pytest.importorskip("PySide6.QtCore", exc_type=ImportError)
@@ -38,6 +40,10 @@ def main_window(qapp, fake_backend, monkeypatch, tmp_path):
         music_root=str(tmp_path / "Music"),
         library_paths=[],
         first_run_completed=True,
+        # Pre-accept the YouTube ToS gate so tests that activate the
+        # YouTube tab don't hang on the modal acknowledgement dialog.
+        youtube_acknowledged=True,
+        update_check_enabled=False,
     )
     monkeypatch.setattr(Settings, "load", classmethod(lambda cls: settings))
 
@@ -56,6 +62,36 @@ def main_window(qapp, fake_backend, monkeypatch, tmp_path):
     w.deleteLater()
 
 
+def _accept_settings_dialog(monkeypatch, **changes):
+    from lyon.ui import settings_dialog as settings_dialog_mod
+
+    class FakeSettingsDialog:
+        def __init__(self, settings, *_args, **_kwargs):
+            self.result_settings = replace(settings)
+            for name, value in changes.items():
+                setattr(self.result_settings, name, value)
+
+        def exec(self):
+            return QtWidgets.QDialog.Accepted
+
+        def deleteLater(self):
+            pass
+
+    monkeypatch.setattr(settings_dialog_mod, "SettingsDialog", FakeSettingsDialog)
+
+
+def _stub_settings_save_side_effects(main_window, monkeypatch):
+    from lyon.core.settings import Settings
+    from lyon.ui import main_window as main_window_mod
+
+    monkeypatch.setattr(Settings, "save", lambda self: None)
+    monkeypatch.setattr(main_window_mod.metadata, "reset_musicbrainz_useragent", lambda: None)
+    monkeypatch.setattr(main_window_mod.metadata, "clear_metadata_cache", lambda: None)
+    monkeypatch.setattr(main_window, "_restart_library_watcher", lambda: None)
+    monkeypatch.setattr(main_window, "_start_scan", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(main_window, "show_toast", lambda *_args, **_kwargs: None)
+
+
 def test_tab_bar_renders_documented_order(main_window):
     expected = ("Library", "Now Playing", "Podcasts", "Radio", "Video", "Disc", "Rip", "YouTube")
     actual = tuple(
@@ -70,6 +106,148 @@ def test_clicking_a_tab_swaps_stack_page(main_window):
     assert main_window.stack.currentWidget() is main_window.ripper_view
     main_window.tab_bar.setCurrentIndex(main_window._tab_index["Library"])
     assert main_window.stack.currentWidget() is main_window.library_view
+
+
+def test_activate_tab_ignores_out_of_range_index(main_window):
+    main_window._last_confirmed_tab_idx = main_window._tab_index["Library"]
+
+    main_window._activate_tab(999)
+
+    assert main_window._last_confirmed_tab_idx == main_window._tab_index["Library"]
+
+
+def test_drop_event_reports_skipped_files(main_window, monkeypatch, tmp_path):
+    from lyon.core.library import IndexResult
+
+    media = tmp_path / "unreadable.mp3"
+    media.write_bytes(b"not real media")
+    toasts: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(
+        main_window.library,
+        "index_file",
+        lambda path, **_kwargs: IndexResult("skipped", str(path), "Unsupported metadata"),
+    )
+    monkeypatch.setattr(main_window.library, "commit", lambda: None)
+    monkeypatch.setattr(main_window.library_view, "refresh", lambda: None)
+    monkeypatch.setattr(main_window.dlna_server, "invalidate_cache", lambda: None)
+    monkeypatch.setattr(
+        main_window,
+        "show_toast",
+        lambda message, level="info", **_kwargs: toasts.append((message, level)),
+    )
+
+    class _MimeData:
+        def urls(self):
+            return [QtCore.QUrl.fromLocalFile(str(media))]
+
+    class _DropEvent:
+        def __init__(self) -> None:
+            self.accepted = False
+
+        def mimeData(self):
+            return _MimeData()
+
+        def acceptProposedAction(self) -> None:
+            self.accepted = True
+
+    event = _DropEvent()
+
+    main_window.dropEvent(event)
+
+    assert event.accepted is True
+    assert toasts == [("No supported files were added. 1 file skipped.", "warning")]
+
+
+def test_failed_auto_update_records_retry_timestamp(main_window, monkeypatch):
+    saves: list[bool] = []
+    main_window._update_manual_request = False
+    monkeypatch.setattr("time.time", lambda: 12_345.0)
+    monkeypatch.setattr(main_window.settings, "save", lambda: saves.append(True))
+
+    main_window._on_update_check_failed("offline")
+
+    assert main_window.settings.last_update_failure_ts == 12_345
+    assert saves == [True]
+
+
+def test_settings_dlna_bind_address_change_restarts_running_server(main_window, monkeypatch):
+    restarts: list[bool] = []
+    main_window.settings.dlna_enabled = True
+    main_window.settings.dlna_port = 8200
+    main_window.settings.dlna_friendly_name = "Sea Lyon"
+    main_window.settings.dlna_bind_address = "0.0.0.0"
+    _accept_settings_dialog(monkeypatch, dlna_bind_address="127.0.0.1")
+    _stub_settings_save_side_effects(main_window, monkeypatch)
+    monkeypatch.setattr(
+        main_window,
+        "_restart_dlna_server",
+        lambda *, show_toast: restarts.append(show_toast),
+    )
+
+    main_window.open_settings()
+
+    assert restarts == [True]
+
+
+def test_settings_library_path_change_restarts_running_dlna_server(main_window, monkeypatch, tmp_path):
+    restarts: list[bool] = []
+    media_dir = str(tmp_path / "Shared Music")
+    main_window.settings.dlna_enabled = True
+    main_window.settings.library_paths = []
+    _accept_settings_dialog(monkeypatch, library_paths=[media_dir])
+    _stub_settings_save_side_effects(main_window, monkeypatch)
+    monkeypatch.setattr(
+        main_window,
+        "_restart_dlna_server",
+        lambda *, show_toast: restarts.append(show_toast),
+    )
+
+    main_window.open_settings()
+
+    assert restarts == [True]
+
+
+def test_auto_update_failure_backoff_blocks_startup_retry(main_window, monkeypatch):
+    calls: list[bool] = []
+    main_window.settings.update_check_enabled = True
+    main_window.settings.first_run_completed = True
+    main_window.settings.last_update_check_ts = 0
+    main_window.settings.last_update_failure_ts = 10_000
+    monkeypatch.setattr("time.time", lambda: 10_000 + 60)
+    monkeypatch.setattr(
+        main_window,
+        "_start_update_check",
+        lambda *, manual: calls.append(manual),
+    )
+
+    try:
+        main_window._maybe_check_for_update()
+
+        assert calls == []
+    finally:
+        main_window.settings.update_check_enabled = False
+
+
+def test_auto_update_failure_backoff_allows_later_retry(main_window, monkeypatch):
+    calls: list[bool] = []
+    main_window.settings.update_check_enabled = True
+    main_window.settings.first_run_completed = True
+    main_window.settings.last_update_check_ts = 0
+    main_window.settings.last_update_failure_ts = 100_000
+    monkeypatch.setattr("time.time", lambda: 100_000 + main_window._UPDATE_FAILURE_RETRY_INTERVAL_S + 1)
+    monkeypatch.setattr(
+        main_window,
+        "_start_update_check",
+        lambda *, manual: calls.append(manual),
+    )
+
+    try:
+        main_window._maybe_check_for_update()
+
+        assert calls == [False]
+    finally:
+        main_window.settings.update_check_enabled = False
 
 
 def test_low_coupling_tabs_are_lazy_created_on_first_use(main_window):
@@ -291,7 +469,7 @@ def test_radio_play_request_uses_audio_player(main_window, monkeypatch):
     monkeypatch.setattr(
         main_window.player,
         "play_url",
-        lambda url, title=None: calls.append(("play_url", url, title)),
+        lambda url, title=None, options=(): calls.append(("play_url", url, title)),
     )
 
     main_window._play_radio_station("https://radio.example.test/live", "Sea Radio")
@@ -311,6 +489,8 @@ def test_podcast_play_request_uses_audio_player(main_window, monkeypatch):
         lambda url, title=None, options=(): calls.append(("play_url", url, title, options)),
     )
 
+    from lyon.core.podcast import podcast_user_agent
+
     main_window._play_podcast_episode("https://podcasts.example.test/episode.mp3", "Sea Stories - One")
 
     assert calls == [
@@ -320,7 +500,7 @@ def test_podcast_play_request_uses_audio_player(main_window, monkeypatch):
             "https://podcasts.example.test/episode.mp3",
             "Sea Stories - One",
             (
-                ":http-user-agent=Sea Lyon Media Manager/Podcast",
+                f":http-user-agent={podcast_user_agent()}",
                 ":network-caching=1500",
             ),
         ),
@@ -486,6 +666,10 @@ def test_startup_scan_prunes_missing_library_rows(qapp, fake_backend, monkeypatc
         library_paths=[str(library_root)],
         watch_library_folders=False,
         first_run_completed=True,
+        # Pre-accept the YouTube ToS gate so tests that activate the
+        # YouTube tab don't hang on the modal acknowledgement dialog.
+        youtube_acknowledged=True,
+        update_check_enabled=False,
     )
     monkeypatch.setattr(Settings, "load", classmethod(lambda cls: settings))
     monkeypatch.setattr(
@@ -697,6 +881,10 @@ def test_main_window_stays_usable_when_playback_backend_is_unavailable(qapp, mon
         music_root=str(tmp_path / "Music"),
         library_paths=[],
         first_run_completed=True,
+        # Pre-accept the YouTube ToS gate so tests that activate the
+        # YouTube tab don't hang on the modal acknowledgement dialog.
+        youtube_acknowledged=True,
+        update_check_enabled=False,
     )
     monkeypatch.setattr(Settings, "load", classmethod(lambda cls: settings))
     monkeypatch.setattr(

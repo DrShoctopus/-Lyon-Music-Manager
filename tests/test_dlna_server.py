@@ -84,6 +84,55 @@ def test_dlna_server_header_does_not_disclose_host_os():
     assert "Linux" not in header
 
 
+def test_dlna_server_binds_configured_address(tmp_path, monkeypatch):
+    addresses: list[tuple[str, int]] = []
+
+    class FakeHTTPServer:
+        server_address = ("127.0.0.1", 12345)
+
+        def __init__(self, address, _handler):
+            addresses.append(address)
+            self.dlna = None
+
+        def serve_forever(self):
+            pass
+
+        def shutdown(self):
+            pass
+
+        def server_close(self):
+            pass
+
+    class FakeSsdpResponder:
+        def __init__(self, _server):
+            pass
+
+        def start(self):
+            pass
+
+        def stop(self):
+            pass
+
+    library = Library(tmp_path / "library.db")
+    server = DlnaServer(
+        library,
+        Settings(
+            music_root=str(tmp_path),
+            dlna_port=0,
+            dlna_bind_address="127.0.0.1",
+        ),
+    )
+    monkeypatch.setattr("lyon.core.dlna_server._DlnaHTTPServer", FakeHTTPServer)
+    monkeypatch.setattr("lyon.core.dlna_server._SsdpResponder", FakeSsdpResponder)
+    try:
+        server.start()
+    finally:
+        server.stop()
+        library.close()
+
+    assert addresses == [("127.0.0.1", 0)]
+
+
 def test_dlna_browse_returns_library_tracks(tmp_path):
     library = Library(tmp_path / "library.db")
     _insert_track(library, tmp_path / "song.mp3")

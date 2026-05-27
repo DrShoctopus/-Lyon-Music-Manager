@@ -206,9 +206,6 @@ class YouTubeView(QWidget):
         self.search.setText(text)
         return self._run_search(text)
 
-    def pause_all_videos(self) -> None:
-        """No-op — kept for API compatibility with MainWindow."""
-
     def is_searching(self) -> bool:
         return self._worker is not None and self._worker.isRunning()
 

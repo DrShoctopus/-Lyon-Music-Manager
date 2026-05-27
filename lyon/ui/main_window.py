@@ -18,7 +18,7 @@ from ..core import metadata
 from ..core.cd_detect import close_dll_handles as close_cd_dll_handles
 from ..core.cast_controller import CastController
 from ..core.dlna_server import DlnaServer
-from ..core.library import Library, ScanSummary, Track
+from ..core.library import Library, SUPPORTED_EXTS, ScanSummary, Track
 from ..core.library_watcher import (
     LibraryFolderWatcher,
     LibraryIndexThread,
@@ -26,13 +26,15 @@ from ..core.library_watcher import (
     coalesce_batch,
 )
 from ..core.playback_backend import close_dll_handles
-from ..core.podcast import PODCAST_USER_AGENT
+from ..core.podcast import podcast_user_agent
+from ..core.radio import radio_user_agent
 from ..core.player import Player
 from ..core.replaygain import ReplayGainScanner
 from ..core.scrobbler import ScrobblerService
 from ..core.ripper import find_ffmpeg
+from ..core.diagnostics import collect_diagnostics_bundle, logs_dir
 from ..core.settings import Settings
-from .about import COPYRIGHT_NOTICE, THIRD_PARTY_NOTICE
+from .about_dialog import AboutDialog
 from .branding import app_icon
 from .diagnostics_dialog import DiagnosticsDialog
 from .library_stats_dialog import LibraryStatsDialog
@@ -46,6 +48,17 @@ from .queue_dialog import QueueDialog
 from .styles import apply_app_styles
 from .toast import Toast
 from .yt_download_dialog import YtDownloadDialog
+
+
+def _dlna_settings_signature(settings: Settings) -> tuple[object, ...]:
+    return (
+        settings.dlna_enabled,
+        settings.dlna_port,
+        settings.dlna_friendly_name,
+        settings.dlna_bind_address,
+        settings.music_root,
+        tuple(settings.library_paths),
+    )
 
 
 class _LibraryScanThread(QThread):
@@ -141,6 +154,17 @@ class MainWindow(QMainWindow):
         self._now_playing_view = None
         self._podcast_view = None
         self._radio_view = None
+        # Remembered most recently requested radio (url, title) for friendly
+        # error reporting; cleared once a different source plays.
+        self._last_radio_request: tuple[str, str] | None = None
+        # YouTube acknowledgement: tracks the last tab the user actually
+        # confirmed so we can revert there if they decline the gate.
+        self._last_confirmed_tab_idx: int = 0
+        # Auto-update plumbing — see _maybe_check_for_update / check_for_updates_now.
+        self._update_thread = None  # type: ignore[assignment]
+        self._update_worker = None  # type: ignore[assignment]
+        self._update_dialog = None  # type: ignore[assignment]
+        self._update_manual_request: bool = False
         self._youtube_view = None
         self._disc_view = None
         self._ripper_view = None
@@ -285,7 +309,10 @@ class MainWindow(QMainWindow):
         self.library_view.status_message.connect(
             lambda m: self.show_toast(m, level="warning"))
         self.player.track_changed.connect(self.library_view.highlight_track)
+        self.player.track_changed.connect(self._on_player_track_changed)
         self.player.playback_unavailable.connect(self._on_playback_unavailable)
+        if hasattr(self.player, "error_occurred"):
+            self.player.error_occurred.connect(self._on_stream_error)
         self.library_view.request_add_folder.connect(self.add_folder)
         self.library_view.request_youtube_search.connect(self._search_youtube_for_track)
         self.library_view.request_open_settings.connect(self.open_settings)
@@ -326,7 +353,12 @@ class MainWindow(QMainWindow):
         self._media_key_handler = register_media_key_handler(self.player)
 
         QTimer.singleShot(0, self._maybe_show_first_run)
-        backup_path = getattr(self.settings, "_corrupt_backup_path", None)
+        # Auto-update check kicks in shortly after first-run resolves; deferring
+        # a couple of seconds keeps the splash + startup-scan responsive.
+        QTimer.singleShot(2500, self._maybe_check_for_update)
+        # One-time SmartScreen advisory for installer-installed unsigned builds.
+        QTimer.singleShot(1500, self._maybe_show_smartscreen_advisory)
+        backup_path = self.settings.corrupt_backup_path
         if backup_path:
             QTimer.singleShot(
                 200,
@@ -397,6 +429,16 @@ class MainWindow(QMainWindow):
         help_menu.addAction(kb_act)
         help_menu.addAction(QAction("Library Statistics", self, triggered=self.show_library_stats))
         help_menu.addAction(QAction("Runtime Diagnostics", self, triggered=self.show_diagnostics))
+        help_menu.addSeparator()
+        help_menu.addAction(QAction("Open Log Folder", self, triggered=self.open_log_folder))
+        help_menu.addAction(QAction(
+            "Copy Diagnostics to Clipboard", self, triggered=self.copy_diagnostics
+        ))
+        help_menu.addSeparator()
+        help_menu.addAction(QAction(
+            "Check for Updates…", self, triggered=self.check_for_updates_now
+        ))
+        help_menu.addSeparator()
         about_act = QAction("About", self, triggered=self.show_about)
         about_act.setMenuRole(QAction.MenuRole.AboutRole)
         help_menu.addAction(about_act)
@@ -443,8 +485,19 @@ class MainWindow(QMainWindow):
         return page
 
     def _activate_tab(self, idx: int) -> None:
-        if 0 <= idx < len(self._TAB_ORDER):
-            self._ensure_tab_view(self._TAB_ORDER[idx])
+        if not (0 <= idx < len(self._TAB_ORDER)):
+            return
+        name = self._TAB_ORDER[idx]
+        if name == "YouTube" and not self._ensure_youtube_acknowledged():
+            # Revert the tab bar back to the last confirmed tab. Defer
+            # via QTimer so the signal completes before we re-emit.
+            revert_idx = self._last_confirmed_tab_idx
+            if revert_idx == idx:
+                revert_idx = 0
+            QTimer.singleShot(0, lambda r=revert_idx: self.tab_bar.setCurrentIndex(r))
+            return
+        self._ensure_tab_view(name)
+        self._last_confirmed_tab_idx = idx
         self.stack.setCurrentIndex(idx)
 
     def _ensure_tab_view(self, name: str) -> QWidget:
@@ -615,6 +668,21 @@ class MainWindow(QMainWindow):
         )
         self.statusBar().showMessage(reason, 6000)
 
+    def _on_player_track_changed(self, track: object) -> None:
+        if track is not None and getattr(track, "is_library_item", True):
+            self._last_radio_request = None
+
+    def _on_stream_error(self, url: str) -> None:
+        last = self._last_radio_request
+        if last is None or last[0] != url:
+            return
+        _, title = last
+        self.show_toast(
+            f'Could not connect to "{title}".',
+            level="error",
+            duration_ms=5000,
+        )
+
     # ------------------------------------------------------------------ toasts
     def show_toast(
         self,
@@ -733,6 +801,8 @@ class MainWindow(QMainWindow):
             self._rg_scanner = None
 
     def _on_yt_download(self, url: str) -> None:
+        if not self._ensure_youtube_acknowledged():
+            return
         dlg = YtDownloadDialog(url, self.settings, self.library, self)
         dlg.library_updated.connect(self._library_refresh_timer.start)
         dlg.video_download_finished.connect(self._on_yt_video_download_finished)
@@ -741,6 +811,28 @@ class MainWindow(QMainWindow):
         finally:
             dlg.deleteLater()
 
+    def _ensure_youtube_acknowledged(self) -> bool:
+        """Show the YouTube ToS gate if the user has not already accepted.
+
+        Returns True if the user has previously acknowledged or accepts now,
+        False if they declined this prompt. Persists the flag to
+        ``settings.json`` on first accept.
+        """
+        if self.settings.youtube_acknowledged:
+            return True
+        from .youtube_acknowledgement_dialog import YouTubeAcknowledgementDialog
+
+        dlg = YouTubeAcknowledgementDialog(self)
+        try:
+            accepted = dlg.exec() == dlg.DialogCode.Accepted and dlg.acknowledged
+        finally:
+            dlg.deleteLater()
+        if not accepted:
+            return False
+        self.settings.youtube_acknowledged = True
+        self.settings.save()
+        return True
+
     def _on_yt_video_download_finished(self) -> None:
         self.tab_bar.setCurrentIndex(self._tab_index["Video"])
         self.video_player_view.refresh_catalog()
@@ -748,6 +840,8 @@ class MainWindow(QMainWindow):
 
     def _search_youtube_for_track(self, query: str) -> None:
         if not query:
+            return
+        if not self._ensure_youtube_acknowledged():
             return
         self.tab_bar.setCurrentIndex(self._tab_index["YouTube"])
         youtube_view = self.youtube_view
@@ -760,7 +854,16 @@ class MainWindow(QMainWindow):
 
     def _play_radio_station(self, url: str, title: str) -> None:
         self._pause_video_playback_if_loaded()
-        self.player.play_url(url, title=title)
+        self._last_radio_request = (url, title)
+        self.player.play_url(
+            url,
+            title=title,
+            options=(
+                f":http-user-agent={radio_user_agent()}",
+                ":network-caching=2000",
+                ":http-reconnect",
+            ),
+        )
         self.show_toast(f"Playing radio: {title}", level="info")
 
     def _play_podcast_episode(self, url: str, title: str) -> None:
@@ -769,7 +872,7 @@ class MainWindow(QMainWindow):
             url,
             title=title,
             options=(
-                f":http-user-agent={PODCAST_USER_AGENT}",
+                f":http-user-agent={podcast_user_agent()}",
                 ":network-caching=1500",
             ),
         )
@@ -1106,11 +1209,8 @@ class MainWindow(QMainWindow):
         from .settings_dialog import SettingsDialog
         old_paths = list(self.settings.library_paths)
         old_watch = self.settings.watch_library_folders
-        old_dlna = (
-            self.settings.dlna_enabled,
-            self.settings.dlna_port,
-            self.settings.dlna_friendly_name,
-        )
+        old_dlna_enabled = self.settings.dlna_enabled
+        old_dlna = _dlna_settings_signature(self.settings)
         audio_outputs = self.player.list_audio_outputs()
         audio_devices_map: dict[str, list[tuple[str, str]]] = {}
         for out_id, _desc in audio_outputs:
@@ -1129,7 +1229,7 @@ class MainWindow(QMainWindow):
         if accepted and result_settings is not None:
             if (
                 result_settings.dlna_enabled
-                and not old_dlna[0]
+                and not old_dlna_enabled
                 and not self._confirm_dlna_lan_exposure()
             ):
                 result_settings.dlna_enabled = False
@@ -1163,11 +1263,7 @@ class MainWindow(QMainWindow):
             )
             self.player.set_gapless(self.settings.gapless_playback)
             self.scrobbler.update_settings(self.settings)
-            new_dlna = (
-                self.settings.dlna_enabled,
-                self.settings.dlna_port,
-                self.settings.dlna_friendly_name,
-            )
+            new_dlna = _dlna_settings_signature(self.settings)
             if new_dlna != old_dlna:
                 self._restart_dlna_server(show_toast=True)
             self._apply_video_equalizer_if_loaded(
@@ -1241,7 +1337,8 @@ class MainWindow(QMainWindow):
                 self.show_toast("DLNA sharing could not start.", level="warning")
             return
         if show_toast:
-            self.show_toast("DLNA sharing is running.", level="success")
+            detail = f" at {self.dlna_server.base_url}" if self.dlna_server.base_url else ""
+            self.show_toast(f"DLNA sharing is running{detail}.", level="success")
 
     def _confirm_dlna_lan_exposure(self) -> bool:
         result = QMessageBox.question(
@@ -1451,26 +1548,211 @@ class MainWindow(QMainWindow):
         dlg.show()
 
     def show_about(self) -> None:
-        dlg = QMessageBox(self)
-        dlg.setWindowTitle("About " + __app_name__)
-        dlg.setIconPixmap(app_icon().pixmap(64, 64))
-        dlg.setText(f"<b>{__app_name__}</b><br>Version {__version__}")
-        dlg.setInformativeText(
-            "Sea Lyon is a music library manager, CD ripper, and player\n"
-            "for Windows, macOS, and Linux.\n\n"
-            f"{COPYRIGHT_NOTICE}\n\n"
-            "Released under the MIT License.\n\n"
-            f"{THIRD_PARTY_NOTICE}"
+        dlg = AboutDialog(self)
+        dlg.setAttribute(Qt.WA_DeleteOnClose)
+        dlg.exec()
+
+    def open_log_folder(self) -> None:
+        """Help → Open Log Folder. Opens %APPDATA%\\LyonMusicManager\\logs."""
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+
+        path = logs_dir()
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))):
+            self.show_toast(
+                f"Could not open log folder: {path}",
+                level="warning",
+            )
+
+    def _maybe_show_smartscreen_advisory(self) -> None:
+        """One-time toast explaining the unsigned-installer SmartScreen warning.
+
+        Fires on the first launch of a packaged (PyInstaller-frozen) build
+        when the user has not yet seen the advisory. Suppressed in source /
+        dev runs since the warning only applies to the installer.
+        """
+        import sys as _sys
+
+        if not getattr(_sys, "frozen", False):
+            return
+        if self.settings.smartscreen_advisory_shown:
+            return
+        self.show_toast(
+            "Heads up: Sea Lyon is unsigned for the 1.0 release, so Windows "
+            "SmartScreen may have warned you when installing. A signed build "
+            "is planned for 1.1 — see the project README for details.",
+            level="info",
+            duration_ms=10000,
         )
+        self.settings.smartscreen_advisory_shown = True
         try:
-            dlg.exec()
-        finally:
-            dlg.deleteLater()
+            self.settings.save()
+        except Exception:  # noqa: BLE001
+            pass
+
+    # ------------------------------------------------------------------ auto-update
+
+    _UPDATE_CHECK_INTERVAL_S = 24 * 60 * 60  # at most once per day on startup
+    _UPDATE_FAILURE_RETRY_INTERVAL_S = 4 * 60 * 60  # back off outage retries
+
+    def _maybe_check_for_update(self) -> None:
+        """Startup hook: check the appcast if the user has opted in.
+
+        - Skipped if first-run is not yet completed (don't spam new users).
+        - Skipped if "Check for updates automatically" is unchecked.
+        - Skipped if we polled within the last 24 hours.
+        """
+        if not self.settings.first_run_completed:
+            return
+        if not self.settings.update_check_enabled:
+            return
+        import time
+        now = time.time()
+        elapsed = now - max(0, int(self.settings.last_update_check_ts))
+        if elapsed < self._UPDATE_CHECK_INTERVAL_S:
+            return
+        failure_ts = max(0, int(self.settings.last_update_failure_ts))
+        if failure_ts and now - failure_ts < self._UPDATE_FAILURE_RETRY_INTERVAL_S:
+            return
+        self._start_update_check(manual=False)
+
+    def check_for_updates_now(self) -> None:
+        """Help → Check for Updates… entry point. Surfaces a result toast even if up-to-date."""
+        self._start_update_check(manual=True)
+
+    def _start_update_check(self, *, manual: bool) -> None:
+        from ..core.updater import UpdateCheckWorker
+
+        if self._update_worker is not None:
+            if manual:
+                self.show_toast("An update check is already running.", level="info")
+            return
+        url = self.settings.update_appcast_url
+        if not url:
+            if manual:
+                self.show_toast("No update server is configured.", level="warning")
+            return
+        thread = QThread()
+        worker = UpdateCheckWorker(url, __version__)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        thread.finished.connect(thread.deleteLater)
+        worker.finished.connect(worker.deleteLater)
+        worker.failed.connect(worker.deleteLater)
+        worker.finished.connect(self._on_update_check_finished)
+        worker.failed.connect(self._on_update_check_failed)
+        worker.finished.connect(self._finish_update_thread)
+        worker.failed.connect(self._finish_update_thread)
+        self._update_thread = thread
+        self._update_worker = worker
+        self._update_manual_request = manual
+        thread.start()
+
+    def _on_update_check_finished(self, info: object) -> None:
+        from ..core.updater import UpdateInfo
+
+        self._update_worker = None
+        manual = self._update_manual_request
+        self._update_manual_request = False
+
+        import time
+        self.settings.last_update_check_ts = int(time.time())
+        self.settings.last_update_failure_ts = 0
+        # Persist the timestamp without churning the whole save path; settings.save()
+        # writes the JSON file atomically.
+        try:
+            self.settings.save()
+        except Exception:  # noqa: BLE001 — must never crash on save failure
+            pass
+
+        if info is None or not isinstance(info, UpdateInfo):
+            if manual:
+                self.show_toast(
+                    f"You're running the latest version ({__version__}).",
+                    level="success",
+                )
+            return
+        # Don't auto-surface an explicitly skipped version unless this is a manual check.
+        if (
+            not manual
+            and self.settings.skipped_update_version
+            and self.settings.skipped_update_version == info.version
+        ):
+            return
+        self._show_update_dialog(info)
+
+    def _on_update_check_failed(self, message: str) -> None:
+        self._update_worker = None
+        manual = self._update_manual_request
+        self._update_manual_request = False
+        import time
+        self.settings.last_update_failure_ts = int(time.time())
+        try:
+            self.settings.save()
+        except Exception:  # noqa: BLE001 — must never crash on save failure
+            pass
+        if manual:
+            self.show_toast(
+                f"Could not check for updates: {message}",
+                level="warning",
+            )
+
+    def _finish_update_thread(self, *_args: object) -> None:
+        thread = self._update_thread
+        if thread is None:
+            return
+        self._update_thread = None
+        thread.quit()
+        thread.wait(2000)
+
+    def _show_update_dialog(self, info: object) -> None:
+        from .update_dialog import UpdateAvailableDialog
+
+        if self._update_dialog is not None and self._update_dialog.isVisible():
+            self._update_dialog.raise_()
+            self._update_dialog.activateWindow()
+            return
+        dlg = UpdateAvailableDialog(info, self)  # type: ignore[arg-type]
+        dlg.setAttribute(Qt.WA_DeleteOnClose)
+        dlg.version_skipped.connect(self._on_update_skipped)
+        dlg.destroyed.connect(lambda *_: setattr(self, "_update_dialog", None))
+        self._update_dialog = dlg
+        dlg.show()
+
+    def _on_update_skipped(self, version: str) -> None:
+        self.settings.skipped_update_version = version
+        try:
+            self.settings.save()
+        except Exception:  # noqa: BLE001
+            pass
+
+    # ------------------------------------------------------------------ diagnostics actions
+
+    def copy_diagnostics(self) -> None:
+        """Help → Copy Diagnostics. Builds a redacted bundle to the clipboard."""
+        from PySide6.QtGui import QGuiApplication
+
+        try:
+            bundle = collect_diagnostics_bundle()
+        except Exception as exc:  # noqa: BLE001 — must never crash the menu
+            self.show_toast(
+                f"Could not build diagnostics bundle: {exc}",
+                level="error",
+            )
+            return
+        clipboard = QGuiApplication.clipboard()
+        if clipboard is None:
+            self.show_toast("Clipboard is not available.", level="warning")
+            return
+        clipboard.setText(bundle)
+        self.show_toast(
+            "Diagnostics copied to clipboard. Paste into a support email.",
+            level="success",
+            duration_ms=4000,
+        )
 
     # ------------------------------------------------------------------ drag-and-drop
-    _AUDIO_EXTENSIONS = frozenset(
-        ".flac .mp3 .ogg .wav .aac .m4a .wma .opus .ape .aiff .alac .mka .mp4 .mkv .webm".split()
-    )
+    _DROP_EXTENSIONS = SUPPORTED_EXTS
 
     def dragEnterEvent(self, ev: QDragEnterEvent) -> None:
         if ev.mimeData().hasUrls():
@@ -1489,7 +1771,7 @@ class MainWindow(QMainWindow):
             p = _Path(path)
             if p.is_dir():
                 folders.append(path)
-            elif p.suffix.lower() in self._AUDIO_EXTENSIONS:
+            elif p.suffix.lower() in self._DROP_EXTENSIONS:
                 files.append(path)
         if folders:
             for folder in folders:
@@ -1499,16 +1781,51 @@ class MainWindow(QMainWindow):
             self._restart_library_watcher()
             self._start_scan(folders, f"Added {len(folders)} folder(s)")
         if files:
-            for f in files:
-                self.library.add_file(f)
+            results = [self.library.index_file(f) for f in files]
             self.library.commit()
-            self.dlna_server.invalidate_cache()
-            self.library_view.refresh()
-            plural = "" if len(files) == 1 else "s"
-            self.show_toast(
-                f"Added {len(files)} file{plural} to library.",
-                level="success",
-            )
+            added = sum(1 for result in results if result.status == "added")
+            updated = sum(1 for result in results if result.status == "updated")
+            unchanged = sum(1 for result in results if result.status == "unchanged")
+            skipped = sum(1 for result in results if result.status == "skipped")
+            failed = sum(1 for result in results if result.status == "failed")
+            if added or updated:
+                self.dlna_server.invalidate_cache()
+                self.library_view.refresh()
+                parts: list[str] = []
+                if added:
+                    plural = "" if added == 1 else "s"
+                    parts.append(f"Added {added} file{plural}")
+                if updated:
+                    parts.append(f"updated {updated}")
+                if unchanged:
+                    parts.append(f"{unchanged} already in library")
+                if skipped:
+                    plural = "" if skipped == 1 else "s"
+                    parts.append(f"{skipped} file{plural} skipped")
+                if failed:
+                    plural = "" if failed == 1 else "s"
+                    parts.append(f"{failed} file{plural} failed")
+                self.show_toast(
+                    "; ".join(parts) + ".",
+                    level="warning" if failed or skipped else "success",
+                )
+            else:
+                detail_parts: list[str] = []
+                if unchanged:
+                    detail_parts.append(f"{unchanged} already in library")
+                if skipped:
+                    plural = "" if skipped == 1 else "s"
+                    detail_parts.append(f"{skipped} file{plural} skipped")
+                if failed:
+                    plural = "" if failed == 1 else "s"
+                    detail_parts.append(f"{failed} file{plural} failed")
+                detail = " ".join(detail_parts) or f"{len(files)} file(s) skipped."
+                if not detail.endswith("."):
+                    detail += "."
+                self.show_toast(
+                    f"No supported files were added. {detail}",
+                    level="warning",
+                )
         ev.acceptProposedAction()
 
     def closeEvent(self, ev) -> None:
@@ -1556,6 +1873,18 @@ class MainWindow(QMainWindow):
             )
             ev.ignore()
             return
+        if self._update_thread is not None and self._update_thread.isRunning():
+            self._update_thread.quit()
+            if not self._update_thread.wait(3000):
+                self.show_toast(
+                    "Update check is still stopping. Try closing again in a moment.",
+                    level="warning",
+                    duration_ms=5000,
+                )
+                ev.ignore()
+                return
+            self._update_thread = None
+            self._update_worker = None
         self.cast_controller.stop_cast()
         self.cast_controller.shutdown()
         self.player.stop()

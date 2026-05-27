@@ -27,6 +27,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 @pytest.fixture(autouse=True)
 def isolated_app_data_dir(monkeypatch, tmp_path):
     """Keep tests from reading or writing the user's real app settings."""
+    from lyon import app as app_module
+    from lyon.core import diagnostics as diagnostics_mod
     from lyon.core import library as library_mod
     from lyon.core import settings as settings_mod
 
@@ -34,6 +36,8 @@ def isolated_app_data_dir(monkeypatch, tmp_path):
     app_data.mkdir()
     monkeypatch.setattr(settings_mod, "app_data_dir", lambda: app_data)
     monkeypatch.setattr(library_mod, "app_data_dir", lambda: app_data)
+    monkeypatch.setattr(diagnostics_mod, "app_data_dir", lambda: app_data)
+    monkeypatch.setattr(app_module, "app_data_dir", lambda: app_data)
     settings_mod.invalidate_settings_cache()
     yield
     settings_mod.invalidate_settings_cache()

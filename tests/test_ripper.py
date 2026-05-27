@@ -506,6 +506,29 @@ def test_ripper_track_rows_do_not_resize_status_column_per_row(qapp, monkeypatch
     assert calls == []
 
 
+def test_soft_album_duplicate_cancel_disables_rip_button(qapp, monkeypatch, tmp_path):
+    monkeypatch.setattr(ripper_view_module.cd_detect, "list_cd_drives", lambda: [])
+    monkeypatch.setattr(
+        ripper_view_module.QMessageBox,
+        "question",
+        lambda *_args, **_kwargs: ripper_view_module.QMessageBox.No,
+    )
+
+    class FakeLibrary:
+        def find_album_match(self, *_args):
+            return ("Artist", "Album")
+
+    view = RipperView(Settings(music_root=str(tmp_path)), FakeLibrary())
+    view._toc = DiscToc(drive="D:", discid="disc-123", track_count=1)
+    album = AlbumInfo(artist="Artist", album="Album")
+    album.tracks = [TrackInfo(number=1, title="Track 01")]
+
+    view._apply_album(album)
+
+    assert view._toc is None
+    assert not view.start_btn.isEnabled()
+
+
 def test_rip_request_reuses_detected_disc_toc(tmp_path):
     album = AlbumInfo(artist="Artist", album="Album")
     toc = DiscToc(
@@ -553,7 +576,7 @@ def test_rip_worker_filters_retry_tracks_without_shrinking_album_metadata(monkey
         out.write_bytes(b"audio")
         return None
 
-    def fake_write_tags(path, tagged_album, track, artwork):
+    def fake_write_tags(path, tagged_album, track, artwork, **_kw):
         tag_calls.append((track.number, len(tagged_album.tracks), path.name))
         return True
 
@@ -602,7 +625,7 @@ def test_rip_worker_reports_tag_failures_as_failed_not_finished(monkeypatch, tmp
     monkeypatch.setitem(
         sys.modules,
         "lyon.core.tagger",
-        types.SimpleNamespace(write_tags=lambda *_: False),
+        types.SimpleNamespace(write_tags=lambda *_, **__: False),
     )
     worker.track_failed.connect(lambda n, reason: failed.append((n, reason)))
     worker.track_finished.connect(lambda n, path: completed.append((n, path)))
@@ -656,7 +679,7 @@ def test_rip_worker_reuses_one_raw_reader_for_multiple_tracks(monkeypatch, tmp_p
         out.write_bytes(b"audio")
         return None
 
-    def fake_write_tags(*_):
+    def fake_write_tags(*_, **__):
         return True
 
     monkeypatch.setattr(sys, "platform", "win32")

@@ -44,9 +44,14 @@ def drive_root(drive: str) -> str:
         return f"{letter.upper()}:\\" if letter.isalpha() else text
     letter = text[:1]
     if len(text) >= 2 and text[1] == ":" and letter.isalpha():
+        rest = text[2:]
+        if rest and rest.strip("\\/"):
+            return text.rstrip("\\/")
         return f"{letter.upper()}:\\"
     if len(text) == 1 and letter.isalpha():
         return f"{letter.upper()}:\\"
+    if "\\" in text or "/" in text:
+        return text.rstrip("\\/")
     return text.rstrip("\\/") + os.sep
 
 

@@ -5,7 +5,8 @@ import json
 import logging
 import os
 import sys
-from dataclasses import dataclass, asdict, field
+import threading
+from dataclasses import dataclass, fields, field
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -37,6 +38,17 @@ _STREAM_URL_SCHEMES = {
 _MAX_RECENT_STREAM_URLS = 25
 _MAX_RADIO_STATIONS = 200
 _MAX_PODCAST_SUBSCRIPTIONS = 500
+
+DEFAULT_MUSICBRAINZ_CONTACT = "https://github.com/DrShoctopus/Sea-Lyon-Media-Manager"
+_PLACEHOLDER_CONTACT_MARKERS = ("example.", "localhost", "your-email", "your.email")
+
+
+def is_placeholder_contact(value: str) -> bool:
+    """Return True if the MusicBrainz contact string still looks like a placeholder."""
+    text = (value or "").strip().casefold()
+    if not text:
+        return True
+    return any(marker in text for marker in _PLACEHOLDER_CONTACT_MARKERS)
 
 
 def _default_music_root() -> Path:
@@ -167,11 +179,18 @@ def normalize_radio_stations(stations: object, *, limit: int = _MAX_RADIO_STATIO
         name = str(value.get("name") or "").strip() or url
         genre = str(value.get("genre") or "").strip()
         bitrate = _nonnegative_int(value.get("bitrate"), 0)
+        favorite = bool(value.get("favorite", False))
+        raw_tags = value.get("tags") or []
+        if isinstance(raw_tags, str):
+            raw_tags = [t.strip() for t in raw_tags.split(",") if t.strip()]
+        tags = [str(t) for t in raw_tags if t]
         normalized.append({
             "name": name,
             "url": url,
             "genre": genre,
             "bitrate": bitrate,
+            "favorite": favorite,
+            "tags": tags,
         })
         seen.add(key)
         if len(normalized) >= limit:
@@ -223,7 +242,7 @@ class Settings:
     cd_drive: str = ""                 # e.g. "D:" - blank means auto-pick first
     musicbrainz_app: str = "LyonMusicManager"
     musicbrainz_version: str = field(default_factory=_app_version)
-    musicbrainz_contact: str = "https://example.invalid/lyon"
+    musicbrainz_contact: str = DEFAULT_MUSICBRAINZ_CONTACT
     theaudiodb_api_key: str = ""    # blank → TheAudioDB disabled; enter "123" for free tier
     eject_after_rip: bool = True
     auto_lookup_metadata: bool = True
@@ -264,9 +283,23 @@ class Settings:
     dlna_enabled: bool = False
     dlna_port: int = 8200
     dlna_friendly_name: str = "Sea Lyon Media Manager"
+    dlna_bind_address: str = "0.0.0.0"
     last_cast_renderer: str = ""
     radio_stations: list[dict[str, object]] = field(default_factory=list)
+    radio_quick_play_history: list[str] = field(default_factory=list)
     podcast_subscriptions: list[dict[str, object]] = field(default_factory=list)
+    youtube_acknowledged: bool = False  # gate: user has accepted YouTube ToS disclaimer
+    smartscreen_advisory_shown: bool = False  # gate: one-time SmartScreen explainer toast
+    # Auto-update appcast polling (GitHub-Pages-hosted XML; in-app updater
+    # surfaces an "Update Available" dialog and links to the installer).
+    update_check_enabled: bool = True
+    update_appcast_url: str = (
+        "https://drshoctopus.github.io/Sea-Lyon-Media-Manager/appcast.xml"
+    )
+    last_update_check_ts: int = 0       # POSIX timestamp; 0 = never
+    last_update_failure_ts: int = 0     # POSIX timestamp; 0 = no recent failure
+    skipped_update_version: str = ""    # user said "Skip This Version"
+    corrupt_backup_path: str = field(default="", init=False, repr=False, compare=False, metadata={"transient": True})
 
     def __post_init__(self) -> None:
         self.rip_format = str(self.rip_format or "flac").lower()
@@ -297,9 +330,19 @@ class Settings:
         self.dlna_enabled = _bool_value(self.dlna_enabled, False)
         self.dlna_port = _clamp_int(self.dlna_port, 8200, 0, 65535)
         self.dlna_friendly_name = str(self.dlna_friendly_name or "").strip() or "Sea Lyon Media Manager"
+        self.dlna_bind_address = str(self.dlna_bind_address or "").strip() or "0.0.0.0"
         self.last_cast_renderer = str(self.last_cast_renderer or "").strip()
         self.radio_stations = normalize_radio_stations(self.radio_stations)
         self.podcast_subscriptions = normalize_podcast_subscriptions(self.podcast_subscriptions)
+        self.youtube_acknowledged = _bool_value(self.youtube_acknowledged, False)
+        self.smartscreen_advisory_shown = _bool_value(self.smartscreen_advisory_shown, False)
+        self.update_check_enabled = _bool_value(self.update_check_enabled, True)
+        self.update_appcast_url = str(self.update_appcast_url or "").strip() or (
+            "https://drshoctopus.github.io/Sea-Lyon-Media-Manager/appcast.xml"
+        )
+        self.last_update_check_ts = _nonnegative_int(self.last_update_check_ts, 0)
+        self.last_update_failure_ts = _nonnegative_int(self.last_update_failure_ts, 0)
+        self.skipped_update_version = str(self.skipped_update_version or "").strip()
         self.yt_audio_format = str(self.yt_audio_format or "flac").lower()
         if self.yt_audio_format not in _YT_AUDIO_FORMATS:
             self.yt_audio_format = "flac"
@@ -330,6 +373,11 @@ class Settings:
     def remember_stream_url(self, url: str) -> None:
         """Move a valid stream URL to the front of the recents list."""
         self.recent_stream_urls = normalize_stream_urls([url, *self.recent_stream_urls])
+
+    def add_quick_play_url(self, url: str, *, limit: int = 10) -> None:
+        """Prepend *url* to the quick-play history, deduplicating and capping at *limit*."""
+        deduped = [u for u in (self.radio_quick_play_history or []) if u != url]
+        self.radio_quick_play_history = [url, *deduped][: limit]
 
     def add_radio_stations(self, stations: list[dict[str, object]]) -> None:
         """Append or update saved radio stations by URL.
@@ -385,7 +433,11 @@ class Settings:
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
                 # Drop unknown keys so older configs don't crash on upgrade
-                known = {f for f in cls.__dataclass_fields__}
+                known = {
+                    name
+                    for name, field_info in cls.__dataclass_fields__.items()
+                    if field_info.init
+                }
                 data = {k: v for k, v in data.items() if k in known}
                 return cls(**data)
             except OSError as exc:
@@ -402,13 +454,13 @@ class Settings:
                     backup,
                 )
                 instance = cls()
-                instance._corrupt_backup_path = str(backup)
+                instance.corrupt_backup_path = str(backup)
                 return instance
         return cls()
 
     def save(self) -> None:
         path = app_data_dir() / "settings.json"
-        data = json.dumps(asdict(self), indent=2)
+        data = json.dumps(self._settings_dict(), indent=2)
         tmp = path.with_suffix(".tmp")
         tmp.write_text(data, encoding="utf-8")
         _chmod_owner_only(tmp)
@@ -416,26 +468,36 @@ class Settings:
         _chmod_owner_only(path)
         invalidate_settings_cache()
 
+    def _settings_dict(self) -> dict[str, object]:
+        return {
+            f.name: getattr(self, f.name)
+            for f in fields(self)
+            if not f.metadata.get("transient")
+        }
+
 
 # ---------------------------------------------------------------------------
 # Module-level settings cache so repeated hot-path calls (metadata lookups,
 # diagnostics checks) avoid redundant file I/O on every invocation.
 # ---------------------------------------------------------------------------
 _settings_cache: "Settings | None" = None
+_settings_cache_lock = threading.Lock()
 
 
 def get_cached_settings() -> "Settings":
     """Return cached Settings, loading from disk on first call."""
     global _settings_cache
-    if _settings_cache is None:
-        _settings_cache = Settings.load()
-    return _settings_cache
+    with _settings_cache_lock:
+        if _settings_cache is None:
+            _settings_cache = Settings.load()
+        return _settings_cache
 
 
 def invalidate_settings_cache() -> None:
     """Discard the cached Settings so the next call re-reads from disk."""
     global _settings_cache
-    _settings_cache = None
+    with _settings_cache_lock:
+        _settings_cache = None
 
 
 def _chmod_owner_only(path: Path) -> None:

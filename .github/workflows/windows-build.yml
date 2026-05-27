@@ -2,15 +2,28 @@ name: Windows build
 
 on:
   workflow_dispatch:
+  push:
+    tags:
+      - 'v*.*.*'
 
 env:
   FFMPEG_VERSION: "7.1.1"
   LIBDISCID_VERSION: "0.6.4"
   VLC_VERSION: "3.0.21"
+  # Pin Chromaprint/fpcalc to a known good Windows x86_64 release. Bump
+  # alongside any verified upgrade; do not auto-resolve "latest" from
+  # GitHub's API or builds become non-reproducible.
+  CHROMAPRINT_VERSION: "1.5.1"
+  FPCALC_ARCHIVE: "chromaprint-fpcalc-1.5.1-windows-x86_64.zip"
+  FPCALC_URL: "https://github.com/acoustid/chromaprint/releases/download/v1.5.1/chromaprint-fpcalc-1.5.1-windows-x86_64.zip"
+  # Test-collection floor. Bump when adding tests; never silently drop.
+  PYTEST_FLOOR: "680"
 
 jobs:
   build:
     runs-on: windows-latest
+    permissions:
+      contents: write
 
     steps:
       - uses: actions/checkout@v4
@@ -21,48 +34,70 @@ jobs:
           python-version: "3.11"
           cache: "pip"
           cache-dependency-path: |
+            requirements.in
             requirements.txt
+            requirements-build.in
             requirements-build.txt
 
       - name: Install Python dependencies
         run: python -m pip install -r requirements-build.txt
 
-      - name: Resolve latest fpcalc
-        id: fpcalc-release
+      - name: Run pytest gate
         shell: pwsh
         run: |
-          $release = Invoke-RestMethod `
-            -Uri "https://api.github.com/repos/acoustid/chromaprint/releases/latest" `
-            -Headers @{ "User-Agent" = "SeaLyonMediaManager-Build" }
-          $asset = $release.assets |
-            Where-Object { $_.name -match '^chromaprint-fpcalc-.+-windows-x86_64\.zip$' } |
-            Select-Object -First 1
-          if (-not $asset) {
-            throw "Latest Chromaprint release did not include a Windows x86_64 fpcalc zip."
+          $env:QT_QPA_PLATFORM = "offscreen"
+          # Collection floor: refuse to package if test count drops.
+          $collect = & python -m pytest --collect-only -q 2>&1
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host $collect
+            throw "pytest collection failed."
           }
-          $version = ([string]$release.tag_name) -replace '^v', ''
-          "CHROMAPRINT_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "FPCALC_ARCHIVE=$($asset.name)" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "FPCALC_URL=$($asset.browser_download_url)" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          "archive=$($asset.name)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          "url=$($asset.browser_download_url)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          Write-Host "Latest fpcalc: $version ($($asset.name))"
+          $countLine = $collect | Select-String -Pattern '^(\d+) tests collected' | Select-Object -First 1
+          if (-not $countLine) {
+            throw "Could not determine collected test count from pytest output."
+          }
+          $count = [int]($countLine.Matches[0].Groups[1].Value)
+          $floor = [int]$env:PYTEST_FLOOR
+          if ($count -lt $floor) {
+            throw "Pytest collected $count tests, below the floor of $floor. Update PYTEST_FLOOR only after intentionally removing tests."
+          }
+          Write-Host "Collected $count tests (floor $floor)."
+          # Run the suite.
+          python -m pytest -q
+          if ($LASTEXITCODE -ne 0) { throw "pytest run failed; aborting before packaging." }
 
       - name: Cache binary runtimes
         id: cache-bins
         uses: actions/cache@v4
         with:
           path: bin
-          key: windows-bins-ffmpeg-${{ env.FFMPEG_VERSION }}-discid-${{ env.LIBDISCID_VERSION }}-vlc-${{ env.VLC_VERSION }}-chromaprint-${{ steps.fpcalc-release.outputs.version }}
+          key: windows-bins-ffmpeg-${{ env.FFMPEG_VERSION }}-discid-${{ env.LIBDISCID_VERSION }}-vlc-${{ env.VLC_VERSION }}-chromaprint-${{ env.CHROMAPRINT_VERSION }}
 
-      - name: Fetch ffmpeg.exe
+      - name: Fetch ffmpeg.exe (hash-verified)
         if: steps.cache-bins.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path bin | Out-Null
-          $url = "https://github.com/GyanD/codexffmpeg/releases/download/${{ env.FFMPEG_VERSION }}/ffmpeg-${{ env.FFMPEG_VERSION }}-essentials_build.zip"
-          Invoke-WebRequest -Uri $url -OutFile ffmpeg.zip
+          $archive = "ffmpeg-release-essentials.zip"
+          $url = "https://www.gyan.dev/ffmpeg/builds/$archive"
+          Invoke-WebRequest -Uri $url -OutFile ffmpeg.zip -UseBasicParsing
+          Invoke-WebRequest -Uri "$url.sha256" -OutFile ffmpeg.sha256 -UseBasicParsing
+          $checksumText = Get-Content ffmpeg.sha256 -Raw
+          Remove-Item ffmpeg.sha256
+          if ($checksumText -match '<html') { throw "ffmpeg checksum URL returned HTML." }
+          $expected = $null
+          foreach ($line in ($checksumText -split "`r?`n")) {
+            if ($line -match '^\s*([A-Fa-f0-9]{64})\s+[* ]?(.+?)\s*$' -and [System.IO.Path]::GetFileName($Matches[2]) -eq $archive) {
+              $expected = $Matches[1].ToLowerInvariant(); break
+            }
+            if ($line -match '([A-Fa-f0-9]{64})') {
+              $expected = $Matches[1].ToLowerInvariant()
+            }
+          }
+          if (-not $expected) { throw "No SHA-256 found in $url.sha256" }
+          $actual = (Get-FileHash -Algorithm SHA256 ffmpeg.zip).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "ffmpeg.zip SHA-256 mismatch: expected $expected, got $actual" }
+          Write-Host "Verified ffmpeg.zip SHA-256: $actual"
           Expand-Archive ffmpeg.zip -DestinationPath ffmpeg-extract
           $exe = Get-ChildItem -Path ffmpeg-extract -Recurse -Filter ffmpeg.exe | Select-Object -First 1
           if (-not $exe) { throw "ffmpeg.exe was not found in the downloaded archive." }
@@ -70,27 +105,43 @@ jobs:
           Remove-Item ffmpeg.zip
           Remove-Item -Recurse -Force ffmpeg-extract
 
-      - name: Fetch libdiscid.dll
+      - name: Fetch libdiscid.dll (hash-verified)
         if: steps.cache-bins.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
+          $archive = "libdiscid-${{ env.LIBDISCID_VERSION }}-win.zip"
+          $checksumUrl = "https://ftp.musicbrainz.org/pub/musicbrainz/libdiscid/libdiscid-${{ env.LIBDISCID_VERSION }}.SHA256SUMS"
           $urls = @(
-            "https://ftp.musicbrainz.org/pub/musicbrainz/libdiscid/libdiscid-${{ env.LIBDISCID_VERSION }}-win.zip",
-            "https://ftp.osuosl.org/pub/musicbrainz/libdiscid/libdiscid-${{ env.LIBDISCID_VERSION }}-win.zip"
+            "https://github.com/metabrainz/libdiscid/releases/download/v${{ env.LIBDISCID_VERSION }}/$archive",
+            "https://ftp.musicbrainz.org/pub/musicbrainz/libdiscid/$archive",
+            "https://ftp.osuosl.org/pub/musicbrainz/libdiscid/$archive"
           )
           $zip = "libdiscid.zip"
+          Invoke-WebRequest -Uri $checksumUrl -OutFile libdiscid.sha256 -UseBasicParsing
+          $checksumText = Get-Content libdiscid.sha256 -Raw
+          Remove-Item libdiscid.sha256
+          $expected = $null
+          foreach ($line in ($checksumText -split "`r?`n")) {
+            if ($line -match '^\s*([A-Fa-f0-9]{64})\s+[* ]?(.+?)\s*$' -and [System.IO.Path]::GetFileName($Matches[2]) -eq $archive) {
+              $expected = $Matches[1].ToLowerInvariant(); break
+            }
+          }
+          if (-not $expected) { throw "No SHA-256 for $archive in $checksumUrl" }
           $ok = $false
           foreach ($u in $urls) {
             try {
               Write-Host "Trying $u"
-              Invoke-WebRequest -Uri $u -OutFile $zip -ErrorAction Stop
+              Invoke-WebRequest -Uri $u -OutFile $zip -UseBasicParsing -ErrorAction Stop
+              $actual = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant()
+              if ($actual -ne $expected) { throw "$u SHA-256 mismatch: expected $expected, got $actual" }
+              Write-Host "Verified $archive SHA-256: $actual"
               $ok = $true
               break
             } catch {
               Write-Host "  -> $($_.Exception.Message)"
             }
           }
-          if (-not $ok) { throw "Could not fetch libdiscid from any source." }
+          if (-not $ok) { throw "Could not fetch + verify libdiscid from any source." }
           Expand-Archive $zip -DestinationPath libdiscid-extract -Force
           $dll = Get-ChildItem -Path libdiscid-extract -Recurse -Filter discid.dll |
                    Where-Object { $_.FullName -match '64' } | Select-Object -First 1
@@ -105,30 +156,47 @@ jobs:
           Remove-Item $zip
           Remove-Item -Recurse -Force libdiscid-extract
 
-      - name: Fetch fpcalc.exe
+      - name: Fetch fpcalc.exe (pinned version, runtime-verified)
         if: steps.cache-bins.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path bin | Out-Null
-          Invoke-WebRequest -Uri "${{ steps.fpcalc-release.outputs.url }}" -OutFile fpcalc.zip
+          Invoke-WebRequest -Uri "${{ env.FPCALC_URL }}" -OutFile fpcalc.zip -UseBasicParsing
           Expand-Archive fpcalc.zip -DestinationPath fpcalc-extract -Force
           $exe = Get-ChildItem -Path fpcalc-extract -Recurse -Filter fpcalc.exe | Select-Object -First 1
-          if (-not $exe) { throw "fpcalc.exe was not found in ${{ steps.fpcalc-release.outputs.archive }}." }
+          if (-not $exe) { throw "fpcalc.exe was not found in ${{ env.FPCALC_ARCHIVE }}." }
           Copy-Item $exe.FullName -Destination bin\fpcalc.exe -Force
           $versionOutput = & bin\fpcalc.exe -version 2>&1
           if ($LASTEXITCODE -ne 0) { throw "fpcalc.exe -version failed: $versionOutput" }
-          if ($versionOutput -notmatch [regex]::Escape("${{ steps.fpcalc-release.outputs.version }}")) {
-            throw "Expected fpcalc ${{ steps.fpcalc-release.outputs.version }}, got: $versionOutput"
+          if ($versionOutput -notmatch [regex]::Escape("${{ env.CHROMAPRINT_VERSION }}")) {
+            throw "Expected fpcalc ${{ env.CHROMAPRINT_VERSION }}, got: $versionOutput"
           }
           Remove-Item fpcalc.zip
           Remove-Item -Recurse -Force fpcalc-extract
 
-      - name: Fetch libVLC runtime
+      - name: Fetch libVLC runtime (hash-verified)
         if: steps.cache-bins.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
-          $url = "https://download.videolan.org/pub/videolan/vlc/${{ env.VLC_VERSION }}/win64/vlc-${{ env.VLC_VERSION }}-win64.zip"
-          Invoke-WebRequest -Uri $url -OutFile vlc.zip
+          $archive = "vlc-${{ env.VLC_VERSION }}-win64.zip"
+          $url = "https://download.videolan.org/pub/videolan/vlc/${{ env.VLC_VERSION }}/win64/$archive"
+          Invoke-WebRequest -Uri $url -OutFile vlc.zip -UseBasicParsing
+          Invoke-WebRequest -Uri "$url.sha256" -OutFile vlc.sha256 -UseBasicParsing
+          $checksumText = Get-Content vlc.sha256 -Raw
+          Remove-Item vlc.sha256
+          $expected = $null
+          foreach ($line in ($checksumText -split "`r?`n")) {
+            if ($line -match '^\s*([A-Fa-f0-9]{64})\s+[* ]?(.+?)\s*$' -and [System.IO.Path]::GetFileName($Matches[2]) -eq $archive) {
+              $expected = $Matches[1].ToLowerInvariant(); break
+            }
+            if ($line -match '([A-Fa-f0-9]{64})') {
+              $expected = $Matches[1].ToLowerInvariant()
+            }
+          }
+          if (-not $expected) { throw "No SHA-256 found in $url.sha256" }
+          $actual = (Get-FileHash -Algorithm SHA256 vlc.zip).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "vlc.zip SHA-256 mismatch: expected $expected, got $actual" }
+          Write-Host "Verified vlc.zip SHA-256: $actual"
           Expand-Archive vlc.zip -DestinationPath vlc-extract -Force
           $root = Get-ChildItem -Path vlc-extract -Directory | Select-Object -First 1
           if (-not $root) { throw "VLC archive did not contain an extracted root directory." }
@@ -161,6 +229,18 @@ jobs:
             }
           }
 
+      - name: Write Last.fm API secrets
+        shell: pwsh
+        env:
+          LASTFM_KEY: ${{ secrets.LYON_LASTFM_API_KEY }}
+          LASTFM_SECRET: ${{ secrets.LYON_LASTFM_API_SECRET }}
+        run: |
+          $path = "lyon\core\_secrets.py"
+          "LASTFM_API_KEY = `"$env:LASTFM_KEY`"" | Out-File -Encoding utf8 $path
+          "LASTFM_API_SECRET = `"$env:LASTFM_SECRET`"" | Out-File -Encoding utf8 -Append $path
+          if (-not (Test-Path $path)) { throw "_secrets.py was not created." }
+          Write-Host "Wrote Last.fm API secrets to $path"
+
       - name: Build with PyInstaller
         run: python -m PyInstaller --noconfirm build/lyon.spec
 
@@ -180,14 +260,155 @@ jobs:
           }
           if (-not (Test-Path (Join-Path $bundleBin 'fpcalc.exe'))) { throw "Packaged app is missing fpcalc.exe." }
 
+      - name: Read app version
+        id: appver
+        shell: pwsh
+        run: |
+          $m = Select-String -Path "lyon\__init__.py" -Pattern '__version__\s*=\s*"([^"]+)"' | Select-Object -First 1
+          if (-not $m) { throw "Could not read __version__ from lyon\__init__.py." }
+          $ver = $m.Matches[0].Groups[1].Value
+          "version=$ver" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "App version: $ver"
+
       - name: Zip dist folder
         shell: pwsh
-        run: Compress-Archive -Path dist\LyonMusicManager\* -DestinationPath LyonMusicManager-windows.zip
+        run: |
+          $zip = "dist\SeaLyonMediaManager-${{ steps.appver.outputs.version }}-windows.zip"
+          if (Test-Path $zip) { Remove-Item $zip -Force }
+          Compress-Archive -Path dist\LyonMusicManager\* -DestinationPath $zip
+          if (-not (Test-Path $zip)) { throw "Portable zip was not created at $zip." }
 
-      - name: Upload artifact
+      - name: Install Inno Setup 6
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress --yes
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup install failed (exit $LASTEXITCODE)." }
+          $iscc = $null
+          foreach ($candidate in @(
+            'C:\Program Files (x86)\Inno Setup 6\ISCC.exe',
+            'C:\Program Files\Inno Setup 6\ISCC.exe'
+          )) {
+            if (Test-Path $candidate) { $iscc = $candidate; break }
+          }
+          if (-not $iscc) {
+            $found = Get-Command ISCC.exe -ErrorAction SilentlyContinue
+            if ($found) { $iscc = $found.Source }
+          }
+          if (-not $iscc) { throw "ISCC.exe not found after Inno Setup install." }
+          "ISCC_PATH=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "Using ISCC at $iscc"
+
+      - name: Compile installer
+        shell: pwsh
+        run: |
+          $ver = "${{ steps.appver.outputs.version }}"
+          if (-not (Test-Path "build\lyon-app-icon.ico")) {
+            throw "build\lyon-app-icon.ico missing; PyInstaller spec should have generated it."
+          }
+          & "$env:ISCC_PATH" "build\lyon.iss" "/DAppVersion=$ver" /Q
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup compilation failed (exit $LASTEXITCODE)." }
+          $installer = "dist\SeaLyonMediaManager-$ver-Setup.exe"
+          if (-not (Test-Path $installer)) { throw "Expected installer not found at $installer." }
+          $size = "{0:N1} MB" -f ((Get-Item $installer).Length / 1MB)
+          Write-Host "Installer: $installer ($size)"
+
+      - name: Compute SHA256SUMS
+        shell: pwsh
+        run: |
+          $ver = "${{ steps.appver.outputs.version }}"
+          $sums = "dist\SeaLyonMediaManager-$ver-SHA256SUMS.txt"
+          $lines = @()
+          foreach ($file in @(
+            "dist\SeaLyonMediaManager-$ver-windows.zip",
+            "dist\SeaLyonMediaManager-$ver-Setup.exe"
+          )) {
+            if (Test-Path $file) {
+              $h = (Get-FileHash -Algorithm SHA256 $file).Hash.ToLowerInvariant()
+              $name = [System.IO.Path]::GetFileName($file)
+              $lines += "$h  $name"
+              Write-Host "$h  $name"
+            }
+          }
+          if ($lines.Count -eq 0) { throw "No release artefacts found for SHA-256 manifest." }
+          $lines | Out-File -Encoding ASCII -FilePath $sums
+          if (-not (Test-Path $sums)) { throw "SHA256SUMS file was not written to $sums." }
+
+      - name: Upload release artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: LyonMusicManager-windows
-          path: LyonMusicManager-windows.zip
+          name: SeaLyonMediaManager-${{ steps.appver.outputs.version }}-windows
+          path: |
+            dist/SeaLyonMediaManager-${{ steps.appver.outputs.version }}-windows.zip
+            dist/SeaLyonMediaManager-${{ steps.appver.outputs.version }}-Setup.exe
+            dist/SeaLyonMediaManager-${{ steps.appver.outputs.version }}-SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 30
+
+      # ---- Tag-triggered release publishing -----------------------------
+      #
+      # When a tag like v1.0.0 is pushed, the steps below extract the
+      # matching CHANGELOG section, regenerate the appcast feed, and create
+      # (or update) a draft GitHub Release with the installer + zip +
+      # SHA256SUMS attached. The release stays draft so a human can
+      # smoke-test before publishing. Do not deploy appcast.xml from this
+      # workflow; .github/workflows/publish-appcast.yml publishes it only
+      # after the GitHub Release is public.
+      - name: Extract release notes from CHANGELOG
+        if: startsWith(github.ref, 'refs/tags/')
+        id: release-notes
+        shell: pwsh
+        run: |
+          $ver = "${{ steps.appver.outputs.version }}"
+          $notes = python scripts\changelog-section.py $ver
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not find CHANGELOG section for $ver. Update CHANGELOG.md before tagging."
+          }
+          $path = "release-notes.md"
+          $notes | Out-File -Encoding UTF8 -FilePath $path
+          "path=$path" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Fetch current appcast history
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          $appcastUrl = "https://drshoctopus.github.io/Sea-Lyon-Media-Manager/appcast.xml"
+          $output = "dist\appcast.xml"
+          try {
+            Invoke-WebRequest -Uri $appcastUrl -OutFile $output -UseBasicParsing
+            Write-Host "Fetched existing appcast history from $appcastUrl"
+          } catch {
+            Write-Host "No existing appcast history fetched: $($_.Exception.Message)"
+          }
+
+      - name: Generate appcast.xml
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          $ver = "${{ steps.appver.outputs.version }}"
+          $installer = "dist\SeaLyonMediaManager-$ver-Setup.exe"
+          $size = (Get-Item $installer).Length
+          $tagName = "v$ver"
+          $releaseUrl = "https://github.com/${{ github.repository }}/releases/tag/$tagName"
+          $installerUrl = "https://github.com/${{ github.repository }}/releases/download/$tagName/SeaLyonMediaManager-$ver-Setup.exe"
+          python scripts\generate-appcast.py `
+            --version $ver `
+            --installer-url $installerUrl `
+            --installer-size $size `
+            --release-url $releaseUrl `
+            --output dist\appcast.xml
+          if (-not (Test-Path "dist\appcast.xml")) { throw "appcast.xml was not generated." }
+          Write-Host "Generated appcast.xml for $ver"
+
+      - name: Create draft GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          name: Sea Lyon Media Manager ${{ steps.appver.outputs.version }}
+          body_path: release-notes.md
+          fail_on_unmatched_files: true
+          files: |
+            dist/SeaLyonMediaManager-${{ steps.appver.outputs.version }}-Setup.exe
+            dist/SeaLyonMediaManager-${{ steps.appver.outputs.version }}-windows.zip
+            dist/SeaLyonMediaManager-${{ steps.appver.outputs.version }}-SHA256SUMS.txt
+            dist/appcast.xml

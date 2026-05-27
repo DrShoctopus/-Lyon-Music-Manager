@@ -8,11 +8,12 @@ from pathlib import Path
 from typing import Callable, Optional
 from urllib.parse import unquote, urlparse
 
-from PySide6.QtCore import QObject, QTimer, Signal
+from PySide6.QtCore import QObject, QRunnable, QThreadPool, QTimer, Signal
 
 from .library import Library, Track
 from .equalizer import clamp_preamp, flat_equalizer_bands, normalize_equalizer_bands
 from .playback_backend import PlaybackBackend, create_playback_backend
+from .radio import parse_stream_title
 
 
 _GAPLESS_PREBUFFER_MS = 2000
@@ -29,11 +30,13 @@ class RepeatMode(Enum):
 
 
 class Player(QObject):
-    track_changed = Signal(object)        # Track or None
-    state_changed = Signal(str)           # "playing"/"paused"/"stopped"
-    position_changed = Signal(int, int)   # (ms, total_ms)
+    track_changed = Signal(object)           # Track or None
+    stream_metadata_changed = Signal(object) # ICY/HLS in-stream title updates only
+    state_changed = Signal(str)              # "playing"/"paused"/"stopped"
+    position_changed = Signal(int, int)      # (ms, total_ms)
     queue_changed = Signal()
     playback_unavailable = Signal(str)
+    error_occurred = Signal(str)             # stream URL that failed to open
 
     def __init__(
         self,
@@ -453,13 +456,26 @@ class Player(QObject):
         backend.position_changed.connect(self._on_position_changed)
         backend.state_changed.connect(self.state_changed.emit)
         backend.end_reached.connect(self._on_track_ended)
+        metadata_signal = getattr(backend, "metadata_changed", None)
+        if metadata_signal is not None:
+            metadata_signal.connect(self._on_backend_metadata)
+        error_signal = getattr(backend, "error_occurred", None)
+        if error_signal is not None:
+            error_signal.connect(self.error_occurred.emit)
 
     def _disconnect_backend(self, backend: PlaybackBackend) -> None:
-        for signal, slot in (
+        slots: list[tuple[object, object]] = [
             (backend.position_changed, self._on_position_changed),
             (backend.state_changed, self.state_changed.emit),
             (backend.end_reached, self._on_track_ended),
-        ):
+        ]
+        metadata_signal = getattr(backend, "metadata_changed", None)
+        if metadata_signal is not None:
+            slots.append((metadata_signal, self._on_backend_metadata))
+        error_signal = getattr(backend, "error_occurred", None)
+        if error_signal is not None:
+            slots.append((error_signal, self.error_occurred.emit))
+        for signal, slot in slots:
             try:
                 signal.disconnect(slot)
             except (RuntimeError, TypeError):
@@ -521,6 +537,7 @@ class Player(QObject):
         self._active_source_key = self._track_source_key(self._queue[idx])
         if self._shuffle:
             self._shuffle_played.add(idx)
+        self._precompute_rg_for_upcoming()
         self.track_changed.emit(self._queue[idx])
 
     def _remove_play_tracking_index(self, removed: int) -> None:
@@ -552,6 +569,51 @@ class Player(QObject):
         self.position_changed.emit(pos_ms, dur_ms)
         self._maybe_auto_crossfade(pos_ms, dur_ms)
         self._maybe_gapless_prebuffer(pos_ms, dur_ms)
+
+    def _on_backend_metadata(self, meta: dict) -> None:
+        """Apply ICY/HLS metadata updates to the currently-streaming track.
+
+        Library tracks always own their own tags, so we ignore metadata
+        callbacks for them. Streams (``is_library_item=False`` with a remote
+        ``playback_uri``) get their ``title`` / ``artist`` updated in place so
+        the transport bar and Now Playing view refresh via ``track_changed``.
+        """
+        track = self.current()
+        if track is None or track.is_library_item:
+            return
+        if not track.playback_is_location:
+            return
+        if not isinstance(meta, dict):
+            return
+
+        now_playing = str(meta.get("now_playing") or "").strip()
+        artist = str(meta.get("artist") or "").strip()
+        title = str(meta.get("title") or "").strip()
+
+        # Prefer the explicit Artist/Title pair when VLC has parsed them.
+        # Otherwise fall back to splitting the "Artist - Title" form that ICY
+        # NowPlaying typically carries.
+        if not artist and now_playing:
+            parsed_artist, parsed_title = parse_stream_title(now_playing)
+            if parsed_artist or parsed_title:
+                artist = parsed_artist
+                if parsed_title:
+                    title = parsed_title
+
+        # The station name is the user-facing label; preserve it as the album
+        # so the transport bar's "{artist} — {album}" line reads
+        # "Stream Artist — Station Name".
+        if track.album == "" and track.title:
+            track.album = track.title
+
+        if artist:
+            track.artist = artist
+        if title:
+            track.title = title
+        elif now_playing:
+            track.title = now_playing
+
+        self.stream_metadata_changed.emit(track)
 
     def _on_track_ended(self) -> None:
         if 0 <= self._index < len(self._queue):
@@ -847,6 +909,34 @@ class Player(QObject):
         if gain_db is None:
             return 1.0
         return gain_multiplier(gain_db, self._rg_preamp_db, self._rg_prevent_clipping)
+
+    def _precompute_rg_for_upcoming(self) -> None:
+        """Warm the ReplayGain tag cache for the next few tracks in a background thread."""
+        if self._rg_mode == "off":
+            return
+        upcoming: list[str] = []
+        idx = self._index
+        for offset in range(1, 4):
+            nxt = idx + offset
+            if nxt < len(self._queue):
+                path = getattr(self._queue[nxt], "path", None)
+                if path:
+                    upcoming.append(path)
+        if not upcoming:
+            return
+        mode = self._rg_mode
+
+        class _WarmCache(QRunnable):
+            def run(self):
+                from .replaygain import read_track_gain, read_album_gain
+                for p in upcoming:
+                    if mode == "track":
+                        read_track_gain(p)
+                    else:
+                        read_album_gain(p)
+                        read_track_gain(p)
+
+        QThreadPool.globalInstance().start(_WarmCache())
 
     @staticmethod
     def _rg_applied_vol(raw: int, multiplier: float) -> int:

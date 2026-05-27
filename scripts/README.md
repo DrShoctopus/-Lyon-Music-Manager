@@ -15,11 +15,11 @@ scripts\build-windows.ps1
 
 1. Locates Python 3.11 (`py -3.11` first, then `python` if it's 3.11).
 2. Creates `.venv\` and upgrades pip.
-3. Installs `requirements-build.txt`.
-4. Downloads `ffmpeg.exe` (gyan.dev essentials build), the latest Windows x64
-   Chromaprint `fpcalc.exe`, `discid.dll` (MetaBrainz libdiscid v0.6.4), and
-   the VideoLAN VLC runtime into `bin\` if not already present. Existing
-   `fpcalc.exe` is refreshed when it is not the latest Chromaprint release.
+3. Installs the hashed lock in `requirements-build.txt`.
+4. Downloads `ffmpeg.exe` (gyan.dev essentials build), pinned Chromaprint
+   `fpcalc.exe` v1.5.1, `discid.dll` (MetaBrainz libdiscid v0.6.4), and the
+   VideoLAN VLC runtime into `bin\` if not already present. Existing
+   `fpcalc.exe` is refreshed when it is not the pinned Chromaprint release.
 5. Smoke-tests `from lyon.app import main`, creation of a libVLC media player
    through python-vlc, and fpcalc availability.
 6. Runs `pyinstaller --noconfirm build\lyon.spec`.

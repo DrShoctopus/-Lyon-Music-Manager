@@ -1,4 +1,5 @@
 import os
+import threading
 from pathlib import Path
 
 from lyon.core import library as library_module
@@ -59,7 +60,7 @@ def test_index_file_skips_unchanged_files_without_rereading_tags(tmp_path, monke
 
     library = Library(tmp_path / "library.db")
     try:
-        added = library.index_file(path)
+        added = library.index_file(path, disc_id="known-disc")
         library.commit()
         title["value"] = "Should Not Be Read"
         unchanged = library.index_file(path)
@@ -137,6 +138,56 @@ def test_move_path_preserves_playlist_membership_and_rating(tmp_path, monkeypatc
         assert moved.path == str(new_path)
         assert moved.rating == 4
         assert [t.id for t in library.playlist_tracks(playlist_id)] == [track.id]
+    finally:
+        library.close()
+
+
+def test_move_path_keeps_check_and_update_in_one_locked_section(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        library_module,
+        "MutagenFile",
+        lambda path, **_kwargs: _FakeAudio(Path(path).stem),
+    )
+    old_path = tmp_path / "old.flac"
+    new_path = tmp_path / "new.flac"
+    _set_file_state(old_path, b"one", 1_700_000_000_000_000_000)
+
+    library = Library(tmp_path / "library.db")
+
+    class DeleteOldPathAfterFirstCriticalSection:
+        def __init__(self) -> None:
+            self._lock = threading.RLock()
+            self._exited_once = False
+
+        def __enter__(self):
+            self._lock.acquire()
+            if self._exited_once:
+                library.conn.execute("DELETE FROM tracks WHERE path = ?", (str(old_path),))
+                library.conn.commit()
+                self._exited_once = False
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            self._exited_once = True
+            self._lock.release()
+
+    try:
+        assert library.index_file(old_path).status == "added"
+        library.commit()
+        track = next(library.all_tracks())
+        library.update_rating(track.id, 4)
+
+        library._lock = DeleteOldPathAfterFirstCriticalSection()
+        old_path.rename(new_path)
+        os.utime(new_path, ns=(1_700_000_200_000_000_000, 1_700_000_200_000_000_000))
+
+        result = library.move_path(old_path, new_path)
+
+        moved = next(library.all_tracks())
+        assert result.status == "updated"
+        assert moved.id == track.id
+        assert moved.path == str(new_path)
+        assert moved.rating == 4
     finally:
         library.close()
 
@@ -389,3 +440,85 @@ def test_watchdog_handler_emits_folder_refresh_for_artwork_sidecars(qapp):
     _WatchdogHandler(watcher).on_modified(Event("/music/Album/cover.jpg"))
 
     assert captured == ["/music/Album"]
+
+
+def test_index_file_recovers_disc_id_from_audio_tags(tmp_path, monkeypatch):
+    """When a file's tags contain a musicbrainz_discid, index_file should
+    populate the disc_id column even without an explicit disc_id argument.
+    This is the key fix for the fresh-install-then-scan edge case.
+    """
+
+    class _FakeAudioWithDiscId(dict):
+        info = _FakeInfo()
+
+        def get(self, key):
+            return {
+                "title": ["Track 01"],
+                "artist": ["Artist"],
+                "albumartist": ["Artist"],
+                "album": ["Album"],
+                "tracknumber": ["1"],
+                "discnumber": ["1"],
+                "date": ["2024"],
+                "genre": ["Rock"],
+                "musicbrainz_discid": ["abc123XYZ"],
+                "grouping": [""],
+            }.get(key)
+
+    monkeypatch.setattr(
+        library_module, "MutagenFile",
+        lambda *_a, **_kw: _FakeAudioWithDiscId(),
+    )
+    path = tmp_path / "track01.flac"
+    _set_file_state(path, b"audio", 1_700_000_000_000_000_000)
+
+    library = Library(tmp_path / "library.db")
+    result = library.index_file(path)
+    library.commit()
+
+    assert result.status == "added"
+    assert library.has_disc("abc123XYZ", 1)
+
+
+def test_index_file_backfills_disc_id_from_tags_for_unchanged_existing_row(tmp_path, monkeypatch):
+    """A rescan should recover disc_id tags even when size/mtime are unchanged."""
+
+    class _FakeAudioWithMutableDiscId(dict):
+        info = _FakeInfo()
+        disc_id = ""
+
+        def get(self, key):
+            return {
+                "title": ["Track 01"],
+                "artist": ["Artist"],
+                "albumartist": ["Artist"],
+                "album": ["Album"],
+                "tracknumber": ["1"],
+                "discnumber": ["1"],
+                "date": ["2024"],
+                "genre": ["Rock"],
+                "musicbrainz_discid": [self.disc_id] if self.disc_id else None,
+                "grouping": [""],
+            }.get(key)
+
+    fake_audio = _FakeAudioWithMutableDiscId()
+    monkeypatch.setattr(
+        library_module, "MutagenFile",
+        lambda *_a, **_kw: fake_audio,
+    )
+    path = tmp_path / "track01.flac"
+    _set_file_state(path, b"audio", 1_700_000_000_000_000_000)
+
+    library = Library(tmp_path / "library.db")
+    try:
+        assert library.index_file(path).status == "added"
+        library.commit()
+        assert not library.has_disc("abc123XYZ", 1)
+
+        fake_audio.disc_id = "abc123XYZ"
+        assert library.index_file(path).status == "unchanged"
+        library.commit()
+
+        assert library.has_disc("abc123XYZ", 1)
+    finally:
+        library.close()

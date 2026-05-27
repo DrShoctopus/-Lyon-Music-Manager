@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -151,6 +152,7 @@ def test_settings_dialog_persists_dlna_options(app):
             dlna_enabled=False,
             dlna_port=8200,
             dlna_friendly_name="Sea Lyon Media Manager",
+            dlna_bind_address="0.0.0.0",
         ),
         None,
     )
@@ -158,11 +160,25 @@ def test_settings_dialog_persists_dlna_options(app):
     dialog.dlna_enabled.setChecked(True)
     dialog.dlna_port.setValue(0)
     dialog.dlna_name.setText("Living Room Library")
+    dialog.dlna_bind_address.setText("127.0.0.1")
     dialog._accept()
 
     assert dialog.result_settings.dlna_enabled is True
     assert dialog.result_settings.dlna_port == 0
     assert dialog.result_settings.dlna_friendly_name == "Living Room Library"
+    assert dialog.result_settings.dlna_bind_address == "127.0.0.1"
+
+
+def test_settings_dialog_connect_lastfm_starts_auth(app):
+    scrobbler = MagicMock()
+    scrobbler.lastfm_token_ready.connect = MagicMock()
+    scrobbler.lastfm_auth_complete.connect = MagicMock()
+    scrobbler.lastfm_auth_failed.connect = MagicMock()
+    dialog = SettingsDialog(Settings(), None, scrobbler=scrobbler)
+
+    dialog._connect_lastfm()
+
+    scrobbler.start_lastfm_auth.assert_called_once()
 
 
 def test_settings_dialog_about_tab_mentions_copyright_and_third_parties(app):
@@ -170,8 +186,10 @@ def test_settings_dialog_about_tab_mentions_copyright_and_third_parties(app):
     about_text = "\n".join(label.text() for label in dialog.findChildren(QtWidgets.QLabel))
 
     assert COPYRIGHT_NOTICE in about_text
-    assert "Qt/PySide6" in about_text
-    assert "libVLC/python-vlc" in about_text
+    # The structured ATTRIBUTIONS list renders names with conventional spacing
+    # ("Qt / PySide6", "libVLC", "python-vlc"); check the canonical tokens.
+    assert "Qt" in about_text and "PySide6" in about_text
+    assert "libVLC" in about_text and "python-vlc" in about_text
     assert "MusicBrainz" in about_text
     assert "LRCLIB" in about_text
 

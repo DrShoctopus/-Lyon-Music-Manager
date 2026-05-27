@@ -481,6 +481,8 @@ class NowPlayingView(QWidget):
 
         # ---- Signals
         player.track_changed.connect(self._on_track)
+        if hasattr(player, "stream_metadata_changed"):
+            player.stream_metadata_changed.connect(self._on_track)
         player.queue_changed.connect(self._refresh_queue)
         player.position_changed.connect(self._on_position)
         self._lyrics_ready.connect(self._on_lyrics_ready)

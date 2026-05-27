@@ -261,6 +261,7 @@ def _rip_request_from_toc(
         leadout_sector=toc.sectors,
         ctdb_toc=toc.ctdb_toc_string,
         track_numbers=track_numbers,
+        disc_id=toc.discid,
     )
 
 
@@ -635,6 +636,29 @@ class RipperView(QWidget):
         self.status_label.setText(f"Found: {info.artist} - {info.album}")
         self.start_btn.setEnabled(True)
         self._update_dest()
+        self._check_soft_album_match(info)
+
+    def _check_soft_album_match(self, info: AlbumInfo) -> None:
+        if not self._toc:
+            return
+        match = self.library.find_album_match(
+            info.artist, info.album, len(info.tracks),
+        )
+        if match is None:
+            return
+        label = f"{match[0]} – {match[1]}"
+        answer = QMessageBox.question(
+            self,
+            "Possible Duplicate",
+            f"“{label}” appears to already be in your library "
+            f"with the same number of tracks.\n\nRip anyway?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            self._reset_disc_state()
+            self.start_btn.setEnabled(False)
+            self.status_label.setText("Rip cancelled — album already in library.")
 
     def _set_cover_art(self, art: bytes) -> None:
         pm = QPixmap()

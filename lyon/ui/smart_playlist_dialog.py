@@ -230,7 +230,8 @@ class SmartPlaylistDialog(QDialog):
         rows = [
             w
             for i in range(self._rules_vl.count())
-            if isinstance(w := self._rules_vl.itemAt(i).widget(), _RuleRow)
+            if (item := self._rules_vl.itemAt(i)) is not None
+            if isinstance(w := item.widget(), _RuleRow)
         ]
         self._result_name = name
         self._result_spec = SmartPlaylistSpec(

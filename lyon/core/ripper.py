@@ -15,7 +15,6 @@ import datetime as _dt
 import platform
 import re
 import shlex
-import shutil
 import subprocess
 import sys
 import threading
@@ -27,8 +26,9 @@ from typing import Optional, Sequence
 
 from PySide6.QtCore import QObject, QThread, Signal
 
+from .ffmpeg import find_ffmpeg_binary
 from .metadata import AlbumInfo, TrackInfo, fetch_artwork
-from .settings import Settings, bundled_bin_dir
+from .settings import Settings
 
 
 SAFE_CHARS_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
@@ -88,10 +88,6 @@ def format_extension(fmt: str) -> str:
     return _FORMAT_INFO.get(fmt.lower(), _FORMAT_INFO["flac"])[0]
 
 
-def _format_ext(fmt: str) -> str:
-    return format_extension(fmt)
-
-
 def _codec_args(settings: Settings) -> list[str]:
     """Return the ffmpeg codec + options args for the configured rip format."""
     fmt = (settings.rip_format or "flac").lower()
@@ -129,11 +125,8 @@ def safe_path_component(name: str) -> str:
 
 
 def find_ffmpeg() -> Optional[str]:
-    bundled = bundled_bin_dir() / ("ffmpeg.exe" if sys.platform == "win32" else "ffmpeg")
-    if bundled.exists():
-        return str(bundled)
-    found = shutil.which("ffmpeg")
-    return found
+    binary = find_ffmpeg_binary()
+    return str(binary) if binary is not None else None
 
 
 def _stop_process(proc, *, timeout: float = 2.0) -> None:
@@ -546,6 +539,7 @@ class RipRequest:
     leadout_sector: int = 0
     ctdb_toc: str = ""
     track_numbers: tuple[int, ...] = ()
+    disc_id: str = ""
 
 
 @dataclass
@@ -768,7 +762,7 @@ class RipWorker(QObject):
             return
 
         total = len(album.tracks) or 1
-        ext = _format_ext(self.settings.rip_format)
+        ext = format_extension(self.settings.rip_format)
         success = True
         ripped_files: dict[int, Path] = {}
         output_paths = track_output_files(folder, tracks_to_rip, total, ext)
@@ -822,7 +816,7 @@ class RipWorker(QObject):
                     continue
 
                 from .tagger import write_tags
-                if not write_tags(out, album, tr, art_bytes):
+                if not write_tags(out, album, tr, art_bytes, disc_id=self.request.disc_id):
                     success = False
                     reason = "Track ripped but audio tags could not be written."
                     failures.append(RipFailure(tr.number, tr.title, out, reason))

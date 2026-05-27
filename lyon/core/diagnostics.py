@@ -3,17 +3,30 @@ from __future__ import annotations
 
 import ctypes.util
 import importlib.util
+import json
+import platform
 import shutil
 import socket
 import sys
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from enum import Enum
 from functools import lru_cache
 from ipaddress import ip_address
 from pathlib import Path
 
 from .dlna_server import _local_ip
-from .settings import bundled_bin_dir
+from .settings import app_data_dir, bundled_bin_dir
+
+# Settings keys whose values are secrets and must be redacted from any
+# diagnostics bundle a user might share with support.
+_REDACTED_SETTINGS_KEYS = (
+    "lastfm_session_key",
+    "listenbrainz_token",
+    "theaudiodb_api_key",
+)
+# Cap each embedded log to ~1 MB so the bundle stays paste-friendly.
+_LOG_TAIL_BYTES = 1024 * 1024
 
 
 class DiagnosticStatus(Enum):
@@ -236,6 +249,119 @@ def run_dependency_checks() -> list[DependencyCheck]:
         check_ytdlp(),
         check_dlna_network(),
     ]
+
+
+def logs_dir() -> Path:
+    """Return the directory where the rotating application log is written."""
+    path = app_data_dir() / "logs"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _read_tail(path: Path, max_bytes: int = _LOG_TAIL_BYTES) -> str:
+    """Return the last ``max_bytes`` of ``path`` as decoded UTF-8 text."""
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return ""
+    if size <= 0:
+        return ""
+    try:
+        with path.open("rb") as fp:
+            if size > max_bytes:
+                fp.seek(size - max_bytes)
+                # Skip a likely-partial first line so we don't show half-tokens.
+                fp.readline()
+            return fp.read().decode("utf-8", errors="replace")
+    except OSError as exc:
+        return f"<could not read {path}: {exc}>"
+
+
+def _redacted_settings_json() -> str:
+    """Return settings.json with secret keys redacted, as pretty-printed JSON."""
+    path = app_data_dir() / "settings.json"
+    if not path.exists():
+        return "<no settings.json present>"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return f"<could not parse settings.json: {exc}>"
+    if isinstance(data, dict):
+        for key in _REDACTED_SETTINGS_KEYS:
+            if data.get(key):
+                data[key] = "<redacted>"
+    return json.dumps(data, indent=2, ensure_ascii=False)
+
+
+def collect_diagnostics_bundle() -> str:
+    """Assemble a multi-section plain-text bundle for support / bug reports.
+
+    Output sections (in order):
+      1. Header  -- timestamp, app version, Python, Qt, OS
+      2. Dependency checks
+      3. Tail of sea-lyon.log (last ~1 MB)
+      4. Tail of metadata-diagnostics.log (last ~1 MB, if present)
+      5. Redacted settings.json
+
+    Secret values (``_REDACTED_SETTINGS_KEYS``) appear as ``<redacted>``.
+    Library paths, podcast URLs, and radio URLs are NOT redacted because
+    they are typically necessary for debugging; review the bundle before
+    sharing if those paths are sensitive.
+    """
+    from .. import __app_name__, __version__
+
+    qt_version = "n/a"
+    try:
+        from PySide6 import __version__ as qt_version  # type: ignore[no-redef]
+    except Exception:  # noqa: BLE001 — diagnostics must never crash
+        pass
+
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    header = "\n".join((
+        f"{__app_name__} diagnostics bundle",
+        f"Generated:  {now}",
+        f"Version:    {__version__}",
+        f"Python:     {sys.version.splitlines()[0]}",
+        f"PySide6:    {qt_version}",
+        f"Platform:   {platform.platform()}",
+        f"Executable: {sys.executable}",
+        f"Frozen:     {bool(getattr(sys, 'frozen', False))}",
+    ))
+
+    check_lines = ["Dependency checks", "-" * 18]
+    for check in run_dependency_checks():
+        check_lines.append(f"[{check.status.value}] {check.name}")
+        check_lines.append(f"  {check.detail}")
+        if check.is_problem and check.fix:
+            check_lines.append(f"  Fix: {check.fix}")
+    check_lines.append("")
+    check_lines.append(summarize_dependency_checks(run_dependency_checks()))
+
+    logs_section: list[str] = []
+    main_log = logs_dir() / "sea-lyon.log"
+    metadata_log = app_data_dir() / "metadata-diagnostics.log"
+    logs_section.append("sea-lyon.log (tail)")
+    logs_section.append("-" * 19)
+    logs_section.append(_read_tail(main_log) or "<empty or missing>")
+
+    if metadata_log.exists():
+        logs_section.append("")
+        logs_section.append("metadata-diagnostics.log (tail)")
+        logs_section.append("-" * 31)
+        logs_section.append(_read_tail(metadata_log))
+
+    settings_section = "\n".join((
+        "settings.json (secrets redacted)",
+        "-" * 32,
+        _redacted_settings_json(),
+    ))
+
+    return "\n\n".join((
+        header,
+        "\n".join(check_lines),
+        "\n".join(logs_section),
+        settings_section,
+    )) + "\n"
 
 
 def summarize_dependency_checks(checks: list[DependencyCheck]) -> str:

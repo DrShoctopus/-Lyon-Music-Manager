@@ -56,6 +56,13 @@ class _SoapWorker(QObject):
     def submit(self, job: _SoapJob) -> None:
         self._jobs.put(job)
 
+    def clear_pending(self) -> None:
+        while True:
+            try:
+                self._jobs.get_nowait()
+            except _queue.Empty:
+                return
+
     def shutdown(self) -> None:
         self._jobs.put(None)  # sentinel: drain remaining, then stop
 
@@ -99,7 +106,8 @@ class CastController(QObject):
         self._dlna: DlnaServer | None = None
         self._remote_playing = False
         self._suppress_state_mirror = False
-        self._session_id = 0
+        self._session_id = 0  # all mutations must occur on the GUI thread
+        self._shuffle_played: set[int] = set()
 
         self._thread = QThread()
         self._worker = _SoapWorker()
@@ -202,6 +210,8 @@ class CastController(QObject):
         self._renderer = renderer
         self._player = player
         self._dlna = dlna_server
+        self._shuffle_played.clear()
+        self._remember_shuffle_track(track)
         self._remote_playing = True
 
         # Pause local playback before mirroring signals so the pause does not
@@ -248,6 +258,7 @@ class CastController(QObject):
                 pass
 
         # State is cleared above; worker only needs the captured renderer URL.
+        self._worker.clear_pending()
         self._submit_job(_SoapJob("stop", [
             (renderer.av_transport_url, _AV_TRANSPORT_NS, "Stop", {
                 "InstanceID": "0",
@@ -287,9 +298,22 @@ class CastController(QObject):
             self._select_queue_index(index)
             return
         if player.shuffle():
-            candidates = [i for i in range(len(queue)) if i != index]
+            played = set(self._shuffle_played)
+            if 0 <= index < len(queue):
+                played.add(index)
+            candidates = [
+                i for i in range(len(queue))
+                if i != index and i not in played
+            ]
+            if not candidates and player.repeat() == RepeatMode.ALL:
+                self._shuffle_played.clear()
+                if 0 <= index < len(queue):
+                    self._shuffle_played.add(index)
+                candidates = [i for i in range(len(queue)) if i != index]
             if candidates:
-                self._select_queue_index(random.choice(candidates))
+                nxt = random.choice(candidates)
+                self._shuffle_played.add(nxt)
+                self._select_queue_index(nxt)
             elif player.repeat() == RepeatMode.ALL and 0 <= index < len(queue):
                 self._select_queue_index(index)
             else:
@@ -327,6 +351,34 @@ class CastController(QObject):
             player.pause()
         finally:
             self._suppress_state_mirror = False
+
+    def _remember_shuffle_track(self, track: Track | None = None) -> None:
+        player = self._player
+        if player is None:
+            return
+        try:
+            if not player.shuffle():
+                return
+            queue = player.queue()
+        except (AttributeError, RuntimeError, TypeError):
+            return
+
+        try:
+            index = int(player.current_index())
+        except (TypeError, ValueError):
+            index = -1
+
+        if 0 <= index < len(queue):
+            if track is None or queue[index] is track or queue[index] == track:
+                self._shuffle_played.add(index)
+                return
+
+        if track is None:
+            return
+        for i, queued_track in enumerate(queue):
+            if queued_track is track or queued_track == track:
+                self._shuffle_played.add(i)
+                return
 
     # ------------------------------------------------------------------
     # Player signal handlers
@@ -370,6 +422,7 @@ class CastController(QObject):
             self.stop_cast()
             return
 
+        self._remember_shuffle_track(track)
         self._submit_job(_SoapJob("track-change", [
             (self._renderer.av_transport_url, _AV_TRANSPORT_NS, "SetAVTransportURI", {
                 "InstanceID": "0",

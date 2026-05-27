@@ -227,7 +227,11 @@ class DuplicateDialog(QDialog):
                     if track.bitrate > 0
                     else "?"
                 )
-                size = "—"
+                try:
+                    size_bytes = Path(track.path).stat().st_size
+                    size = f"{size_bytes / (1 << 20):.1f} MB"
+                except OSError:
+                    size = "?"
                 child = QTreeWidgetItem(parent_item, [track.path, fmt, kbps, size])
                 child.setData(0, Qt.UserRole, track)
 

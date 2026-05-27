@@ -10,6 +10,7 @@ import pytest
 from lyon.core.cast_controller import CastController, _SoapJob, _didl, _media_url, _soap
 from lyon.core.dlna_renderer_discovery import RendererDevice
 from lyon.core.library import Track
+from lyon.core.player import RepeatMode
 
 
 # ---------------------------------------------------------------------------
@@ -543,6 +544,27 @@ def test_stop_cast_tolerates_soap_failure(qapp):
         ctrl.shutdown()
 
 
+def test_stop_cast_drops_pending_stale_jobs_before_stop(qapp):
+    renderer = _make_renderer()
+    ctrl = CastController()
+    try:
+        ctrl._renderer = renderer
+        ctrl._session_id = 1
+        ctrl._worker.submit(_SoapJob("stale-track-change", []))
+
+        ctrl.stop_cast()
+
+        pending_labels = [
+            job.label
+            for job in list(ctrl._worker._jobs.queue)
+            if job is not None
+        ]
+        assert "stale-track-change" not in pending_labels
+        assert pending_labels == ["stop"]
+    finally:
+        ctrl.shutdown()
+
+
 # ---------------------------------------------------------------------------
 # is_casting / renderer properties
 # ---------------------------------------------------------------------------
@@ -678,6 +700,40 @@ def test_cast_next_does_not_pause_renderer(qapp):
         assert "Pause" not in recorded_actions
         assert "SetAVTransportURI" in recorded_actions
         assert "Play" in recorded_actions
+    finally:
+        ctrl.shutdown()
+
+
+def test_cast_shuffle_remembers_manual_track_change(qapp):
+    renderer = _make_renderer()
+    track1 = _make_track(track_id=1)
+    track2 = _make_track(track_id=2)
+    track3 = _make_track(track_id=3)
+    queue = [track1, track2, track3]
+    player = _make_player(track=track1)
+    player.queue.return_value = queue
+    player.current_index.return_value = 0
+    player.repeat.return_value = RepeatMode.OFF
+    player.shuffle.return_value = True
+    dlna = _make_dlna()
+
+    ctrl = CastController()
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+
+    def choose(candidates):
+        assert candidates == [2]
+        return candidates[0]
+
+    try:
+        with patch("lyon.core.cast_controller.requests.post", return_value=mock_resp), \
+             patch("lyon.core.cast_controller.random.choice", side_effect=choose):
+            ctrl.start_cast(renderer, player, dlna)
+            player.current_index.return_value = 1
+            ctrl._on_track_changed(track2)
+            ctrl.next_track()
+
+        player.load_queue.assert_called_with(queue, 2)
     finally:
         ctrl.shutdown()
 

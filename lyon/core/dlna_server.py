@@ -104,12 +104,13 @@ class DlnaServer:
     def start(self) -> None:
         if self.running:
             return
-        host = "0.0.0.0"
+        host = self.settings.dlna_bind_address
         port = int(self.settings.dlna_port)
         httpd = _DlnaHTTPServer((host, port), _DlnaRequestHandler)
         httpd.dlna = self
         actual_port = int(httpd.server_address[1])
-        self._base_url = f"http://{_local_ip()}:{actual_port}"
+        advertised_host = "127.0.0.1" if host in {"127.0.0.1", "localhost"} else _local_ip()
+        self._base_url = f"http://{advertised_host}:{actual_port}"
         self._httpd = httpd
         self._thread = threading.Thread(
             target=httpd.serve_forever,

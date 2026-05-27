@@ -79,7 +79,7 @@ def test_fatal_download_error_counts_as_failed(monkeypatch, tmp_path):
             raise RuntimeError("network failed")
 
     monkeypatch.setitem(sys.modules, "yt_dlp", types.SimpleNamespace(YoutubeDL=FakeYoutubeDL))
-    monkeypatch.setattr("lyon.core.yt_downloader._find_ffmpeg", lambda: None)
+    monkeypatch.setattr("lyon.core.yt_downloader.find_ffmpeg_binary", lambda: None)
     worker = YtDownloadWorker("https://example.invalid/video", "video", "mp4", str(tmp_path))
     errors: list[str] = []
     finished: list[tuple[int, int]] = []

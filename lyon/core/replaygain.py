@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 import subprocess
 import sys
+from functools import lru_cache
 from typing import Optional
 
 from PySide6.QtCore import QObject, QThread, Signal
@@ -67,6 +68,7 @@ def read_album_gain(path: str) -> Optional[float]:
     return _read_rg_tag(path, "album")
 
 
+@lru_cache(maxsize=512)
 def _read_rg_tag(path: str, kind: str) -> Optional[float]:
     try:
         import mutagen
@@ -178,6 +180,7 @@ def write_replaygain_tags(
         else:
             _write_vorbis_rg(f, track_gain_db, album_gain_db)
         f.save()
+        _read_rg_tag.cache_clear()
         return True
     except Exception:
         return False

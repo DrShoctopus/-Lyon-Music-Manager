@@ -1,0 +1,120 @@
+SEA LYON MEDIA MANAGER — END-USER LICENSE AGREEMENT
+====================================================
+
+Last updated: 2026
+
+This End-User License Agreement ("Agreement") is between you ("User") and
+the authors of Sea Lyon Media Manager ("the Software"). By installing or
+using the Software, you agree to the terms below. If you do not agree, do
+not install or use the Software.
+
+
+1. LICENSE GRANT
+----------------
+
+The Software is licensed under the terms of the MIT License, reproduced
+below in full:
+
+    MIT License
+
+    Copyright (c) 2026 DrShoctopus
+
+    Permission is hereby granted, free of charge, to any person obtaining
+    a copy of this software and associated documentation files (the
+    "Software"), to deal in the Software without restriction, including
+    without limitation the rights to use, copy, modify, merge, publish,
+    distribute, sublicense, and/or sell copies of the Software, and to
+    permit persons to whom the Software is furnished to do so, subject to
+    the following conditions:
+
+    The above copyright notice and this permission notice shall be
+    included in all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+    EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+    MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+    IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+    CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+    TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+    SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+
+2. THIRD-PARTY COMPONENTS
+-------------------------
+
+The Software bundles or links against third-party libraries and binaries
+that are licensed separately from the Software itself, including (but not
+limited to) libVLC, Qt / PySide6, ffmpeg, libdiscid, Chromaprint / fpcalc,
+mutagen, musicbrainzngs, yt-dlp, and others. Their license texts are
+reproduced in the THIRD_PARTY_NOTICES.txt file installed alongside this
+Agreement and viewable from the application's About → Licenses screen.
+
+Some bundled components are distributed under copyleft licenses (LGPL,
+GPL). Your use of the Software is also subject to those licenses with
+respect to those components. If you redistribute the Software you are
+responsible for complying with the relevant terms of each component.
+
+
+3. USER RESPONSIBILITY — MEDIA RIPPING
+--------------------------------------
+
+The Software can read, decode, and re-encode optical media such as audio
+CDs. The legality of ripping or otherwise copying optical media varies
+by jurisdiction, by the contents of the disc, and by any contractual
+agreement under which you obtained the disc. You are solely responsible
+for ensuring that your use of the ripping features complies with the
+laws of your jurisdiction and any agreements you are bound by. The
+authors of the Software make no representation that ripping any
+particular disc is lawful, and accept no liability for your use of the
+ripping features.
+
+
+4. USER RESPONSIBILITY — STREAMING SERVICES AND DOWNLOADING
+-----------------------------------------------------------
+
+The Software integrates with third-party streaming services and content
+platforms, including YouTube (via the bundled yt-dlp tool), and may
+download media files at your request. Downloading content from such
+services may be restricted or prohibited by the service's terms of use,
+by the copyright in the underlying content, or by law in your
+jurisdiction. You are solely responsible for ensuring that any download
+or stream you initiate is permitted by the platform's terms and by
+applicable copyright and other law. The Software provides a technical
+capability; it does not grant any right to content that you do not
+independently have permission to obtain.
+
+
+5. USER RESPONSIBILITY — NETWORK SHARING AND SCROBBLING
+-------------------------------------------------------
+
+The Software can act as a DLNA / UPnP media server and exposes your
+library over the local network when that feature is enabled. The
+Software can also submit listening data to third-party scrobbling
+services such as Last.fm and ListenBrainz when you have signed in to
+those services and enabled the relevant toggle. You are responsible for
+the network on which you enable these features, for the privacy
+implications of broadcasting your library on a shared network, and for
+your relationship with any scrobbling service whose terms of service
+apply to listening data you submit. The Software collects no telemetry
+of its own; details of every outbound network call are listed in
+PRIVACY.md.
+
+
+6. NO WARRANTY; LIMITATION OF LIABILITY
+---------------------------------------
+
+THE SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND. SECTIONS 3
+THROUGH 5 OF THIS AGREEMENT DESCRIBE AREAS OF USE THAT ARE PARTICULARLY
+SENSITIVE TO LOCAL LAW AND TO THIRD-PARTY TERMS; THE LIMITATIONS OF
+LIABILITY IN THE MIT LICENSE ABOVE APPLY TO THOSE AREAS WITH THE FULL
+FORCE OF THAT LICENSE. THE AUTHORS DO NOT WARRANT THAT THE SOFTWARE WILL
+BE FREE OF DEFECTS OR THAT IT WILL OPERATE WITHOUT INTERRUPTION, AND THEY
+DO NOT WARRANT THE LAWFULNESS OF ANY PARTICULAR USE.
+
+
+7. ACCEPTANCE
+-------------
+
+Installing or using the Software constitutes acceptance of this
+Agreement. If you do not accept this Agreement, do not install or use
+the Software, and uninstall any copy already installed.

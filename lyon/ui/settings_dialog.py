@@ -10,7 +10,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFileDialog,
     QFormLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QMessageBox,
-    QPushButton, QSpinBox, QTabWidget, QVBoxLayout, QWidget,
+    QPushButton, QScrollArea, QSpinBox, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from .. import __app_name__, __version__
@@ -35,7 +35,7 @@ _RIP_FORMATS = [
 ]
 _LOSSY_FORMATS = {"mp3", "aac", "opus", "ogg", "wma"}
 _FLAC_FORMAT = "flac"
-_DIALOG_DEFAULT_HEIGHT = 460
+_DIALOG_DEFAULT_HEIGHT = 520
 
 
 class SettingsDialog(QDialog):
@@ -61,14 +61,15 @@ class SettingsDialog(QDialog):
         self._lastfm_poll_timer: QTimer | None = None
 
         tabs = QTabWidget()
-        tabs.addTab(self._build_library_tab(settings), "Library")
-        tabs.addTab(self._build_playback_tab(settings), "Playback")
-        tabs.addTab(self._build_ripping_tab(settings), "CD Ripping")
-        tabs.addTab(self._build_metadata_tab(settings), "Metadata")
-        tabs.addTab(self._build_youtube_tab(settings), "YouTube")
-        tabs.addTab(self._build_scrobbling_tab(settings), "Scrobbling")
-        tabs.addTab(self._build_dlna_tab(settings), "DLNA")
-        tabs.addTab(self._build_about_tab(), "About")
+        tabs.addTab(self._scrollable(self._build_library_tab(settings)), "Library")
+        tabs.addTab(self._scrollable(self._build_playback_tab(settings)), "Playback")
+        tabs.addTab(self._scrollable(self._build_ripping_tab(settings)), "CD Ripping")
+        tabs.addTab(self._scrollable(self._build_metadata_tab(settings)), "Metadata")
+        tabs.addTab(self._scrollable(self._build_youtube_tab(settings)), "YouTube")
+        tabs.addTab(self._scrollable(self._build_scrobbling_tab(settings)), "Scrobbling")
+        tabs.addTab(self._scrollable(self._build_dlna_tab(settings)), "DLNA")
+        tabs.addTab(self._scrollable(self._build_updates_tab(settings)), "Updates")
+        tabs.addTab(self._scrollable(self._build_about_tab()), "About")
 
         layout = QVBoxLayout(self)
         layout.addWidget(tabs)
@@ -80,12 +81,20 @@ class SettingsDialog(QDialog):
 
     # ------------------------------------------------------------------ tabs
 
+    @staticmethod
+    def _scrollable(tab: QWidget) -> QScrollArea:
+        area = QScrollArea()
+        area.setWidget(tab)
+        area.setWidgetResizable(True)
+        area.setFrameShape(QScrollArea.NoFrame)
+        return area
+
     def _fit_width_to_tabs(self, tabs: QTabWidget) -> None:
-        """Open the dialog no wider than the complete top tab strip."""
+        """Open the dialog wide enough for the complete top tab strip."""
         margins = self.layout().contentsMargins()
         tab_width = tabs.tabBar().sizeHint().width()
         dialog_width = tab_width + margins.left() + margins.right()
-        self.setMinimumWidth(dialog_width)
+        self.setMinimumSize(dialog_width, _DIALOG_DEFAULT_HEIGHT)
         self.resize(dialog_width, _DIALOG_DEFAULT_HEIGHT)
 
     def _build_library_tab(self, settings: Settings) -> QWidget:
@@ -493,6 +502,13 @@ class SettingsDialog(QDialog):
         self.dlna_port.setToolTip("Use 0 to let the operating system choose an available port.")
         form.addRow("Port:", self.dlna_port)
 
+        self.dlna_bind_address = QLineEdit(settings.dlna_bind_address)
+        self.dlna_bind_address.setPlaceholderText("0.0.0.0")
+        self.dlna_bind_address.setToolTip(
+            "Use 127.0.0.1 for this computer only, or 0.0.0.0 for local network devices."
+        )
+        form.addRow("Bind address:", self.dlna_bind_address)
+
         note = QLabel(
             "DLNA shares indexed audio and video files with devices on your local network while "
             "Sea Lyon is running. Anyone on that network may be able to browse and stream them."
@@ -502,6 +518,100 @@ class SettingsDialog(QDialog):
         form.addRow("", note)
 
         return w
+
+    def _build_updates_tab(self, settings: Settings) -> QWidget:
+        w = QWidget()
+        form = QFormLayout(w)
+        form.setContentsMargins(12, 12, 12, 12)
+        form.setVerticalSpacing(8)
+
+        self.update_check_enabled = QCheckBox(
+            "Check for updates automatically (once a day)"
+        )
+        self.update_check_enabled.setChecked(settings.update_check_enabled)
+        form.addRow("", self.update_check_enabled)
+
+        self.update_appcast_url = QLineEdit(settings.update_appcast_url)
+        self.update_appcast_url.setPlaceholderText(
+            "https://drshoctopus.github.io/Sea-Lyon-Media-Manager/appcast.xml"
+        )
+        form.addRow("Update feed URL:", self.update_appcast_url)
+
+        # Last-checked display + manual "Check now" button.
+        check_row = QHBoxLayout()
+        if settings.last_update_check_ts > 0:
+            from datetime import datetime
+            ts = datetime.fromtimestamp(settings.last_update_check_ts).strftime(
+                "%Y-%m-%d %H:%M"
+            )
+            last_text = f"Last checked: {ts}"
+        else:
+            last_text = "Last checked: never"
+        self._update_last_checked_label = QLabel(last_text)
+        check_row.addWidget(self._update_last_checked_label, 1)
+
+        check_now_btn = QPushButton("Check now")
+        check_now_btn.clicked.connect(self._on_check_for_updates_clicked)
+        check_row.addWidget(check_now_btn)
+        form.addRow("", check_row)
+
+        if settings.skipped_update_version:
+            skipped_row = QHBoxLayout()
+            skipped_label = QLabel(
+                f"Currently skipping version {settings.skipped_update_version}."
+            )
+            skipped_label.setObjectName("mutedText")
+            skipped_row.addWidget(skipped_label, 1)
+            clear_btn = QPushButton("Stop skipping")
+            clear_btn.clicked.connect(self._on_clear_skipped_clicked)
+            skipped_row.addWidget(clear_btn)
+            form.addRow("", skipped_row)
+
+        note = QLabel(
+            "Sea Lyon checks a GitHub-hosted feed for new releases. The check "
+            "happens off the UI thread and does not transmit any of your data; "
+            "see PRIVACY.md."
+        )
+        note.setWordWrap(True)
+        note.setObjectName("mutedText")
+        form.addRow("", note)
+
+        return w
+
+    def _on_check_for_updates_clicked(self) -> None:
+        """Forward the manual "Check now" to MainWindow if accessible."""
+        # Persist the URL toggle from the form first, then ask the parent
+        # window to run a manual check. The parent owns the worker lifecycle.
+        self.result_settings.update_check_enabled = self.update_check_enabled.isChecked()
+        self.result_settings.update_appcast_url = self.update_appcast_url.text().strip()
+        parent = self.parent()
+        check = getattr(parent, "check_for_updates_now", None)
+        if callable(check):
+            # Push the latest URL into the parent's settings so the worker
+            # uses what the user just typed (even if they haven't clicked OK).
+            try:
+                parent.settings.update_appcast_url = self.result_settings.update_appcast_url
+            except Exception:  # noqa: BLE001
+                pass
+            check()
+        else:
+            QMessageBox.information(
+                self,
+                "Check for updates",
+                "Updates can only be checked from the main window. Close this dialog and try Help → Check for Updates…",
+            )
+
+    def _on_clear_skipped_clicked(self) -> None:
+        self.result_settings.skipped_update_version = ""
+        parent = self.parent()
+        try:
+            parent.settings.skipped_update_version = ""  # type: ignore[union-attr]
+            parent.settings.save()                       # type: ignore[union-attr]
+        except Exception:  # noqa: BLE001
+            pass
+        QMessageBox.information(
+            self, "Updates", "Cleared the skipped-version setting."
+        )
 
     @staticmethod
     def _lastfm_status_text(settings: Settings) -> str:
@@ -522,13 +632,13 @@ class SettingsDialog(QDialog):
     def _on_lastfm_token_ready(self, token: str) -> None:
         from PySide6.QtCore import QUrl
         from PySide6.QtGui import QDesktopServices
-        from ..core.scrobbler import lastfm_auth_url
-        QDesktopServices.openUrl(QUrl(lastfm_auth_url(token)))
+        if self._scrobbler is None:
+            return
+        QDesktopServices.openUrl(QUrl(self._scrobbler.lastfm_auth_url(token)))
         self._lastfm_status_label.setText("Waiting for browser authorisation…")
         if self._lastfm_poll_timer is None:
             self._lastfm_poll_timer = QTimer(self)
             self._lastfm_poll_timer.setInterval(5000)
-            assert self._scrobbler is not None
             self._lastfm_poll_timer.timeout.connect(self._scrobbler.poll_lastfm_session)
         self._lastfm_poll_timer.start()
 
@@ -593,8 +703,8 @@ class SettingsDialog(QDialog):
         layout.addSpacing(12)
 
         desc = QLabel(
-            "Sea Lyon is a music library manager, CD ripper, and audio/video player\n"
-            "for Windows,Coming Soon to macOS"
+            "Sea Lyon is a music library manager, CD ripper, podcast / radio "
+            "player, and video player for Windows 10 and 11."
         )
         desc.setWordWrap(True)
         layout.addWidget(desc)
@@ -736,6 +846,13 @@ class SettingsDialog(QDialog):
         self.result_settings.dlna_friendly_name = (
             self.dlna_name.text().strip() or "Sea Lyon Media Manager"
         )
+        self.result_settings.dlna_bind_address = (
+            self.dlna_bind_address.text().strip() or "0.0.0.0"
+        )
+        self.result_settings.update_check_enabled = self.update_check_enabled.isChecked()
+        url = self.update_appcast_url.text().strip()
+        if url:
+            self.result_settings.update_appcast_url = url
         # lastfm_session_key and lastfm_username are updated live by the auth flow;
         # preserve whatever's there.
         self.accept()

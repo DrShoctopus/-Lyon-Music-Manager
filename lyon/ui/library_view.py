@@ -34,10 +34,12 @@ _RECENTLY_ADDED_KEY = "__recently_added__"
 _RECENTLY_PLAYED_KEY = "__recently_played__"
 _MOST_PLAYED_KEY = "__most_played__"
 _TOP_RATED_KEY = "__top_rated__"
+_LIKED_KEY = "__liked__"
 
 _SV_ALL_ALBUMS = "__sv_all_albums__"
 
 _VIRTUAL_COLLECTIONS: list[tuple[str, str]] = [
+    (_LIKED_KEY, "Liked ♥"),
     (_RECENTLY_ADDED_KEY, "Recently Added"),
     (_RECENTLY_PLAYED_KEY, "Recently Played"),
     (_MOST_PLAYED_KEY, "Most Played"),
@@ -909,6 +911,7 @@ class LibraryView(QWidget):
 
     def _available_virtual_collections(self) -> list[tuple[str, str]]:
         required = {
+            _LIKED_KEY: "liked",
             _RECENTLY_ADDED_KEY: "recently_added",
             _RECENTLY_PLAYED_KEY: "recently_played",
             _MOST_PLAYED_KEY: "most_played",
@@ -1051,7 +1054,9 @@ class LibraryView(QWidget):
 
     def _populate_virtual_collection(self, key: str) -> None:
         mt = self._media_type_filter
-        if key == _RECENTLY_ADDED_KEY and callable(getattr(self.library, "recently_added", None)):
+        if key == _LIKED_KEY and callable(getattr(self.library, "liked", None)):
+            tracks = self.library.liked(mt)
+        elif key == _RECENTLY_ADDED_KEY and callable(getattr(self.library, "recently_added", None)):
             tracks = self.library.recently_added(50, mt)
         elif key == _RECENTLY_PLAYED_KEY and callable(getattr(self.library, "recently_played", None)):
             tracks = self.library.recently_played(50, mt)

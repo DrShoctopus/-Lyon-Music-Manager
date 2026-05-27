@@ -647,14 +647,29 @@ LIBRARY_FETCH = _wrap(
 LIBRARY_DUPES = _wrap(
     "Find and clean up duplicates",
     """
-    <p>The duplicate finder identifies tracks that look like the same song
-    by comparing normalised Artist + Title (and optionally Album + Length).
+    <p>The duplicate finder identifies tracks that look like the same song.
     It only touches the library index — your files on disk are never
     deleted.</p>
+
+    <h2>Detection modes</h2>
+    <p>Choose a mode from the dropdown at the top of the dialog:</p>
+    <ul>
+      <li><b>By Title + Artist</b> — matches tracks whose normalised
+      Artist and Title tags are identical. Fast and requires no extra
+      tools.</li>
+      <li><b>By File Hash</b> — compares header, middle and tail samples
+      of the audio data, catching re-encodes and renamed copies even when
+      tags differ.</li>
+      <li><b>By AcoustID Fingerprint</b> — matches by acoustic content
+      regardless of tags or format. Requires <code>fpcalc</code> in
+      <code>bin/</code> and an AcoustID API key. Tracks must be scanned
+      first using <i>Scan Missing Fingerprints…</i>.</li>
+    </ul>
 
     <h2>Run it</h2>
     <ol>
       <li>Open <b>File → Find Duplicates…</b>.</li>
+      <li>Pick a detection mode.</li>
       <li>The dialog groups suspected duplicates together. Each group
       contains 2 or more rows.</li>
       <li>For each group, tick the rows you want removed from the library.
@@ -881,9 +896,9 @@ PODCASTS = _wrap(
     <ul>
       <li><b>Mark all played</b> on a podcast or an individual episode.</li>
       <li><b>Unsubscribe</b> removes the feed and its episode list.</li>
-      <li>The User-Agent sent to podcast hosts identifies the app and its
-      version (visible in the source as <code>PODCAST_USER_AGENT</code>) so
-      polite hosts can rate-limit predictably.</li>
+      <li>The User-Agent sent to podcast hosts identifies the app, its
+      version, and the configured MusicBrainz contact so polite hosts can
+      rate-limit predictably.</li>
     </ul>
     """,
 )
@@ -910,8 +925,8 @@ RADIO = _wrap(
     <h2>Play</h2>
     <p>Double-click a station to start streaming. Live streams cannot be
     seeked; the transport bar's seek slider is hidden while a radio source
-    is active. The station name and any ICY-metadata "now playing" string
-    show up in Now Playing.</p>
+    is active. The station name shows up in the transport bar and Now
+    Playing view.</p>
     """,
 )
 
@@ -1159,6 +1174,9 @@ SCROBBLING = _wrap(
 
     <h2>Last.fm</h2>
     <ol>
+      <li>Create a Last.fm API account at
+      <a href="https://www.last.fm/api/account/create">last.fm/api/account/create</a>,
+      then paste your API key and shared secret into the Settings fields.</li>
       <li>Tick <b>Enable Last.fm scrobbling</b>.</li>
       <li>Click <b>Connect Last.fm…</b>. The app gets a token, opens your
       browser, and waits for you to click <i>"Allow"</i> on the Last.fm
@@ -1298,6 +1316,45 @@ SETTINGS_YOUTUBE = _wrap(
       <code>&lt;music root&gt;/YouTube</code>.</li>
       <li><b>Automatically add downloads to library</b> — index completed
       files immediately.</li>
+    </ul>
+    """,
+)
+
+
+SETTINGS_UPDATES = _wrap(
+    "Settings → Updates",
+    """
+    <ul>
+      <li><b>Check for updates automatically (once a day)</b> — master
+      toggle. When enabled the app queries a GitHub-hosted Appcast feed in
+      the background.</li>
+      <li><b>Update feed URL</b> — the Appcast XML endpoint. Defaults to
+      the official GitHub Pages feed; only change it if you run your own
+      mirror.</li>
+      <li><b>Last checked / Check now</b> — shows when the last check
+      ran and lets you trigger one manually.</li>
+      <li><b>Skipped version</b> — if you previously dismissed an update,
+      the skipped version appears here with a <i>Stop skipping</i> button
+      so future checks will surface it again.</li>
+    </ul>
+
+    <p class="tip">Update checks run off the UI thread and do not transmit
+    any of your data — see PRIVACY.md for details.</p>
+    """,
+)
+
+
+SETTINGS_ABOUT = _wrap(
+    "Settings → About",
+    """
+    <p>The <b>About</b> tab shows:</p>
+    <ul>
+      <li>The app icon, name and current version number.</li>
+      <li>A short product description.</li>
+      <li>The copyright notice and license (MIT).</li>
+      <li><b>Third-Party Acknowledgements</b> — a list of bundled or
+      linked components (Python, Qt / PySide6, libVLC, ffmpeg, libdiscid,
+      Chromaprint, etc.) with their respective licence identifiers.</li>
     </ul>
     """,
 )
@@ -1505,12 +1562,16 @@ TREE = [
         "<li><a href='kb:settings-youtube'>YouTube</a></li>"
         "<li><a href='kb:scrobbling'>Scrobbling</a></li>"
         "<li><a href='kb:dlna'>DLNA</a></li>"
+        "<li><a href='kb:settings-updates'>Updates</a></li>"
+        "<li><a href='kb:settings-about'>About</a></li>"
         "</ul>"), [
         ("settings-library", "Library tab", SETTINGS_LIBRARY, []),
         ("settings-playback", "Playback tab", SETTINGS_PLAYBACK, []),
         ("settings-ripping", "CD Ripping tab", SETTINGS_RIPPING, []),
         ("settings-metadata", "Metadata tab", SETTINGS_METADATA, []),
         ("settings-youtube", "YouTube tab", SETTINGS_YOUTUBE, []),
+        ("settings-updates", "Updates tab", SETTINGS_UPDATES, []),
+        ("settings-about", "About tab", SETTINGS_ABOUT, []),
     ]),
     ("shortcuts", "Keyboard shortcuts", SHORTCUTS, []),
     ("diagnostics", "Runtime Diagnostics", DIAGNOSTICS, []),

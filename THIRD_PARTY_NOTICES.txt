@@ -1,0 +1,291 @@
+SEA LYON MEDIA MANAGER — THIRD-PARTY NOTICES
+=============================================
+
+This file lists every third-party software component bundled with or
+linked against Sea Lyon Media Manager, along with the license under
+which each component is provided.
+
+Sea Lyon Media Manager itself is licensed under the MIT License (see
+EULA.txt and LICENSE). Each component below is licensed under its own
+terms, summarized here and reproduced in full in the LICENSE TEXTS
+section at the bottom of this file. In case of any inconsistency, the
+upstream component's authoritative license file governs.
+
+If you redistribute Sea Lyon Media Manager you are responsible for
+complying with each component's license, including obligations to
+provide source where required (LGPL, GPL).
+
+NOTE FOR MAINTAINERS: every entry below records the version known at
+release. When upgrading a dependency, update the version number here and
+re-fetch the upstream license file to ensure changes (if any) are
+reflected.
+
+
+================================================================
+1. BUNDLED NATIVE BINARIES (shipped inside the installer)
+================================================================
+
+----------------------------------------------------------------
+libVLC (and accompanying VLC plugins)
+----------------------------------------------------------------
+Version:     3.0.21
+Home page:   https://www.videolan.org/vlc/libvlc.html
+Source:      https://www.videolan.org/vlc/download-sources.html
+License:     GNU LGPL 2.1 or later (libvlc, libvlccore)
+             GNU GPL 2.0 or later (some plugins)
+Copyright:   © 1996–present, VideoLAN and contributors
+
+Sea Lyon Media Manager dynamically links to libvlc.dll and libvlccore.dll
+from the VLC 3.0.x release and ships an unmodified copy of the
+accompanying `plugins/` directory inside the installer. Under the terms
+of the LGPL you are entitled to obtain the corresponding source code; it
+is available from the VideoLAN download page above. Some VLC plugins
+are themselves GPL-2.0+; if you redistribute the bundle, your
+redistribution is subject to those plugins' GPL terms as well.
+
+----------------------------------------------------------------
+ffmpeg (gyan.dev "essentials" Windows build)
+----------------------------------------------------------------
+Version:     7.1.1
+Home page:   https://ffmpeg.org/
+Build:       https://www.gyan.dev/ffmpeg/builds/
+Source:      https://ffmpeg.org/download.html#releases
+License:     The "essentials" build is **GPL 2.0 or later**, because it
+             links against GPL-licensed libraries (libx264, libx265).
+             Pure ffmpeg without those libraries would be LGPL 2.1+.
+Copyright:   © 2000–present, the FFmpeg project and contributors;
+             additional copyrights for bundled GPL libraries.
+
+The bundle ships an unmodified copy of `ffmpeg.exe` from the gyan.dev
+essentials Windows x86_64 build. Because that build links libx264 and
+libx265, **the combined Sea Lyon Media Manager installer is effectively
+distributed under the GPL** with respect to ffmpeg and its
+dependencies. You may obtain the corresponding source from the FFmpeg
+project at the URL above. A future release plans to switch to a
+strict-LGPL ffmpeg build that does not include GPL libraries.
+
+----------------------------------------------------------------
+libdiscid
+----------------------------------------------------------------
+Version:     0.6.4
+Home page:   https://musicbrainz.org/doc/libdiscid
+Source:      https://github.com/metabrainz/libdiscid
+License:     GNU LGPL 2.1 or later
+Copyright:   © 2006–present, MusicBrainz and contributors
+
+The installer ships `discid.dll` (Windows x86_64) from the upstream
+release. Source is available from the GitHub repository above.
+
+----------------------------------------------------------------
+Chromaprint / fpcalc
+----------------------------------------------------------------
+Version:     1.5.1 (or as pinned by the build manifest)
+Home page:   https://acoustid.org/chromaprint
+Source:      https://github.com/acoustid/chromaprint
+License:     GNU LGPL 2.1 or later
+Copyright:   © 2010–present, Lukáš Lalinský and contributors
+
+The installer ships `fpcalc.exe` (Windows x86_64) from the upstream
+release. Source is available from the GitHub repository above.
+
+
+================================================================
+2. PYTHON LIBRARIES (bundled inside the PyInstaller distribution)
+================================================================
+
+----------------------------------------------------------------
+Qt 6 / PySide6
+----------------------------------------------------------------
+Version:     6.11.1 (PySide6-Essentials)
+Home page:   https://www.qt.io/qt-for-python
+License:     GNU LGPL 3.0 with the Qt LGPL Exception 1.1
+             (PySide6 itself is LGPL-3.0; the Qt LGPL Exception governs
+             dynamic linking from non-LGPL applications.)
+Copyright:   © The Qt Company Ltd., © 2015–present, Riverbank Computing
+             and contributors
+
+The application dynamically links to PySide6 modules bundled inside the
+PyInstaller distribution. Replacement-with-modified-Qt is permitted by
+the LGPL; the bundled PySide6 / Qt files are not modified.
+
+----------------------------------------------------------------
+python-vlc
+----------------------------------------------------------------
+Version:     3.0.21203
+Home page:   https://wiki.videolan.org/Python_bindings
+Source:      https://github.com/oaubert/python-vlc
+License:     GNU LGPL 2.1 or later
+Copyright:   © 2009–present, Olivier Aubert and contributors
+
+----------------------------------------------------------------
+mutagen
+----------------------------------------------------------------
+Version:     1.47.0
+Home page:   https://mutagen.readthedocs.io/
+Source:      https://github.com/quodlibet/mutagen
+License:     GNU GPL 2.0 or later
+Copyright:   © 2005–present, the mutagen authors
+
+Mutagen is GPL-2.0+. Its presence in the bundle means the combined
+Sea Lyon Media Manager distribution must be redistributed under terms
+compatible with GPL-2.0+.
+
+----------------------------------------------------------------
+musicbrainzngs
+----------------------------------------------------------------
+Version:     0.7.1
+Home page:   https://python-musicbrainzngs.readthedocs.io/
+Source:      https://github.com/alastair/python-musicbrainzngs
+License:     2-clause BSD (Simplified BSD License)
+Copyright:   © 2012, Alastair Porter and contributors
+
+----------------------------------------------------------------
+yt-dlp
+----------------------------------------------------------------
+Version:     2026.3.17
+Home page:   https://github.com/yt-dlp/yt-dlp
+License:     Unlicense (public domain dedication)
+Copyright:   The yt-dlp authors have released their work under the
+             Unlicense; see https://unlicense.org/.
+
+----------------------------------------------------------------
+requests
+----------------------------------------------------------------
+Version:     2.34.2
+Home page:   https://requests.readthedocs.io/
+Source:      https://github.com/psf/requests
+License:     Apache License 2.0
+Copyright:   © 2019, Kenneth Reitz
+
+----------------------------------------------------------------
+urllib3 (transitive, via requests)
+----------------------------------------------------------------
+Source:      https://github.com/urllib3/urllib3
+License:     MIT License
+Copyright:   © 2008–present, Andrey Petrov and contributors
+
+----------------------------------------------------------------
+certifi (transitive, via requests)
+----------------------------------------------------------------
+Source:      https://github.com/certifi/python-certifi
+License:     Mozilla Public License 2.0 (data); ISC-equivalent (code)
+
+----------------------------------------------------------------
+defusedxml
+----------------------------------------------------------------
+Version:     0.7.1
+Home page:   https://github.com/tiran/defusedxml
+License:     Python Software Foundation License v2
+Copyright:   © Christian Heimes
+
+----------------------------------------------------------------
+discid (Python binding for libdiscid)
+----------------------------------------------------------------
+Version:     1.3.0
+Home page:   https://python-discid.readthedocs.io/
+License:     GNU LGPL 3.0 or later
+
+----------------------------------------------------------------
+watchdog
+----------------------------------------------------------------
+Version:     6.0.0
+Home page:   https://github.com/gorakhargosh/watchdog
+License:     Apache License 2.0
+Copyright:   © 2011–present, Yesudeep Mangalapilly and contributors
+
+----------------------------------------------------------------
+pyacoustid
+----------------------------------------------------------------
+Version:     1.3.1
+Home page:   https://github.com/beetbox/pyacoustid
+License:     MIT License
+Copyright:   © Adrian Sampson and contributors
+
+----------------------------------------------------------------
+Pillow (transitive, via PySide6 / build tooling)
+----------------------------------------------------------------
+Source:      https://github.com/python-pillow/Pillow
+License:     HPND (Historical Permission Notice and Disclaimer)
+Copyright:   © 1997–2011 by Secret Labs AB
+             © 1995–2011 by Fredrik Lundh and contributors
+             © 2010–present, Alex Clark and contributors
+
+----------------------------------------------------------------
+Python standard library (bundled by PyInstaller)
+----------------------------------------------------------------
+Source:      https://www.python.org/
+License:     Python Software Foundation License v2 (PSF License)
+
+
+================================================================
+3. NETWORKED METADATA AND CONTENT SERVICES (no code shipped)
+================================================================
+
+The following services are accessed at runtime when you take an action
+that requires them. No code from these services is bundled in the
+installer; this section is informational so you know which terms
+apply when you use the corresponding features.
+
+- MusicBrainz   — https://musicbrainz.org/  (CC0 data; service ToS apply)
+- Cover Art Archive — https://coverartarchive.org/  (CC0 / per-image)
+- CUETools DB / CTDB — http://db.cuetools.net/  (service ToS apply)
+- TheAudioDB — https://www.theaudiodb.com/  (per-key terms apply)
+- LRCLIB — https://lrclib.net/  (service ToS apply)
+- AcoustID — https://acoustid.org/  (service ToS apply)
+- Last.fm — https://www.last.fm/api/tos
+- ListenBrainz — https://listenbrainz.org/  (per-token terms apply)
+- YouTube — https://www.youtube.com/t/terms  (yt-dlp is not affiliated)
+
+
+================================================================
+4. ATTRIBUTIONS / TRADEMARKS
+================================================================
+
+- Windows, Windows Media Player, and SmartScreen are trademarks of
+  Microsoft Corporation.
+- Qt is a trademark of The Qt Company Ltd.
+- VLC and the VLC traffic-cone logo are trademarks of VideoLAN. Sea
+  Lyon Media Manager is not affiliated with or endorsed by VideoLAN.
+- Spotify is a trademark of Spotify AB. Sea Lyon Media Manager is not
+  affiliated with or endorsed by Spotify.
+- Apple, iTunes, iPod, AirPlay are trademarks of Apple Inc.
+- All other trademarks are property of their respective owners.
+
+
+================================================================
+5. LICENSE TEXTS
+================================================================
+
+The complete text of each license referenced above follows. Where a
+license has variants (LGPL-2.1 vs LGPL-3.0; GPL-2.0 vs GPL-3.0; Apache
+2.0; MIT; BSD; PSF; Unlicense; HPND; MPL-2.0), the text of the relevant
+variant is reproduced once.
+
+Full canonical text is also available at the following URLs:
+
+- MIT License: https://opensource.org/license/mit/
+- BSD 2-Clause: https://opensource.org/license/bsd-2-clause/
+- Apache License 2.0: https://www.apache.org/licenses/LICENSE-2.0.txt
+- GNU LGPL 2.1: https://www.gnu.org/licenses/old-licenses/lgpl-2.1.txt
+- GNU LGPL 3.0: https://www.gnu.org/licenses/lgpl-3.0.txt
+- GNU GPL 2.0: https://www.gnu.org/licenses/old-licenses/gpl-2.0.txt
+- GNU GPL 3.0: https://www.gnu.org/licenses/gpl-3.0.txt
+- Qt LGPL Exception 1.1: https://doc.qt.io/qt-6/lgpl.html
+- Python Software Foundation License v2: https://docs.python.org/3/license.html
+- Unlicense: https://unlicense.org/
+- HPND: https://opensource.org/license/historical-php/
+- MPL 2.0: https://www.mozilla.org/en-US/MPL/2.0/
+
+[MAINTAINER NOTE — to be completed before tagging v1.0.0]
+
+Before tagging v1.0.0, fetch the canonical text of each license listed
+above and concatenate it into this section, separated by clear header
+lines. This produces a self-contained THIRD_PARTY_NOTICES.txt that the
+installer can ship without runtime network dependence.
+
+A small helper script (planned: scripts/fetch-license-texts.py) will
+download the texts from the URLs above and append them here, so that
+the entire file remains reproducible at release time.
+
+Until that script lands, the URLs above are authoritative. The MIT
+License text is reproduced once in EULA.txt for reference.

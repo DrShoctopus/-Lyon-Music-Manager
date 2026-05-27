@@ -43,7 +43,7 @@ def app():
 
 @pytest.mark.parametrize("module_path", _UI_MODULES_NO_INLINE_STYLES)
 def test_ui_module_has_no_inline_setstylesheet(module_path):
-    src = Path(module_path).read_text()
+    src = Path(module_path).read_text(encoding="utf-8")
     cleaned = re.sub(r"#.*", "", src)  # strip comments
     assert "setStyleSheet" not in cleaned, (
         f"{module_path} still contains setStyleSheet — use a named QSS class instead."
@@ -52,7 +52,7 @@ def test_ui_module_has_no_inline_setstylesheet(module_path):
 
 def test_styles_module_owns_the_central_stylesheet_call():
     """styles.py is the only UI module allowed to apply WMP_QSS."""
-    src = Path("lyon/ui/styles.py").read_text()
+    src = Path("lyon/ui/styles.py").read_text(encoding="utf-8")
     cleaned = re.sub(r"#.*", "", src)
     occurrences = cleaned.count("setStyleSheet")
     assert occurrences == 1, (
@@ -62,7 +62,7 @@ def test_styles_module_owns_the_central_stylesheet_call():
 
 def test_main_window_uses_central_stylesheet_helper():
     """MainWindow should not own stylesheet application directly."""
-    src = Path("lyon/ui/main_window.py").read_text()
+    src = Path("lyon/ui/main_window.py").read_text(encoding="utf-8")
     cleaned = re.sub(r"#.*", "", src)
     occurrences = cleaned.count("setStyleSheet")
     assert occurrences == 0, (
@@ -102,7 +102,7 @@ def test_settings_about_tab_shows_branding_pixmap(app):
     assert len(labels_with_pix) >= 1
 
 
-_QSS = Path("lyon/ui/styles.py").read_text()
+_QSS = Path("lyon/ui/styles.py").read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize("selector", [

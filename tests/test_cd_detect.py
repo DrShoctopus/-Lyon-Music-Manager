@@ -70,7 +70,7 @@ def test_windows_toc_parser_detects_audio_data_and_leadout_entries():
     track_data = b"".join(
         [
             _track_data(1, 0x10, 0),
-            _track_data(2, 0x40, 15000),
+            _track_data(2, 0x14, 15000),
             _track_data(0xAA, 0x10, 30000),
         ]
     )

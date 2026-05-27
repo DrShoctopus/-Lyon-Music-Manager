@@ -127,21 +127,21 @@ class _WatchdogHandler(FileSystemEventHandler):
         elif _is_indexable(path):
             self._owner.paths_changed.emit([path])
         elif _is_artwork_sidecar(path):
-            self._owner.folders_changed.emit([str(Path(path).parent)])
+            self._owner.folders_changed.emit([_parent_path(path)])
 
     def on_modified(self, event: FileSystemEvent) -> None:
         path = _event_path(event)
         if not _event_is_directory(event) and _is_indexable(path):
             self._owner.paths_changed.emit([path])
         elif not _event_is_directory(event) and _is_artwork_sidecar(path):
-            self._owner.folders_changed.emit([str(Path(path).parent)])
+            self._owner.folders_changed.emit([_parent_path(path)])
 
     def on_deleted(self, event: FileSystemEvent) -> None:
         path = _event_path(event)
         if _event_is_directory(event) or _is_indexable(path):
             self._owner.paths_deleted.emit([path])
         elif _is_artwork_sidecar(path):
-            self._owner.folders_changed.emit([str(Path(path).parent)])
+            self._owner.folders_changed.emit([_parent_path(path)])
 
     def on_moved(self, event: FileSystemEvent) -> None:
         src = _event_path(event)
@@ -165,9 +165,9 @@ class _WatchdogHandler(FileSystemEventHandler):
         else:
             art_roots = []
             if _is_artwork_sidecar(src):
-                art_roots.append(str(Path(src).parent))
+                art_roots.append(_parent_path(src))
             if _is_artwork_sidecar(dest):
-                art_roots.append(str(Path(dest).parent))
+                art_roots.append(_parent_path(dest))
             if art_roots:
                 self._owner.folders_changed.emit(art_roots)
 
@@ -323,6 +323,10 @@ def _event_path(event: FileSystemEvent) -> str:
 
 def _event_is_directory(event: FileSystemEvent) -> bool:
     return bool(getattr(event, "is_directory", False))
+
+
+def _parent_path(path: str) -> str:
+    return os.path.dirname(path.rstrip("\\/"))
 
 
 def _is_indexable(path: str) -> bool:

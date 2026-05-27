@@ -180,6 +180,8 @@ class TransportBar(QWidget):
         outer.addWidget(self.bar)
 
         player.track_changed.connect(self._on_track)
+        if hasattr(player, "stream_metadata_changed"):
+            player.stream_metadata_changed.connect(self._on_track)
         player.position_changed.connect(self._on_position)
         player.state_changed.connect(self._on_state)
 
@@ -206,7 +208,8 @@ class TransportBar(QWidget):
             self.heart_btn.setEnabled(False)
         else:
             self.title_lbl.setText(track.title)
-            self.artist_lbl.setText(f"{track.display_artist} - {track.album}")
+            parts = [p for p in (track.display_artist, track.album) if p]
+            self.artist_lbl.setText(" - ".join(parts))
             self.thumb.setPixmap(cover_pixmap(track.artwork_path, _TRANSPORT_THUMB_SIZE, "♪"))
             self.heart_btn.blockSignals(True)
             self.heart_btn.setChecked(track.liked)

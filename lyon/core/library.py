@@ -12,10 +12,16 @@ from pathlib import Path
 from typing import Callable, Iterable, Iterator, Literal
 
 from mutagen import File as MutagenFile
+from mutagen.easymp4 import EasyMP4Tags
 
 from .settings import app_data_dir
 
 LOG = logging.getLogger(__name__)
+
+try:
+    EasyMP4Tags.RegisterFreeformKey("musicbrainz_discid", "MusicBrainz Disc Id")
+except ValueError:
+    pass  # already registered
 
 SUPPORTED_AUDIO_EXTS = {
     ".flac",
@@ -350,6 +356,11 @@ class Library:
         if row is not None and not force and _row_matches_stat(row, stat):
             if disc_id:
                 self._backfill_disc_id(path, disc_id)
+            elif media_type == "audio" and not _row_disc_id(row):
+                meta = _read_tags(path)
+                tag_disc_id = meta.get("disc_id") if meta is not None else ""
+                if tag_disc_id:
+                    self._backfill_disc_id(path, tag_disc_id)
             return IndexResult("unchanged", path)
 
         meta = _read_tags(path)
@@ -421,7 +432,7 @@ class Library:
                 meta["samplerate"],
                 str(art) if art else None,
                 media_type,
-                disc_id or (row["disc_id"] if row is not None and "disc_id" in row.keys() else None),
+                disc_id or meta.get("disc_id") or (row["disc_id"] if row is not None and "disc_id" in row.keys() else None),
                 int(stat.st_size),
                 int(stat.st_mtime_ns),
                 now,
@@ -707,12 +718,7 @@ class Library:
                 "SELECT id FROM tracks WHERE path = ?", (old_text,)
             ).fetchone()
             if old_row is None:
-                old_missing = True
-            else:
-                old_missing = False
-        if old_missing:
-            return self.index_file(new_text)
-        with self._lock:
+                return self.index_file(new_text)
             existing_dest = self.conn.execute(
                 "SELECT id FROM tracks WHERE path = ?", (new_text,)
             ).fetchone()
@@ -904,27 +910,15 @@ class Library:
         return [_row_to_track(r) for r in rows]
 
     def all_tracks(self, media_type: str | None = None) -> Iterator[Track]:
-        """Yield every track in id order, paging to avoid loading the full table at once."""
+        """Return a consistent snapshot of every track in id order."""
         filter_sql = "" if media_type is None else "AND media_type = ?"
-        last_id = 0
-        while True:
-            params = (
-                (last_id, _PAGE_SIZE)
-                if media_type is None
-                else (last_id, media_type, _PAGE_SIZE)
-            )
-            with self._lock:
-                rows = self.conn.execute(
-                    f"SELECT * FROM tracks WHERE id > ? {filter_sql} ORDER BY id LIMIT ?",
-                    params,
-                ).fetchall()
-            if not rows:
-                break
-            for r in rows:
-                last_id = int(r["id"])
-                yield _row_to_track(r)
-            if len(rows) < _PAGE_SIZE:
-                break
+        params = () if media_type is None else (media_type,)
+        with self._lock:
+            rows = self.conn.execute(
+                f"SELECT * FROM tracks WHERE id > 0 {filter_sql} ORDER BY id",
+                params,
+            ).fetchall()
+        return iter(_row_to_track(r) for r in rows)
 
     def count_tracks(self, media_type: str | None = None) -> int:
         """Return the number of tracks, optionally restricted by media type."""
@@ -963,6 +957,35 @@ class Library:
                 f"SELECT {DISPLAY_ARTIST_SQL} AS a, {DISPLAY_ALBUM_SQL} AS b"
                 " FROM tracks WHERE disc_id = ? LIMIT 1",
                 (disc_id,),
+            ).fetchone()
+        return (row["a"], row["b"]) if row else None
+
+    def find_album_match(
+        self,
+        artist: str,
+        album: str,
+        track_count: int,
+    ) -> tuple[str, str] | None:
+        """Return (display_artist, display_album) if the library already has an
+        album whose artist, album name, and track count all match the given
+        values.  Comparison is case-insensitive.  Returns None when no match is
+        found.
+        """
+        if not artist or not album or track_count < 1:
+            return None
+        with self._lock:
+            row = self.conn.execute(
+                f"""SELECT {DISPLAY_ARTIST_SQL} AS a,
+                           {DISPLAY_ALBUM_SQL}  AS b,
+                           COUNT(*)             AS cnt
+                    FROM tracks
+                    WHERE media_type = 'audio'
+                    GROUP BY a, b
+                    HAVING a = ? COLLATE NOCASE
+                       AND b = ? COLLATE NOCASE
+                       AND cnt = ?
+                    LIMIT 1""",
+                (artist, album, track_count),
             ).fetchone()
         return (row["a"], row["b"]) if row else None
 
@@ -1104,6 +1127,17 @@ class Library:
         return [_row_to_track(r) for r in rows]
 
     # ------------------------------------------------------------------ virtual collections
+    def liked(self, media_type: str | None = None) -> list[Track]:
+        filter_sql = "" if media_type is None else "AND media_type = ?"
+        params: tuple = (media_type,) if media_type is not None else ()
+        with self._lock:
+            rows = self.conn.execute(
+                f"""SELECT * FROM tracks WHERE liked = 1 {filter_sql}
+                    ORDER BY {DISPLAY_ARTIST_SQL}, {DISPLAY_ALBUM_SQL}, disc_no, track_no""",
+                params,
+            ).fetchall()
+        return [_row_to_track(r) for r in rows]
+
     def recently_added(self, limit: int = 50, media_type: str | None = None) -> list[Track]:
         filter_sql = "" if media_type is None else "AND media_type = ?"
         params: tuple = (media_type, limit) if media_type is not None else (limit,)
@@ -1600,6 +1634,12 @@ def _row_matches_stat(row: sqlite3.Row, stat: os.stat_result) -> bool:
     )
 
 
+def _row_disc_id(row: sqlite3.Row) -> str:
+    if "disc_id" not in row.keys():
+        return ""
+    return str(row["disc_id"] or "").strip()
+
+
 def _read_tags(path: str) -> dict | None:
     try:
         f = MutagenFile(path, easy=True)
@@ -1625,6 +1665,9 @@ def _read_tags(path: str) -> dict | None:
                 return int(s[:4])
             except ValueError:
                 return 0
+    disc_id = first("musicbrainz_discid")
+    if not disc_id:
+        disc_id = first("MusicBrainz/Disc Id")
     return {
         "title": first("title") or Path(path).stem,
         "artist": first("artist"),
@@ -1638,6 +1681,7 @@ def _read_tags(path: str) -> dict | None:
         "duration": float(getattr(info, "length", 0.0) or 0.0),
         "bitrate": int(getattr(info, "bitrate", 0) or 0),
         "samplerate": int(getattr(info, "sample_rate", 0) or 0),
+        "disc_id": disc_id,
     }
 
 

@@ -14,6 +14,7 @@ from lyon.core.scrobbler import (
     _lbz_post,
     _MIN_TRACK_DURATION_S,
     _SCROBBLE_CAP_S,
+    _scrobbler_user_agent,
 )
 from lyon.core.settings import Settings
 
@@ -27,8 +28,9 @@ def _make_track(
     album="Album",
     duration=240.0,
     track_id=1,
+    playback_is_location=False,
+    is_library_item=True,
 ):
-    from dataclasses import replace
     from lyon.core.library import Track
 
     return Track(
@@ -43,6 +45,9 @@ def _make_track(
         year=2024,
         genre="",
         duration=duration,
+        playback_uri=f"https://stream.example.test/{title}" if playback_is_location else None,
+        playback_is_location=playback_is_location,
+        is_library_item=is_library_item,
     )
 
 
@@ -140,6 +145,7 @@ class TestScrobblerHttpHelpers:
             {
                 "Authorization": "Token token-123",
                 "Content-Type": "application/json",
+                "User-Agent": _scrobbler_user_agent(),
             },
             10,
         )]
@@ -153,6 +159,27 @@ class TestScrobblerHttpHelpers:
 
         assert _lastfm_post({"method": "auth.getToken"})["error"] == -1
         assert _lbz_post({"payload": []}, "token") is False
+
+
+class TestLastFmCredentials:
+    def test_module_level_credentials_configure_lastfm(self, monkeypatch):
+        import lyon.core.scrobbler as scrobbler
+
+        monkeypatch.setattr(scrobbler, "_LASTFM_API_KEY", "build-key")
+        monkeypatch.setattr(scrobbler, "_LASTFM_API_SECRET", "build-secret")
+
+        assert scrobbler.lastfm_api_configured() is True
+        assert scrobbler.lastfm_auth_url("token-123") == (
+            "https://www.last.fm/api/auth/?api_key=build-key&token=token-123"
+        )
+
+    def test_missing_secret_keeps_lastfm_unconfigured(self, monkeypatch):
+        import lyon.core.scrobbler as scrobbler
+
+        monkeypatch.setattr(scrobbler, "_LASTFM_API_KEY", "build-key")
+        monkeypatch.setattr(scrobbler, "_LASTFM_API_SECRET", "")
+
+        assert scrobbler.lastfm_api_configured() is False
 
 
 class TestScrobblerServiceInit:
@@ -187,28 +214,30 @@ class TestTrackChanged:
         self.svc._on_track_changed(None)
         assert self.svc._current_track is None
 
-    def test_now_playing_submitted_when_enabled(self):
+    def test_now_playing_submitted_when_enabled(self, monkeypatch):
+        import lyon.core.scrobbler as scrobbler
+        monkeypatch.setattr(scrobbler, "_LASTFM_API_KEY", "testkey")
+        monkeypatch.setattr(scrobbler, "_LASTFM_API_SECRET", "testsecret")
         settings = _make_settings(
             lastfm_scrobbling_enabled=True,
             lastfm_session_key="sk123",
         )
         self.svc.update_settings(settings)
-        with patch("lyon.core.scrobbler._LASTFM_API_KEY", "testkey"), \
-             patch("lyon.core.scrobbler._LASTFM_API_SECRET", "testsecret"), \
-             patch("lyon.core.scrobbler.QThreadPool") as mock_pool:
+        with patch("lyon.core.scrobbler.QThreadPool") as mock_pool:
             mock_pool.globalInstance.return_value = MagicMock()
             self.svc._on_track_changed(_make_track())
             mock_pool.globalInstance.return_value.start.assert_called_once()
 
-    def test_now_playing_not_submitted_without_lastfm_secret(self):
+    def test_now_playing_not_submitted_without_lastfm_secret(self, monkeypatch):
+        import lyon.core.scrobbler as scrobbler
+        monkeypatch.setattr(scrobbler, "_LASTFM_API_KEY", "testkey")
+        monkeypatch.setattr(scrobbler, "_LASTFM_API_SECRET", "")
         settings = _make_settings(
             lastfm_scrobbling_enabled=True,
             lastfm_session_key="sk123",
         )
         self.svc.update_settings(settings)
-        with patch("lyon.core.scrobbler._LASTFM_API_KEY", "testkey"), \
-             patch("lyon.core.scrobbler._LASTFM_API_SECRET", ""), \
-             patch("lyon.core.scrobbler.QThreadPool") as mock_pool:
+        with patch("lyon.core.scrobbler.QThreadPool") as mock_pool:
             mock_pool.globalInstance.return_value = MagicMock()
             self.svc._on_track_changed(_make_track())
             mock_pool.globalInstance.return_value.start.assert_not_called()
@@ -291,6 +320,40 @@ class TestPositionChanged:
             self.svc._on_position_changed(0, 0)
             mock.assert_not_called()
 
+    def test_durationless_stream_accumulates_until_stream_threshold(self):
+        self.svc._current_track = _make_track(
+            title="One More Time",
+            artist="Daft Punk",
+            duration=0.0,
+            playback_is_location=True,
+            is_library_item=False,
+        )
+        with patch.object(self.svc, "_submit_scrobble") as mock:
+            self._advance_to(_SCROBBLE_CAP_S * 1000, 0)
+            mock.assert_called_once()
+
+    def test_durationless_non_stream_ignored(self):
+        self.svc._current_track = _make_track(duration=0.0)
+        with patch.object(self.svc, "_submit_scrobble") as mock:
+            self._advance_to(_SCROBBLE_CAP_S * 1000, 0)
+            mock.assert_not_called()
+
+    def test_tiny_backward_seek_keeps_listened_time(self):
+        self.svc._last_position_ms = 240_000
+        self.svc._listened_ms = 100_000
+
+        self.svc._on_position_changed(239_999, 240_000)
+
+        assert self.svc._listened_ms == 100_000
+
+    def test_large_backward_seek_resets_listened_time(self):
+        self.svc._last_position_ms = 240_000
+        self.svc._listened_ms = 100_000
+
+        self.svc._on_position_changed(230_000, 240_000)
+
+        assert self.svc._listened_ms == 0
+
 
 class TestScrobblerUpdateSettings:
     def test_update_settings_replaces_reference(self):
@@ -303,3 +366,59 @@ class TestScrobblerUpdateSettings:
         svc.update_settings(new_settings)
         assert svc._settings is new_settings
         svc.deleteLater()
+
+
+class TestStreamPlaceholderGuard:
+    """Submissions must skip placeholder Track metadata used for raw URL plays."""
+
+    def setup_method(self):
+        self.player = _make_player()
+        self.svc = ScrobblerService(self.player, Settings())
+
+    def teardown_method(self):
+        self.svc.deleteLater()
+
+    def test_now_playing_skips_network_stream_placeholder(self, monkeypatch):
+        import lyon.core.scrobbler as scrobbler
+        monkeypatch.setattr(scrobbler, "_LASTFM_API_KEY", "testkey")
+        monkeypatch.setattr(scrobbler, "_LASTFM_API_SECRET", "testsecret")
+        settings = _make_settings(
+            lastfm_scrobbling_enabled=True,
+            lastfm_session_key="sk123",
+        )
+        self.svc.update_settings(settings)
+        track = _make_track(title="Sea Lyon Jazz", artist="Network Stream")
+        with patch("lyon.core.scrobbler.QThreadPool") as mock_pool:
+            mock_pool.globalInstance.return_value = MagicMock()
+            self.svc._on_track_changed(track)
+            mock_pool.globalInstance.return_value.start.assert_not_called()
+
+    def test_scrobble_skips_network_stream_placeholder(self, monkeypatch):
+        import lyon.core.scrobbler as scrobbler
+        monkeypatch.setattr(scrobbler, "_LASTFM_API_KEY", "testkey")
+        monkeypatch.setattr(scrobbler, "_LASTFM_API_SECRET", "testsecret")
+        settings = _make_settings(
+            lastfm_scrobbling_enabled=True,
+            lastfm_session_key="sk123",
+        )
+        self.svc.update_settings(settings)
+        track = _make_track(title="Sea Lyon Jazz", artist="Network Stream")
+        with patch("lyon.core.scrobbler.QThreadPool") as mock_pool:
+            mock_pool.globalInstance.return_value = MagicMock()
+            self.svc._submit_scrobble(track, int(time.time()))
+            mock_pool.globalInstance.return_value.start.assert_not_called()
+
+    def test_now_playing_submitted_once_metadata_arrives(self, monkeypatch):
+        import lyon.core.scrobbler as scrobbler
+        monkeypatch.setattr(scrobbler, "_LASTFM_API_KEY", "testkey")
+        monkeypatch.setattr(scrobbler, "_LASTFM_API_SECRET", "testsecret")
+        settings = _make_settings(
+            lastfm_scrobbling_enabled=True,
+            lastfm_session_key="sk123",
+        )
+        self.svc.update_settings(settings)
+        track = _make_track(title="One More Time", artist="Daft Punk")
+        with patch("lyon.core.scrobbler.QThreadPool") as mock_pool:
+            mock_pool.globalInstance.return_value = MagicMock()
+            self.svc._on_track_changed(track)
+            mock_pool.globalInstance.return_value.start.assert_called_once()
