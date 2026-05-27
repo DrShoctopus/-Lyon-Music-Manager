@@ -16,7 +16,7 @@ from ipaddress import ip_address
 from pathlib import Path
 
 from .dlna_server import _local_ip
-from .settings import app_data_dir, bundled_bin_dir
+from .settings import app_data_dir, bundled_bin_dir, bundled_frameworks_dir
 
 # Settings keys whose values are secrets and must be redacted from any
 # diagnostics bundle a user might share with support.
@@ -63,6 +63,17 @@ def _bundled_tool(*names: str) -> Path | None:
     return None
 
 
+def _bundled_framework(*names: str) -> Path | None:
+    frameworks = bundled_frameworks_dir()
+    if frameworks is None:
+        return None
+    for name in names:
+        candidate = frameworks / name
+        if candidate.exists():
+            return candidate
+    return None
+
+
 def _path_tool(*names: str) -> str | None:
     for name in names:
         found = shutil.which(name)
@@ -101,12 +112,42 @@ def check_ffmpeg() -> DependencyCheck:
 
 
 def check_libdiscid() -> DependencyCheck:
+    if sys.platform == "darwin":
+        bundled = _bundled_framework("libdiscid.0.dylib", "libdiscid.dylib")
+        python_pkg = _has_module("discid")
+        if bundled and python_pkg:
+            return DependencyCheck(
+                "libdiscid / discid",
+                DiagnosticStatus.OK,
+                f"Found discid Python package and bundled dylib at {bundled}.",
+                "No action needed.",
+            )
+        if bundled:
+            return DependencyCheck(
+                "libdiscid / discid",
+                DiagnosticStatus.WARNING,
+                f"Found {bundled}, but the discid Python package is not importable.",
+                "Install the discid Python package in this environment.",
+            )
+        if python_pkg:
+            return DependencyCheck(
+                "libdiscid / discid",
+                DiagnosticStatus.WARNING,
+                "The discid Python package is installed, but no bundled libdiscid dylib was found.",
+                "Bundle libdiscid.0.dylib under Contents/Frameworks for packaged macOS builds.",
+            )
+        return DependencyCheck(
+            "libdiscid / discid",
+            DiagnosticStatus.MISSING,
+            "Audio-CD detection needs the discid Python package and bundled libdiscid dylib.",
+            "Install discid and bundle libdiscid.0.dylib under Contents/Frameworks.",
+        )
     if sys.platform != "win32":
         return DependencyCheck(
             "libdiscid / discid",
             DiagnosticStatus.WARNING,
-            "Audio-CD detection is Windows-focused and disabled on this platform.",
-            "Run on Windows with discid installed and discid.dll/libdiscid.dll in bin for CD support.",
+            "Audio-CD detection is not implemented on this platform.",
+            "Run on Windows or macOS with the platform-specific disc dependencies bundled.",
         )
     bundled = _bundled_tool("discid.dll", "libdiscid.dll")
     python_pkg = _has_module("discid")
@@ -141,18 +182,28 @@ def check_libdiscid() -> DependencyCheck:
 
 def check_vlc() -> DependencyCheck:
     python_pkg = _has_module("vlc")
-    vlc_dir = bundled_bin_dir() / "vlc"
-    bundled_runtime = (
-        (vlc_dir / "plugins").exists()
-        and any((vlc_dir / name).exists() for name in ("libvlc.dll", "libvlc.so", "libvlc.dylib"))
-    )
+    if sys.platform == "darwin":
+        frameworks = bundled_frameworks_dir()
+        bundled_runtime_path = frameworks
+        bundled_runtime = bool(
+            frameworks
+            and (frameworks / "plugins").exists()
+            and (frameworks / "libvlc.dylib").exists()
+        )
+    else:
+        vlc_dir = bundled_bin_dir() / "vlc"
+        bundled_runtime_path = vlc_dir
+        bundled_runtime = (
+            (vlc_dir / "plugins").exists()
+            and any((vlc_dir / name).exists() for name in ("libvlc.dll", "libvlc.so", "libvlc.dylib"))
+        )
     system_vlc = _path_tool("vlc.exe", "vlc")
     system_libvlc = _system_libvlc_present()
     if python_pkg and bundled_runtime:
         return DependencyCheck(
             "VLC playback backend",
             DiagnosticStatus.OK,
-            f"Found python-vlc and bundled VLC runtime at {vlc_dir}.",
+            f"Found python-vlc and bundled VLC runtime at {bundled_runtime_path}.",
             "No action needed.",
         )
     if python_pkg and system_libvlc:
@@ -167,20 +218,20 @@ def check_vlc() -> DependencyCheck:
             "VLC playback backend",
             DiagnosticStatus.WARNING,
             f"Found python-vlc and the VLC app at {system_vlc}, but libVLC was not found by the dynamic linker.",
-            "Bundle VLC under bin/vlc or ensure libVLC is discoverable so EQ playback can use libVLC.",
+            "Bundle VLC in the app runtime or ensure libVLC is discoverable so EQ playback can use libVLC.",
         )
     if python_pkg:
         return DependencyCheck(
             "VLC playback backend",
             DiagnosticStatus.WARNING,
             "python-vlc is installed, but a bundled/system libVLC runtime was not found.",
-            "Bundle VLC under bin/vlc or install libVLC so equalizer playback can use libVLC.",
+            "Bundle VLC in the app runtime or install libVLC so equalizer playback can use libVLC.",
         )
     return DependencyCheck(
         "VLC playback backend",
         DiagnosticStatus.WARNING,
         "python-vlc is not importable; local audio playback, video playback, and EQ require VLC/libVLC.",
-        "Install python-vlc and provide a VLC runtime under bin/vlc for playback support.",
+        "Install python-vlc and provide a VLC runtime for playback support.",
     )
 
 

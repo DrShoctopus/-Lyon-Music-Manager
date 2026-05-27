@@ -47,6 +47,22 @@ APPCAST_NEWER = """\
 
 APPCAST_SAME = APPCAST_NEWER.replace(">1.0.1<", ">1.0.0<").replace("1.0.1-Setup", "1.0.0-Setup")
 APPCAST_OLDER = APPCAST_NEWER.replace(">1.0.1<", ">0.9.0<").replace("1.0.1-Setup", "0.9.0-Setup")
+APPCAST_MULTI_OS = APPCAST_NEWER.replace(
+    """      <enclosure url="https://example.test/SeaLyonMediaManager-1.0.1-Setup.exe"
+                 sparkle:version="1.0.1"
+                 length="123456"
+                 type="application/octet-stream" />""",
+    """      <enclosure url="https://example.test/SeaLyonMediaManager-1.0.1-Setup.exe"
+                 sparkle:version="1.0.1"
+                 length="123456"
+                 type="application/octet-stream"
+                 sparkle:os="windows" />
+      <enclosure url="https://example.test/SeaLyonMediaManager-1.0.1-arm64.dmg"
+                 sparkle:version="1.0.1"
+                 length="456789"
+                 type="application/octet-stream"
+                 sparkle:os="macos" />""",
+)
 
 APPCAST_EMPTY = """\
 <?xml version="1.0" encoding="UTF-8"?>
@@ -115,7 +131,9 @@ def test_is_newer():
 # ---------------------------------------------------------------------------
 
 
-def test_parse_appcast_newer_release():
+def test_parse_appcast_newer_release(monkeypatch):
+    monkeypatch.setattr(updater.sys, "platform", "win32")
+
     info = parse_appcast(APPCAST_NEWER)
     assert isinstance(info, UpdateInfo)
     assert info.version == "1.0.1"
@@ -123,6 +141,33 @@ def test_parse_appcast_newer_release():
     assert info.download_url == "https://example.test/SeaLyonMediaManager-1.0.1-Setup.exe"
     assert info.release_url == "https://github.com/DrShoctopus/Sea-Lyon-Media-Manager/releases/tag/v1.0.1"
     assert info.minimum_system_version == "10.0"
+
+
+def test_parse_appcast_selects_macos_enclosure_on_darwin(monkeypatch):
+    monkeypatch.setattr(updater.sys, "platform", "darwin")
+
+    info = parse_appcast(APPCAST_MULTI_OS)
+
+    assert isinstance(info, UpdateInfo)
+    assert info.download_url == "https://example.test/SeaLyonMediaManager-1.0.1-arm64.dmg"
+
+
+def test_parse_appcast_selects_windows_enclosure_on_windows(monkeypatch):
+    monkeypatch.setattr(updater.sys, "platform", "win32")
+
+    info = parse_appcast(APPCAST_MULTI_OS)
+
+    assert isinstance(info, UpdateInfo)
+    assert info.download_url == "https://example.test/SeaLyonMediaManager-1.0.1-Setup.exe"
+
+
+def test_parse_appcast_does_not_offer_windows_installer_on_macos(monkeypatch):
+    monkeypatch.setattr(updater.sys, "platform", "darwin")
+
+    info = parse_appcast(APPCAST_NEWER)
+
+    assert isinstance(info, UpdateInfo)
+    assert info.download_url == ""
 
 
 def test_parse_appcast_empty_channel_returns_none():

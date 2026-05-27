@@ -1,6 +1,7 @@
 """Rip-from-CD view: detect disc, look up metadata, kick off rip."""
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QRectF, QThread, QTimer, Signal
@@ -460,10 +461,15 @@ class RipperView(QWidget):
         self.refresh_btn.setEnabled(True)
         self._disc_reader = None
         if toc is None:
+            discid_location = (
+                "libdiscid.0.dylib is bundled in Contents/Frameworks"
+                if sys.platform == "darwin"
+                else "libdiscid.dll is bundled in the application's bin/ folder"
+            )
             QMessageBox.warning(
                 self, "No disc",
                 "Couldn't read a disc in that drive. Make sure an audio CD is inserted, "
-                "and that libdiscid.dll is bundled in the application's bin/ folder.",
+                f"and that {discid_location}.",
             )
             self.status_label.setText("No audio disc detected.")
             return

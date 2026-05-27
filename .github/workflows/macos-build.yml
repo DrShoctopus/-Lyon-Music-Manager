@@ -128,3 +128,58 @@ jobs:
           files: |
             dist/*.dmg
             dist/*-macos-SHA256SUMS.txt
+
+      - name: Generate multi-OS appcast.xml
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ver=$(python -c "from lyon import __version__; print(__version__)")
+          tag="v${ver}"
+          repo="${{ github.repository }}"
+          win_asset="SeaLyonMediaManager-${ver}-Setup.exe"
+          mac_asset="SeaLyonMediaManager-${ver}-arm64.dmg"
+          mac_path="dist/${mac_asset}"
+          mac_size=$(stat -f%z "$mac_path")
+
+          win_size=""
+          for _ in {1..60}; do
+            release_json=$(gh api "repos/${repo}/releases/tags/${tag}" 2>/dev/null || true)
+            if [ -n "$release_json" ]; then
+              win_size=$(printf '%s' "$release_json" | python -c '
+          import json, sys
+          name = sys.argv[1]
+          try:
+              data = json.load(sys.stdin)
+          except json.JSONDecodeError:
+              sys.exit(0)
+          for asset in data.get("assets", []):
+              if asset.get("name") == name:
+                  print(asset.get("size", ""))
+                  break
+          ' "$win_asset")
+            fi
+            if [ -n "$win_size" ]; then
+              break
+            fi
+            echo "Waiting for Windows installer asset ${win_asset} before generating appcast..."
+            sleep 30
+          done
+          if [ -z "$win_size" ]; then
+            echo "Timed out waiting for ${win_asset}; refusing to publish macOS appcast without Windows enclosure." >&2
+            exit 1
+          fi
+
+          curl -fsSL \
+            "https://drshoctopus.github.io/Sea-Lyon-Media-Manager/appcast.xml" \
+            -o dist/appcast.xml || true
+          python scripts/generate-appcast.py \
+            --version "$ver" \
+            --installer-url "https://github.com/${repo}/releases/download/${tag}/${win_asset}" \
+            --installer-size "$win_size" \
+            --macos-installer-url "https://github.com/${repo}/releases/download/${tag}/${mac_asset}" \
+            --macos-installer-size "$mac_size" \
+            --release-url "https://github.com/${repo}/releases/tag/${tag}" \
+            --output dist/appcast.xml
+          gh release upload "$tag" dist/appcast.xml --clobber

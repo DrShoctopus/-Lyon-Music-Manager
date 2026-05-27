@@ -48,12 +48,12 @@ def eject_drive(drive: MacOpticalDrive) -> bool:
         return False
     try:
         subprocess.run(
-            ["/usr/bin/drutil", "tray", "eject"],
+            ["/usr/sbin/diskutil", "eject", drive.device_path],
             check=True, timeout=15,
         )
         return True
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-        LOG.warning("drutil eject failed for %s: %s", drive.bsd_name, exc)
+        LOG.warning("diskutil eject failed for %s: %s", drive.bsd_name, exc)
         return False
 
 

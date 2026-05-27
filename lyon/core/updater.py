@@ -133,6 +133,15 @@ def _first_item(root: ET.Element) -> ET.Element | None:
     return channel.find("item")
 
 
+def _platform_from_download_url(url: str) -> str:
+    lower = url.strip().lower()
+    if lower.endswith((".dmg", ".pkg")):
+        return "macos"
+    if lower.endswith((".exe", ".msi")):
+        return "windows"
+    return ""
+
+
 def _best_enclosure(item: ET.Element) -> ET.Element | None:
     """Return the enclosure matching the current OS, or fall back to the first one.
 
@@ -148,14 +157,20 @@ def _best_enclosure(item: ET.Element) -> ET.Element | None:
     for enc in enclosures:
         if enc.attrib.get(_SPARKLE_OS_ATTR, "").strip().lower() == want_os:
             return enc
+    if any(enc.attrib.get(_SPARKLE_OS_ATTR, "").strip() for enc in enclosures):
+        return None
     # Fall back: enclosure whose URL ends with .dmg/.exe
     ext = ".dmg" if sys.platform == "darwin" else ".exe"
     for enc in enclosures:
         url = enc.attrib.get("url", "")
         if url.lower().endswith(ext):
             return enc
-    # Last resort: first enclosure
-    return enclosures[0] if enclosures else None
+    # Last resort: keep legacy untagged feeds, but do not cross OS installers.
+    for enc in enclosures:
+        url_os = _platform_from_download_url(enc.attrib.get("url", ""))
+        if not url_os or url_os == want_os:
+            return enc
+    return None
 
 
 def parse_appcast(text: str) -> UpdateInfo | None:
@@ -188,6 +203,10 @@ def parse_appcast(text: str) -> UpdateInfo | None:
     title = _text(item.find("title")) or f"Version {version}"
     description = _text(item.find("description"))
     minimum = _text(item.find(f"{{{SPARKLE_NS}}}minimumSystemVersion"))
+    if not minimum and enclosure is not None:
+        minimum = (
+            enclosure.attrib.get(f"{{{SPARKLE_NS}}}minimumSystemVersion") or ""
+        ).strip()
 
     return UpdateInfo(
         version=version,

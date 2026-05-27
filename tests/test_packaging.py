@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import runpy
+import re
 import sys
 import types
 from pathlib import Path
+
+import pytest
 
 
 def test_pyinstaller_spec_resolves_repo_root(monkeypatch):
@@ -57,3 +60,13 @@ def test_pyinstaller_spec_resolves_repo_root(monkeypatch):
         str(repo / "lyon" / "ui" / "assets"),
         str(Path("lyon") / "ui" / "assets"),
     ) in captured["datas"]
+
+
+@pytest.mark.parametrize("lockfile", ["requirements.txt", "requirements-build.txt"])
+def test_lockfiles_include_macos_runtime_dependencies(lockfile):
+    repo = Path(__file__).resolve().parents[1]
+    text = (repo / lockfile).read_text(encoding="utf-8").casefold()
+
+    assert re.search(r"discid==1\.3\.0 ; .*sys_platform == 'darwin'", text)
+    assert "pyobjc-framework-cocoa==10.3.2 ; sys_platform == 'darwin'" in text
+    assert "pyobjc-framework-diskarbitration==10.3.2 ; sys_platform == 'darwin'" in text
