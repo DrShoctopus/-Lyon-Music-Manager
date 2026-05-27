@@ -182,6 +182,27 @@ class AboutDialog(QDialog):
         )
         count_label.setStyleSheet("color: #888;")
         layout.addWidget(count_label)
+
+        # Optional support / donations link — opens externally so PRIVACY.md
+        # stays accurate (no in-app network call).
+        support_row = QHBoxLayout()
+        support_label = QLabel(
+            "Sea Lyon is free and open-source under the MIT License. If it "
+            "saves you a few clicks, you can support development:",
+            widget,
+        )
+        support_label.setWordWrap(True)
+        support_label.setStyleSheet("color: #888;")
+        layout.addWidget(support_label)
+
+        kofi_btn = QPushButton("☕ Support on Ko-fi", widget)
+        kofi_btn.setToolTip("Opens https://ko-fi.com/shoctopus019 in your browser")
+        kofi_btn.clicked.connect(
+            lambda: QDesktopServices.openUrl(QUrl("https://ko-fi.com/shoctopus019"))
+        )
+        support_row.addWidget(kofi_btn)
+        support_row.addStretch(1)
+        layout.addLayout(support_row)
         return widget
 
     def _build_licenses_tab(self) -> QWidget:

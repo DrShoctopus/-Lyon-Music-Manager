@@ -15,6 +15,17 @@ Archive, LRCLIB, and libdiscid.
 **Current version:** `0.9.0-rc1` (LMM-DEV) — see [`lyon/__init__.py`](lyon/__init__.py).
 **Targeted public release:** `1.0.0` — see [`IMPLEMENTATION_PLAN_1.0.md`](IMPLEMENTATION_PLAN_1.0.md).
 
+## Support
+
+Sea Lyon is free and open-source under the [MIT License](LICENSE).
+If you'd like to support development, you can buy me a coffee:
+
+[![ko-fi](https://img.shields.io/badge/Support%20on-Ko--fi-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/shoctopus019)
+
+A "Support on Ko-fi" link also lives in the app under
+**Help → About → Acknowledgements**. The app makes no network calls
+to Ko-fi itself; clicking the link opens your default browser.
+
 ## Downloads & Installation
 
 Public installer downloads will appear on the
