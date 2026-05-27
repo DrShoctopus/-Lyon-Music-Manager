@@ -1,12 +1,21 @@
 # Sea Lyon Media Manager — macOS Apple Silicon Implementation Plan
 
-**Target:** macOS 11+ on Apple Silicon (arm64), shipped as a single self-contained `.app` inside a signed/notarized `.dmg`.
+**Target:** **100% Apple Silicon (arm64) only.** macOS 11+ on M1/M2/M3/M4. **No Intel Mac support, not even via Rosetta** — the shipped Mach-O binaries contain zero `x86_64` slices, so the app will not launch on Intel hardware. The deliverable is a single self-contained `.app` inside a signed/notarized `.dmg`.
 **Source branch:** `LMM-DEV` → continue work on `claude/macos-apple-silicon-port-SXySX` (single codebase).
 **Differs from the audit report on three points (per project owner):**
 
 1. **Disc functionality is included** on macOS — full detection, playback, and ripping.
 2. **Disc and Rip tabs are hidden only when no drive is connected** (live detection, not hard-disable).
 3. **The DMG is one inclusive package** — libVLC, ffmpeg, fpcalc, and libdiscid all live inside the `.app` bundle. No Homebrew prerequisite, no separate VLC.app dependency.
+
+### Architecture rules (binding for every phase)
+
+- **Build host must be Apple Silicon** (`macos-14` runner in CI, M1+ on developer machines). No cross-compilation from Intel.
+- **Python must be arm64-native**, not running under Rosetta. CI uses `actions/setup-python@v5` with `architecture: arm64`; locally use `python -c "import platform; assert platform.machine() == 'arm64'"` before any work.
+- **PyInstaller is invoked with `--target-arch arm64`** so it refuses to produce a universal2 binary.
+- **Universal2 wheels (PyObjC, PySide6, etc.) are accepted at install time but thinned to arm64 in the bundle.** A mandatory post-build step uses `lipo -thin arm64` on every Mach-O file inside the `.app`, then `lipo -archs` verifies the final result equals exactly `arm64` — anything else fails the build.
+- **`LSMinimumSystemVersion = 11.0`** in Info.plist (macOS Big Sur, the first arm64-capable macOS).
+- **DMG file name carries the architecture**: `SeaLyonMediaManager-<ver>-arm64.dmg`. No `-universal` or `-x86_64` variants are ever produced.
 
 ---
 
@@ -31,10 +40,11 @@
 
 ### 0.3 Local dev environment (each engineer)
 
-- macOS 14+ on an M1/M2/M3 Mac (you need an arm64 host).
+- macOS 14+ on an M1/M2/M3/M4 Mac. **Intel Macs cannot build or run this port** — there is no cross-compile path.
 - Xcode Command Line Tools: `xcode-select --install`.
-- Python 3.11 from python.org universal2 installer (or via `pyenv install 3.11`).
+- Python 3.11 arm64-native: either `pyenv install 3.11` on an arm64 shell, or the python.org universal2 installer launched without Rosetta. Verify with `python -c "import platform; assert platform.machine()=='arm64'"`.
 - `brew install create-dmg dylibbundler` (build-time tools; not bundled into the app).
+- When running PyInstaller manually for iteration: `python -m PyInstaller --noconfirm --target-arch arm64 build/lyon.spec`. The `--target-arch arm64` flag is mandatory — without it PyInstaller produces a universal2 binary on a universal Python.
 
 ### 0.4 Test matrix to define up-front
 
@@ -157,7 +167,7 @@ pyobjc-framework-IOKit==10.3.1;     sys_platform == "darwin"
 pyobjc-framework-DiskArbitration==10.3.1; sys_platform == "darwin"
 ```
 
-Re-pin compile with `pip-compile --output-file requirements.txt requirements.in`. Verify on macOS 14 arm64 that all wheels resolve (PyObjC ships universal2 wheels).
+Re-pin compile with `pip-compile --output-file requirements.txt requirements.in` **on an arm64 host**. PyObjC and PySide6 wheels arrive as `*-macosx_11_0_universal2.whl` (they contain both arm64 and x86_64 slices); installing them is fine — the x86_64 halves are stripped from the final bundle in Phase 6.3. Add a build-time assert to `requirements-build.txt` resolution: `python -c "import platform; assert platform.machine() == 'arm64', 'Apple Silicon required'"`.
 
 ### 1.5 Acceptance for Phase 1
 
@@ -299,23 +309,40 @@ _preload_libdiscid_darwin()
 
 Run this *before* the `import discid` happens elsewhere; placing it at module top of `cd_detect.py` (before line 11) is sufficient because every disc code path goes through `cd_detect`.
 
-### 2.6 Fetching the binaries
+### 2.6 Fetching the binaries — arm64-only sources
 
-Each binary needs an arm64 build. We download all of these in CI (Phase 7), not by hand, so this section just enumerates **what** to fetch and **how** to verify:
+Every external binary we bundle must be **arm64-only** (or a universal binary that gets thinned in Phase 6.3). We download all of these in CI (Phase 7); this section enumerates **what** to fetch and **how** to verify arch:
 
-| Binary | Source | Verify |
+| Binary | Source (arm64) | Verify |
 |---|---|---|
-| ffmpeg | `https://evermeet.cx/ffmpeg/getrelease/zip` (static arm64; includes libcdio) | SHA-256 from `…/getrelease/zip/sha` |
+| ffmpeg | `https://evermeet.cx/ffmpeg/ffmpeg-7.1.1.zip` — pick the arm64 release explicitly, not the Intel build. evermeet.cx publishes separate Intel and Apple Silicon archives. | SHA-256 from `evermeet.cx/ffmpeg/info/ffmpeg/release` JSON |
 | fpcalc | `https://github.com/acoustid/chromaprint/releases/download/v1.5.1/chromaprint-fpcalc-1.5.1-macos-arm64.tar.gz` | SHA-256 from GitHub release |
-| libvlc + plugins | `https://download.videolan.org/pub/videolan/vlc/3.0.21/macosx/vlc-3.0.21-arm64.dmg` — mount, copy `VLC.app/Contents/MacOS/lib/libvlc*.dylib` and `…/plugins/` | SHA-256 from `.dmg.sha256` |
-| libdiscid | build from source (`make`), or extract from `https://ftp.musicbrainz.org/pub/musicbrainz/libdiscid/libdiscid-0.6.4.tar.gz` cross-compiled for arm64 | SHA-256 of release tarball |
+| libvlc + plugins | `https://download.videolan.org/pub/videolan/vlc/3.0.21/macosx/vlc-3.0.21-arm64.dmg` — VLC publishes a dedicated arm64 build since 3.0.18. **Do not use** `vlc-3.0.21-intel64.dmg`. | SHA-256 from `vlc-3.0.21-arm64.dmg.sha256` |
+| libdiscid | Build from source on the macos-14 arm64 runner: `./configure --host=arm64-apple-darwin && make`. Cache the resulting `libdiscid.0.dylib` keyed by version. | SHA-256 of upstream tarball `libdiscid-0.6.4.tar.gz` |
 
-Confirm each binary is **arm64** before bundling:
+**Mandatory arch verification after each download** — fail the build if any slice is not arm64:
 
 ```bash
-file Contents/MacOS/bin/ffmpeg     # expects "Mach-O 64-bit executable arm64"
-file Contents/Frameworks/libvlc.dylib  # expects "Mach-O 64-bit dynamically linked shared library arm64"
+verify_arm64_only() {
+    local f="$1"
+    local archs
+    archs=$(lipo -archs "$f" 2>/dev/null || echo "unknown")
+    if [ "$archs" != "arm64" ]; then
+        echo "FAIL: $f arch is '$archs' (expected exactly 'arm64')"
+        exit 1
+    fi
+}
+
+verify_arm64_only vendor-mac/ffmpeg
+verify_arm64_only vendor-mac/fpcalc
+verify_arm64_only vendor-mac/libdiscid.0.dylib
+# libvlc and plugins: verify after extraction from the dmg
+for f in vendor-mac/vlc/lib/libvlc.dylib vendor-mac/vlc/lib/libvlccore.dylib vendor-mac/vlc/plugins/**/*.dylib; do
+    verify_arm64_only "$f"
+done
 ```
+
+The VLC `arm64.dmg` ships arm64-only dylibs by design — but verifying guarantees the upstream didn't silently switch to universal2.
 
 ### 2.7 Acceptance for Phase 2
 
@@ -793,17 +820,61 @@ for plugin in "$FW/plugins"/**/*.dylib; do
         "$plugin" 2>/dev/null || true
 done
 
-# Verify everything's arm64 only.
-for f in "$FW"/*.dylib "$BIN"/ffmpeg "$BIN"/fpcalc; do
-    arch=$(lipo -archs "$f" 2>/dev/null || file "$f")
-    case "$arch" in *arm64*) ;;
-        *) echo "FAIL: $f is not arm64 ($arch)"; exit 1;;
+# ---------------------------------------------------------------------------
+# Thin every universal binary inside the bundle down to arm64-only.
+# PyObjC and PySide6 wheels are universal2, so PyInstaller drags in dylibs and
+# .so extensions that contain x86_64 slices. We strip those slices here so the
+# .app physically cannot launch on Intel Macs (not even under Rosetta).
+# ---------------------------------------------------------------------------
+echo "Thinning universal binaries to arm64…"
+find "$APP" -type f \( -name "*.dylib" -o -name "*.so" \) -print0 |
+while IFS= read -r -d '' f; do
+    archs=$(lipo -archs "$f" 2>/dev/null || true)
+    case "$archs" in
+        "arm64") ;;                            # already arm64-only, skip
+        *arm64*)                               # universal -> thin to arm64
+            tmp="${f}.arm64.tmp"
+            lipo -thin arm64 "$f" -output "$tmp"
+            mv "$tmp" "$f"
+            ;;
+        "")  ;;                                # not a Mach-O (e.g. Python .so on Linux); skip
+        *)
+            echo "FAIL: $f is '$archs' with no arm64 slice"; exit 1 ;;
     esac
 done
-echo "Bundle staging complete."
+
+# Also thin the main app executable and any helper executables.
+for f in "$APP/Contents/MacOS/LyonMusicManager" "$BIN/ffmpeg" "$BIN/fpcalc"; do
+    archs=$(lipo -archs "$f" 2>/dev/null || true)
+    case "$archs" in
+        "arm64") ;;
+        *arm64*) tmp="${f}.arm64.tmp"; lipo -thin arm64 "$f" -output "$tmp"; mv "$tmp" "$f" ;;
+        *) echo "FAIL: $f arch '$archs' (expected arm64)"; exit 1 ;;
+    esac
+done
+
+# Hard verification: NOTHING in the bundle may contain an x86_64 slice.
+echo "Verifying bundle is 100% arm64…"
+violations=0
+while IFS= read -r -d '' f; do
+    if file "$f" 2>/dev/null | grep -q "Mach-O"; then
+        archs=$(lipo -archs "$f" 2>/dev/null || echo "")
+        if [ "$archs" != "arm64" ]; then
+            echo "FAIL ($archs): $f"
+            violations=$((violations + 1))
+        fi
+    fi
+done < <(find "$APP" -type f -print0)
+if [ "$violations" -gt 0 ]; then
+    echo "Bundle contains $violations non-arm64 binaries — refusing to ship."
+    exit 1
+fi
+echo "Bundle staging complete: every Mach-O is arm64-only."
 ```
 
 > `install_name_tool` rewriting is the part that most often goes wrong. After this step, run `otool -L "$FW/libvlc.dylib"` and confirm the only paths shown are `@rpath/*`, `/usr/lib/*`, and `/System/Library/*`. Any absolute path to `/opt/homebrew/*` or the build server's filesystem must be rewritten.
+
+> **Why this matters:** without the thinning loop, the `.app` would contain ~200 universal dylibs from PyObjC, PySide6, and CPython itself. Each carries a full x86_64 slice that would let macOS launch the app under Rosetta on Intel hardware, against our explicit "100% Apple Silicon" guarantee. The `file` + `lipo -archs` check above is the gate that makes Intel launch physically impossible.
 
 ### 6.4 Entitlements file: `build/lyon.entitlements`
 
@@ -897,10 +968,12 @@ xcrun stapler staple "$DMG_OUT"
 
 ### 6.8 Acceptance for Phase 6
 
-- The DMG is ~150–180 MB (libVLC dominates).
+- The DMG is ~120-150 MB (smaller than universal2 because all x86_64 slices are stripped).
 - Double-click DMG → drag .app to /Applications → launch from /Applications → no Gatekeeper warning.
 - `codesign --verify --deep --strict "$APP"` exits 0.
 - `spctl --assess --type execute "$APP"` reports "accepted source=Notarized Developer ID".
+- **Architecture audit passes:** `find "$APP" -type f -exec sh -c 'file "$1" | grep -q Mach-O && lipo -archs "$1"' _ {} \; | sort -u` outputs exactly one line: `arm64`. No `x86_64`, no `Mach-O universal`.
+- **Intel-launch sanity test:** the bundle, when copied to an Intel Mac, refuses to launch with "The application can't be opened" (this is the macOS guarantee when no x86_64 slice exists).
 - All of Phase 1–5 acceptance criteria still hold for the installed copy from the DMG.
 
 ---
@@ -942,6 +1015,13 @@ jobs:
         with: { python-version: "3.11", architecture: "arm64", cache: "pip",
                 cache-dependency-path: requirements-build.txt }
 
+      - name: Confirm arm64 host + Python
+        run: |
+          hw=$(uname -m)
+          py=$(python -c "import platform; print(platform.machine())")
+          [ "$hw" = "arm64" ] || { echo "Host is $hw, expected arm64"; exit 1; }
+          [ "$py" = "arm64" ] || { echo "Python is $py, expected arm64 (not Rosetta)"; exit 1; }
+
       - name: Install Python deps
         run: python -m pip install -r requirements-build.txt
 
@@ -972,8 +1052,8 @@ jobs:
           printf 'LASTFM_API_KEY = "%s"\nLASTFM_API_SECRET = "%s"\n' \
             "$LASTFM_KEY" "$LASTFM_SECRET" > lyon/core/_secrets.py
 
-      - name: PyInstaller
-        run: python -m PyInstaller --noconfirm build/lyon.spec
+      - name: PyInstaller (arm64-only)
+        run: python -m PyInstaller --noconfirm --target-arch arm64 build/lyon.spec
 
       - name: Inject libVLC + plugins + ffmpeg + fpcalc + libdiscid
         env:
@@ -1134,10 +1214,12 @@ Bump `__version__` in `lyon/__init__.py` (e.g. `1.1.0`). Add a CHANGELOG section
 
 Add a `## macOS` section to the release notes describing:
 
-- Apple Silicon only (no Intel Mac build).
-- Minimum macOS 11.
-- All binaries bundled — no Homebrew/VLC.app prereq.
+- **Apple Silicon (arm64) only.** Requires an M1, M2, M3, M4 (or later) Mac. **Intel Macs are not supported, even via Rosetta** — the binaries contain no x86_64 slices and will refuse to launch on Intel hardware.
+- Minimum macOS 11 (Big Sur).
+- All binaries bundled — no Homebrew, no separate VLC.app install.
 - Optical disc support is automatic; Disc/Rip tabs appear when a drive is attached.
+
+Also update `README.md` "System Requirements" with the same arm64-only language so users self-select before downloading.
 
 ### 9.5 Post-release watch
 
@@ -1151,18 +1233,19 @@ For one week after release, watch for:
 
 ## Summary Checklist
 
-- [ ] **Phase 0** — Apple Developer cert, GitHub secrets, test hardware booked.
+- [ ] **Phase 0** — Apple Developer cert, GitHub secrets, test hardware booked. Arm64-only host confirmed.
 - [ ] **Phase 1** — `app_data_dir`, font, window-mode, `requirements.in` deps.
-- [ ] **Phase 2** — libVLC + ffmpeg + fpcalc + libdiscid runtime discovery.
+- [ ] **Phase 2** — libVLC + ffmpeg + fpcalc + libdiscid runtime discovery, arm64-only sources verified.
 - [ ] **Phase 3** — `disc_macos.py`, `disc_watcher.py`, IOKit/DiskArbitration, tab gating.
 - [ ] **Phase 4** — ffmpeg+libcdio ripping; `cdda:///dev/disk*` playback; eject via drutil.
 - [ ] **Phase 5** — QSS font fallback, NativeText shortcut display, menu roles, dynamic tabs.
-- [ ] **Phase 6** — `.icns`, BUNDLE block, native-binary injection, codesign, notarize, DMG.
-- [ ] **Phase 7** — `macos-build.yml` workflow, 7 build scripts.
+- [ ] **Phase 6** — `.icns`, BUNDLE block, native-binary injection, `lipo` thinning to arm64, codesign, notarize, DMG.
+- [ ] **Phase 6 arch gate** — every Mach-O in the bundle returns `arm64` from `lipo -archs`. Zero x86_64 slices anywhere.
+- [ ] **Phase 7** — `macos-build.yml` workflow with `--target-arch arm64`, runner arch assertions, 7 build scripts.
 - [ ] **Phase 8** — Per-OS appcast enclosures, client-side filter, dialog copy.
-- [ ] **Phase 9** — QA matrix, version bump, tag, ship.
+- [ ] **Phase 9** — QA matrix on real arm64 hardware, version bump, tag, ship. README + release notes call out Apple Silicon-only.
 
-When every box is ticked, you have an Apple Silicon build that behaves like a native Mac app, includes everything a user needs in a single signed DMG, supports CD/DVD drives when they're plugged in and hides the related UI when they aren't — without forking the Windows codebase.
+When every box is ticked, you have an Apple Silicon build that behaves like a native Mac app, contains zero x86_64 code, includes everything a user needs in a single signed DMG, supports CD/DVD drives when they're plugged in and hides the related UI when they aren't — without forking the Windows codebase.
 
 ---
 
