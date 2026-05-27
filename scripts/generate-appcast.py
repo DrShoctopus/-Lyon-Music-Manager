@@ -152,6 +152,27 @@ def _build_appcast_xml(
     )
 
 
+def _enclosure_xml(
+    url: str,
+    version: str,
+    size: int,
+    *,
+    os_tag: str | None = None,
+    minimum_system_version: str = "",
+) -> str:
+    attrs = (
+        f'url="{html.escape(url, quote=True)}" '
+        f'sparkle:version="{html.escape(version)}" '
+        f'length="{int(size)}" '
+        'type="application/octet-stream"'
+    )
+    if os_tag:
+        attrs += f' sparkle:os="{html.escape(os_tag)}"'
+    if minimum_system_version:
+        attrs += f' sparkle:minimumSystemVersion="{html.escape(minimum_system_version)}"'
+    return f'      <enclosure {attrs} />'
+
+
 def _serialise_item(
     *,
     version: str,
@@ -162,21 +183,36 @@ def _serialise_item(
     installer_size: int,
     minimum_system_version: str,
     release_notes_html: str,
+    macos_installer_url: str = "",
+    macos_installer_size: int = 0,
 ) -> str:
+    enclosures: list[str] = []
+    if macos_installer_url:
+        # Emit tagged enclosures so the client can pick the right one per OS
+        enclosures.append(_enclosure_xml(
+            installer_url, version, installer_size, os_tag="windows",
+        ))
+        enclosures.append(_enclosure_xml(
+            macos_installer_url, version, macos_installer_size,
+            os_tag="macos", minimum_system_version="11.0",
+        ))
+    else:
+        # Legacy single-enclosure (Windows-only release)
+        enclosures.append(_enclosure_xml(
+            installer_url, version, installer_size,
+            minimum_system_version=minimum_system_version,
+        ))
+    enc_block = "\n".join(enclosures)
     return (
         '    <item>\n'
         f'      <title>{html.escape(title)}</title>\n'
         f'      <pubDate>{_rss_date(pub_date)}</pubDate>\n'
         f'      <sparkle:version>{html.escape(version)}</sparkle:version>\n'
-        f'      <sparkle:minimumSystemVersion>{html.escape(minimum_system_version)}</sparkle:minimumSystemVersion>\n'
         f'      <link>{html.escape(release_url)}</link>\n'
         '      <description><![CDATA[\n'
         f'{release_notes_html}\n'
         '      ]]></description>\n'
-        f'      <enclosure url="{html.escape(installer_url, quote=True)}"\n'
-        f'                 sparkle:version="{html.escape(version)}"\n'
-        f'                 length="{int(installer_size)}"\n'
-        '                 type="application/octet-stream" />\n'
+        f'{enc_block}\n'
         '    </item>'
     )
 
@@ -191,13 +227,24 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--installer-url",
         required=True,
-        help="Public URL of the .exe installer for this release.",
+        help="Public URL of the Windows .exe installer for this release.",
     )
     parser.add_argument(
         "--installer-size",
         type=int,
         required=True,
-        help="Size in bytes of the installer (for Sparkle enclosure length).",
+        help="Size in bytes of the Windows installer (for Sparkle enclosure length).",
+    )
+    parser.add_argument(
+        "--macos-installer-url",
+        default="",
+        help="Public URL of the macOS arm64 .dmg for this release (omit for Windows-only).",
+    )
+    parser.add_argument(
+        "--macos-installer-size",
+        type=int,
+        default=0,
+        help="Size in bytes of the macOS .dmg.",
     )
     parser.add_argument(
         "--release-url",
@@ -259,6 +306,8 @@ def main(argv: list[str] | None = None) -> int:
         installer_size=args.installer_size,
         minimum_system_version=args.minimum_system_version,
         release_notes_html=release_notes,
+        macos_installer_url=args.macos_installer_url,
+        macos_installer_size=args.macos_installer_size,
     )
 
     items_xml: list[str] = [new_item]

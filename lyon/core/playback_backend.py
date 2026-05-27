@@ -10,7 +10,9 @@ from typing import Any, Optional
 from PySide6.QtCore import QObject, Signal
 
 from .equalizer import EQ_BAND_COUNT
-from .settings import bundled_bin_dir
+import sys
+
+from .settings import bundled_bin_dir, bundled_frameworks_dir
 from .vlc_equalizer import (
     EQ_FADE_INTERVAL_MS,
     VlcEqualizerController,
@@ -42,13 +44,15 @@ def _decode_vlc_text(value: Any) -> str:
 
 
 def _configure_vlc_runtime_path() -> None:
-    """Expose a bundled VLC runtime to python-vlc when one is present.
+    """Expose a bundled VLC runtime to python-vlc when one is present."""
+    if sys.platform == "darwin":
+        _configure_vlc_runtime_path_darwin()
+    else:
+        _configure_vlc_runtime_path_windows()
 
-    Source runs and PyInstaller builds may place VLC beside the existing bundled
-    tools as ``bin/vlc``.  Adding that folder before importing ``vlc`` lets
-    Windows resolve ``libvlc.dll`` and lets VLC find its plugin directory
-    without requiring every user to install VLC globally.
-    """
+
+def _configure_vlc_runtime_path_windows() -> None:
+    """Windows: look for a bundled vlc/ dir next to the other bin tools."""
     vlc_dir = bundled_bin_dir() / "vlc"
     if not vlc_dir.exists() or vlc_dir in _CONFIGURED_VLC_DIRS:
         return
@@ -65,6 +69,29 @@ def _configure_vlc_runtime_path() -> None:
     if plugins_dir.exists():
         os.environ.setdefault("VLC_PLUGIN_PATH", str(plugins_dir))
     _CONFIGURED_VLC_DIRS.add(vlc_dir)
+
+
+def _configure_vlc_runtime_path_darwin() -> None:
+    """macOS: prefer bundled Contents/Frameworks/libvlc.dylib, then fall back to VLC.app."""
+    candidates: list[Path] = []
+    fw = bundled_frameworks_dir()
+    if fw and (fw / "libvlc.dylib").exists():
+        candidates.append(fw)
+    candidates.append(Path("/Applications/VLC.app/Contents/MacOS/lib"))
+
+    for path in candidates:
+        if not (path / "libvlc.dylib").exists():
+            continue
+        if path in _CONFIGURED_VLC_DIRS:
+            return
+        os.environ.setdefault("DYLD_FALLBACK_LIBRARY_PATH", str(path))
+        plugins = path / "plugins"
+        if not plugins.exists():
+            plugins = path / "vlc" / "plugins"
+        if plugins.exists():
+            os.environ.setdefault("VLC_PLUGIN_PATH", str(plugins))
+        _CONFIGURED_VLC_DIRS.add(path)
+        return
 
 
 def close_dll_handles() -> None:

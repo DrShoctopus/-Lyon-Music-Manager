@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import logging
 import re
+import sys
 from dataclasses import dataclass
 
 import defusedxml.ElementTree as ET
@@ -132,6 +133,31 @@ def _first_item(root: ET.Element) -> ET.Element | None:
     return channel.find("item")
 
 
+def _best_enclosure(item: ET.Element) -> ET.Element | None:
+    """Return the enclosure matching the current OS, or fall back to the first one.
+
+    When an appcast ships both a Windows .exe and a macOS .dmg, each carries a
+    ``sparkle:os`` attribute ("windows" or "macos"). We pick the one that matches
+    the running platform; if none match (legacy single-enclosure appcasts), we
+    fall back to the first enclosure found.
+    """
+    _SPARKLE_OS_ATTR = f"{{{SPARKLE_NS}}}os"
+    want_os = "macos" if sys.platform == "darwin" else "windows"
+    enclosures = item.findall("enclosure")
+    # Try platform-tagged enclosure first
+    for enc in enclosures:
+        if enc.attrib.get(_SPARKLE_OS_ATTR, "").strip().lower() == want_os:
+            return enc
+    # Fall back: enclosure whose URL ends with .dmg/.exe
+    ext = ".dmg" if sys.platform == "darwin" else ".exe"
+    for enc in enclosures:
+        url = enc.attrib.get("url", "")
+        if url.lower().endswith(ext):
+            return enc
+    # Last resort: first enclosure
+    return enclosures[0] if enclosures else None
+
+
 def parse_appcast(text: str) -> UpdateInfo | None:
     """Parse the most recent ``<item>`` block out of an appcast XML.
 
@@ -155,7 +181,7 @@ def parse_appcast(text: str) -> UpdateInfo | None:
     if not version:
         raise UpdaterError("Appcast item has no sparkle:version.")
 
-    enclosure = item.find("enclosure")
+    enclosure = _best_enclosure(item)
     download_url = (enclosure.attrib.get("url") if enclosure is not None else "") or ""
 
     release_url = _text(item.find("link"))

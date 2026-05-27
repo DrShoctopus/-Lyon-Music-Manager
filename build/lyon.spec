@@ -148,3 +148,31 @@ coll = COLLECT(
     upx_exclude=[],
     name="LyonMusicManager",
 )
+
+if sys.platform == "darwin":
+    from lyon import __version__ as _version
+    ICNS = ROOT / "build" / "lyon-app-icon.icns"
+    app_bundle = BUNDLE(
+        coll,
+        name="Sea Lyon Media Manager.app",
+        icon=str(ICNS) if ICNS.exists() else None,
+        bundle_identifier="com.drshoctopus.sealyonmediamanager",
+        version=_version,
+        info_plist={
+            "CFBundleName": "Sea Lyon Media Manager",
+            "CFBundleDisplayName": "Sea Lyon Media Manager",
+            "CFBundleShortVersionString": _version,
+            "CFBundleVersion": _version,
+            "CFBundleIdentifier": "com.drshoctopus.sealyonmediamanager",
+            "LSMinimumSystemVersion": "11.0",
+            "NSHighResolutionCapable": True,
+            "NSHumanReadableCopyright": "© 2026 DrShoctopus",
+            "LSApplicationCategoryType": "public.app-category.music",
+            "NSLocalNetworkUsageDescription":
+                "Sea Lyon discovers Chromecast and DLNA renderers on your local network.",
+            "NSAppleEventsUsageDescription":
+                "Used for system-wide media key handling.",
+            "NSRemovableVolumesUsageDescription":
+                "Sea Lyon accesses optical drives to detect and rip audio CDs.",
+        },
+    )

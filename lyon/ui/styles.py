@@ -10,7 +10,7 @@ Aesthetic notes:
 from __future__ import annotations
 
 WMP_QSS = r"""
-* { color: #eef7ff; font-family: "Segoe UI", "Tahoma", sans-serif; font-size: 9pt; }
+* { color: #eef7ff; font-family: "Segoe UI", -apple-system, "SF Pro Text", "Helvetica Neue", "Tahoma", sans-serif; }
 
 QMainWindow, QWidget#root {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,

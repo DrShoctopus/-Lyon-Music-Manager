@@ -3,6 +3,8 @@
 Windows-only paths are guarded so the module can be imported on any platform
 during development. At runtime on Windows we use ctypes to enumerate drives,
 read a CUETools-compatible TOC layout, and call libdiscid when available.
+On macOS, drive enumeration delegates to disc_macos and libdiscid is preloaded
+from the bundle's Contents/Frameworks before the discid package is imported.
 """
 from __future__ import annotations
 
@@ -17,7 +19,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import Any
 
-from .settings import bundled_bin_dir
+from .settings import bundled_bin_dir, bundled_frameworks_dir
 
 LOG = logging.getLogger(__name__)
 
@@ -33,6 +35,24 @@ CDROM_TOC_HEADER_SIZE = 4
 CDROM_TOC_TRACK_DATA_SIZE = 8
 CDROM_LEADOUT_TRACK = 0xAA
 MAX_CD_TRACKS = 100  # CD-DA spec: up to 99 audio tracks + leadout
+
+
+def _preload_libdiscid_darwin() -> None:
+    """Pre-load bundled libdiscid.0.dylib on macOS so the discid package finds it."""
+    if sys.platform != "darwin":
+        return
+    fw = bundled_frameworks_dir()
+    if fw is None:
+        return
+    candidate = fw / "libdiscid.0.dylib"
+    if candidate.exists():
+        try:
+            ctypes.CDLL(str(candidate), mode=ctypes.RTLD_GLOBAL)
+        except OSError as exc:
+            LOG.warning("Could not preload bundled libdiscid: %s", exc)
+
+
+_preload_libdiscid_darwin()
 
 
 def _bind_winapi() -> None:
@@ -105,7 +125,10 @@ class _CtdbTocEntry:
 
 
 def list_cd_drives() -> list[str]:
-    """Return a list of optical drive letters with media (best-effort)."""
+    """Return a list of optical drive paths with media (best-effort)."""
+    if sys.platform == "darwin":
+        from . import disc_macos
+        return [d.device_path for d in disc_macos.list_optical_drives()]
     if sys.platform != "win32":
         return []
     drives: list[str] = []
@@ -124,6 +147,20 @@ def list_cd_drives() -> list[str]:
 
 def has_audio_cd(drive: str) -> bool:
     """True if the disc in `drive` looks like an audio CD."""
+    if sys.platform == "darwin":
+        from . import disc_macos
+        from .disc_macos import MacOpticalDrive
+        # drive is a device path like "/dev/disk4"
+        name = drive.removeprefix("/dev/")
+        fake = MacOpticalDrive(
+            bsd_name=name,
+            device_path=drive,
+            raw_path=f"/dev/r{name}",
+            vendor="",
+            product="",
+            is_ejectable=True,
+        )
+        return disc_macos.has_audio_disc(fake)
     if sys.platform != "win32":
         return False
     try:
@@ -167,6 +204,8 @@ def close_dll_handles() -> None:
 
 def read_disc(drive: str | None = None) -> DiscToc | None:
     """Read the best available CD TOC identity for a drive."""
+    if sys.platform == "darwin":
+        return _read_disc_darwin(drive)
     if sys.platform != "win32":
         return None
     if drive is None:
@@ -203,6 +242,41 @@ def read_disc(drive: str | None = None) -> DiscToc | None:
         track_offsets=[int(getattr(track, "offset", 0) or 0) for track in tracks],
         sectors=int(getattr(d, "sectors", 0) or 0),
         ctdb_toc_string=ctdb_toc,
+        first_track=int(getattr(d, "first_track_num", 1) or 1),
+        last_track=int(getattr(d, "last_track_num", len(tracks)) or len(tracks)),
+        mcn=getattr(d, "mcn", None),
+    )
+
+
+def _read_disc_darwin(drive: str | None) -> DiscToc | None:
+    """Read disc TOC on macOS using libdiscid (pre-loaded from bundle)."""
+    if drive is None:
+        drives = list_cd_drives()
+        if not drives:
+            return None
+        drive = drives[0]
+
+    discid = _load_discid()
+    if discid is None:
+        return None
+
+    # libdiscid on macOS accepts "/dev/diskN" directly
+    device = drive if drive.startswith("/dev/") else f"/dev/{drive}"
+    try:
+        d = discid.read(device, features=["mcn", "isrc"])
+    except Exception:
+        return None
+
+    tracks = list(getattr(d, "tracks", []) or [])
+    return DiscToc(
+        drive=drive,
+        discid=getattr(d, "id", "") or "",
+        freedb_id=getattr(d, "freedb_id", "") or "",
+        toc_string=getattr(d, "toc_string", "") or "",
+        track_count=len(tracks),
+        track_offsets=[int(getattr(track, "offset", 0) or 0) for track in tracks],
+        sectors=int(getattr(d, "sectors", 0) or 0),
+        ctdb_toc_string="",
         first_track=int(getattr(d, "first_track_num", 1) or 1),
         last_track=int(getattr(d, "last_track_num", len(tracks)) or len(tracks)),
         mcn=getattr(d, "mcn", None),
@@ -366,6 +440,16 @@ def _disc_toc_from_ctdb_entries(drive: str, entries: list[_CtdbTocEntry]) -> Dis
 
 
 def eject(drive: str) -> None:
+    if sys.platform == "darwin":
+        from . import disc_macos
+        from .disc_macos import MacOpticalDrive
+        name = drive.removeprefix("/dev/")
+        fake = MacOpticalDrive(
+            bsd_name=name, device_path=drive,
+            raw_path=f"/dev/r{name}", vendor="", product="", is_ejectable=True,
+        )
+        disc_macos.eject_drive(fake)
+        return
     if sys.platform != "win32":
         return
     # Validate that drive is a single letter to prevent MCI command injection.

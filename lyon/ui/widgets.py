@@ -6,8 +6,13 @@ from collections import OrderedDict
 from typing import Any
 
 from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QPixmap
+from PySide6.QtGui import QColor, QKeySequence, QPainter, QPixmap
 from PySide6.QtWidgets import QLabel, QWidget
+
+
+def display_shortcut(seq: str) -> str:
+    """Return a platform-native shortcut string; on macOS 'Ctrl+1' → '⌘1'."""
+    return QKeySequence(seq).toString(QKeySequence.SequenceFormat.NativeText)
 
 
 def placeholder_cover(size: int = 96, text: str = "?") -> QPixmap:

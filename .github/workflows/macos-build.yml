@@ -1,0 +1,130 @@
+name: macOS build (Apple Silicon)
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*.*.*'
+
+env:
+  FFMPEG_URL: "https://evermeet.cx/ffmpeg/getrelease/zip"
+  FPCALC_URL: "https://github.com/acoustid/chromaprint/releases/download/v1.5.1/chromaprint-fpcalc-1.5.1-macos-arm64.tar.gz"
+  VLC_VERSION: "3.0.21"
+  LIBDISCID_VERSION: "0.6.4"
+  PYTEST_FLOOR: "680"
+
+jobs:
+  build:
+    runs-on: macos-14   # Apple Silicon (arm64)
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          architecture: "arm64"
+          cache: "pip"
+          cache-dependency-path: requirements-build.txt
+
+      - name: Confirm arm64 host and Python
+        run: |
+          hw=$(uname -m)
+          py=$(python -c "import platform; print(platform.machine())")
+          [ "$hw" = "arm64" ] || { echo "Host is $hw, expected arm64"; exit 1; }
+          [ "$py" = "arm64" ] || { echo "Python reports $py — not arm64-native (Rosetta?)"; exit 1; }
+
+      - name: Install Python dependencies
+        run: python -m pip install -r requirements-build.txt
+
+      - name: Run pytest gate
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          count=$(python -m pytest --collect-only -q 2>/dev/null | grep -oE '^[0-9]+ tests? selected' | grep -oE '^[0-9]+' || echo "0")
+          echo "Collected $count tests"
+          [ "${count:-0}" -ge "$PYTEST_FLOOR" ] || { echo "Test count $count below floor $PYTEST_FLOOR"; exit 1; }
+          python -m pytest -q
+
+      - name: Cache vendor binaries
+        uses: actions/cache@v4
+        with:
+          path: vendor-mac
+          key: mac-vendor-vlc${{ env.VLC_VERSION }}-discid${{ env.LIBDISCID_VERSION }}-v1
+
+      - name: Fetch and verify vendor binaries
+        run: scripts/fetch-macos-vendor-binaries.sh
+
+      - name: Build .icns icon
+        run: scripts/build-macos-icon.sh
+
+      - name: Write Last.fm API secrets
+        env:
+          LASTFM_KEY: ${{ secrets.LYON_LASTFM_API_KEY }}
+          LASTFM_SECRET: ${{ secrets.LYON_LASTFM_API_SECRET }}
+        run: |
+          printf 'LASTFM_API_KEY = "%s"\nLASTFM_API_SECRET = "%s"\n' \
+            "$LASTFM_KEY" "$LASTFM_SECRET" > lyon/core/_secrets.py
+
+      - name: PyInstaller (arm64-only)
+        run: python -m PyInstaller --noconfirm --target-arch arm64 build/lyon.spec
+
+      - name: Inject libVLC, plugins, ffmpeg, fpcalc, libdiscid
+        env:
+          STAGED_VLC_DMG: vendor-mac/vlc.dmg
+          STAGED_LIBDISCID_DYLIB: vendor-mac/libdiscid.0.dylib
+          STAGED_FFMPEG: vendor-mac/ffmpeg
+          STAGED_FPCALC: vendor-mac/fpcalc
+        run: scripts/build-macos-bundle.sh
+
+      - name: Import signing certificate
+        env:
+          CERT_P12: ${{ secrets.APPLE_DEVELOPER_ID_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERT_PASSWORD }}
+        run: scripts/import-codesign-cert.sh
+
+      - name: Codesign bundle
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: scripts/codesign-macos-bundle.sh
+
+      - name: Notarize and staple .app
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: scripts/notarize-macos-app.sh
+
+      - name: Build DMG
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          brew install create-dmg
+          scripts/build-macos-dmg.sh
+
+      - name: Compute SHA256SUMS
+        run: |
+          ver=$(python -c "from lyon import __version__; print(__version__)")
+          shasum -a 256 "dist/SeaLyonMediaManager-${ver}-arm64.dmg" \
+              > "dist/SeaLyonMediaManager-${ver}-macos-SHA256SUMS.txt"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SeaLyonMediaManager-${{ github.ref_name }}-macos
+          path: |
+            dist/*.dmg
+            dist/*-macos-SHA256SUMS.txt
+
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: |
+            dist/*.dmg
+            dist/*-macos-SHA256SUMS.txt

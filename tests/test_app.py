@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import sys
+
 import pytest
 
 
-def test_main_opens_main_window_maximized(monkeypatch):
+def test_main_opens_main_window(monkeypatch):
+    """Window is shown (maximized on Windows/Linux, normal size on macOS)."""
     pytest.importorskip("PySide6.QtWidgets", exc_type=ImportError)
 
     from lyon import app as app_mod
@@ -58,6 +61,15 @@ def test_main_opens_main_window_maximized(monkeypatch):
     )
 
     assert app_mod.main() == 0
-    assert "show-maximized" in calls
-    assert "show" not in calls
-    assert calls.index("show-maximized") < calls.index("finish-splash")
+
+    # On macOS the window opens at its default size; on other platforms maximized.
+    if sys.platform == "darwin":
+        assert "show" in calls
+        assert "show-maximized" not in calls
+        shown_call = "show"
+    else:
+        assert "show-maximized" in calls
+        assert "show" not in calls
+        shown_call = "show-maximized"
+
+    assert calls.index(shown_call) < calls.index("finish-splash")

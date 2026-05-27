@@ -15,7 +15,7 @@ from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QApplication
 
 from . import __app_name__
-from .core.settings import app_data_dir
+from .core.settings import app_data_dir, migrate_macos_app_data
 from .ui.branding import app_icon, create_startup_splash, finish_startup_splash
 from .ui.main_window import MainWindow
 
@@ -100,6 +100,7 @@ def _install_excepthooks() -> None:
 
 
 def main() -> int:
+    migrate_macos_app_data()
     _configure_logging()
     _install_excepthooks()
     LOG.info("Starting %s", __app_name__)
@@ -113,7 +114,7 @@ def main() -> int:
     if sys.platform == "win32":
         app.setFont(QFont("Segoe UI", 9))
     elif sys.platform == "darwin":
-        app.setFont(QFont("SF Pro Text", 13))
+        app.setFont(QFont(".AppleSystemUIFont", 13))
     else:
         app.setFont(QFont("Ubuntu", 10))
 
@@ -123,7 +124,10 @@ def main() -> int:
 
     win = MainWindow()
     win.setWindowIcon(icon)
-    win.showMaximized()
+    if sys.platform == "darwin":
+        win.show()
+    else:
+        win.showMaximized()
     finish_startup_splash(app, win)
     return app.exec()
 

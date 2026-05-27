@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 import os
+import sys
 
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QAction, QDragEnterEvent, QDropEvent
@@ -101,6 +102,8 @@ class _LibraryScanThread(QThread):
 class MainWindow(QMainWindow):
     # Tab display order — index matches the QStackedWidget page index.
     _TAB_ORDER = ("Library", "Now Playing", "Podcasts", "Radio", "Video", "Disc", "Rip", "YouTube")
+    # Tabs that only show when an optical drive is attached (macOS).
+    _DISC_TABS: frozenset[str] = frozenset({"Disc", "Rip"})
     _TAB_SHORTCUTS = {
         "Library": "Ctrl+1",
         "Now Playing": "Ctrl+2",
@@ -352,6 +355,20 @@ class MainWindow(QMainWindow):
         from ..core.media_keys import register_media_key_handler
         self._media_key_handler = register_media_key_handler(self.player)
 
+        # macOS: hide Disc/Rip tabs until an optical drive is connected
+        self._disc_watcher = None
+        if sys.platform == "darwin":
+            # Initial state: hide disc tabs (watcher will show them when a drive appears)
+            for _disc_tab_name in self._DISC_TABS:
+                self.tab_bar.setTabVisible(self._tab_index[_disc_tab_name], False)
+            try:
+                from ..core.disc_watcher import OpticalDriveWatcher
+                self._disc_watcher = OpticalDriveWatcher(self)
+                self._disc_watcher.drives_changed.connect(self._refresh_disc_tabs)
+                self._disc_watcher.start()
+            except ImportError:
+                pass
+
         QTimer.singleShot(0, self._maybe_show_first_run)
         # Auto-update check kicks in shortly after first-run resolves; deferring
         # a couple of seconds keeps the splash + startup-scan responsive.
@@ -419,8 +436,8 @@ class MainWindow(QMainWindow):
             view_menu.addAction(act)
 
         settings_menu = m.addMenu("&Settings")
-        settings_act = QAction("Open Settings", self, triggered=self.open_settings)
-        settings_act.setMenuRole(QAction.MenuRole.ApplicationSpecificRole)
+        settings_act = QAction("Preferences…", self, triggered=self.open_settings)
+        settings_act.setMenuRole(QAction.MenuRole.PreferencesRole)
         settings_menu.addAction(settings_act)
 
         help_menu = m.addMenu("&Help")
@@ -444,6 +461,26 @@ class MainWindow(QMainWindow):
         help_menu.addAction(about_act)
 
     # ------------------------------------------------------------------ tabs
+
+    def _refresh_disc_tabs(self) -> None:
+        """Show or hide Disc/Rip tabs based on whether an optical drive is attached."""
+        if sys.platform != "darwin":
+            return
+        try:
+            from ..core.disc_macos import list_optical_drives
+            drives_present = bool(list_optical_drives())
+        except Exception:
+            drives_present = False
+
+        current_idx = self.tab_bar.currentIndex()
+        current_name = self._TAB_ORDER[current_idx] if 0 <= current_idx < len(self._TAB_ORDER) else ""
+
+        for name in self._DISC_TABS:
+            self.tab_bar.setTabVisible(self._tab_index[name], drives_present)
+
+        # If the active tab just became hidden, fall back to Library
+        if not drives_present and current_name in self._DISC_TABS:
+            self.tab_bar.setCurrentIndex(self._tab_index["Library"])
 
     @property
     def podcast_view(self):
@@ -1913,6 +1950,8 @@ class MainWindow(QMainWindow):
         metadata.shutdown()
         close_cd_dll_handles()
         close_dll_handles()
+        if self._disc_watcher is not None:
+            self._disc_watcher.stop()
         super().closeEvent(ev)
 
     def _shutdown_media_key_handler(self) -> None:

@@ -62,6 +62,8 @@ def _default_music_root() -> Path:
 def app_data_dir() -> Path:
     if sys.platform == "win32":
         base = os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming")
+    elif sys.platform == "darwin":
+        base = str(Path.home() / "Library" / "Application Support")
     else:
         base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
     p = Path(base) / "LyonMusicManager"
@@ -69,11 +71,34 @@ def app_data_dir() -> Path:
     return p
 
 
+def migrate_macos_app_data() -> None:
+    """One-shot migration from ~/.config/LyonMusicManager to ~/Library/Application Support."""
+    if sys.platform != "darwin":
+        return
+    legacy = Path.home() / ".config" / "LyonMusicManager"
+    new = Path.home() / "Library" / "Application Support" / "LyonMusicManager"
+    if legacy.exists() and not new.exists():
+        new.parent.mkdir(parents=True, exist_ok=True)
+        legacy.rename(new)
+        LOG.info("Migrated app data from %s to %s", legacy, new)
+
+
 def bundled_bin_dir() -> Path:
-    """Where ffmpeg.exe / libdiscid live when packaged or in-tree."""
+    """Where ffmpeg/fpcalc live when packaged or in-tree."""
     if getattr(sys, "frozen", False):
+        if sys.platform == "darwin":
+            # .app bundle: executables live under Contents/MacOS/bin/
+            return Path(sys.executable).resolve().parent / "bin"
         return Path(sys._MEIPASS) / "bin"  # type: ignore[attr-defined]
     return Path(__file__).resolve().parent.parent.parent / "bin"
+
+
+def bundled_frameworks_dir() -> Path | None:
+    """Path to Contents/Frameworks inside a .app bundle, or None when not applicable."""
+    if sys.platform != "darwin" or not getattr(sys, "frozen", False):
+        return None
+    # sys.executable: …/Sea Lyon Media Manager.app/Contents/MacOS/LyonMusicManager
+    return Path(sys.executable).resolve().parent.parent / "Frameworks"
 
 
 def _app_version() -> str:

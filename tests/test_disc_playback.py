@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 import threading
 import time
 
@@ -34,6 +35,7 @@ def _process_events_until(qapp, predicate, timeout: float = 2.0) -> bool:
     return predicate()
 
 
+@pytest.mark.skipif(sys.platform == "darwin", reason="Windows drive-letter paths only")
 def test_disc_mrl_builders_normalize_windows_drive_letters():
     assert cdda_uri("d") == "cdda:///D:/"
     assert cdda_uri("D:") == "cdda:///D:/"
@@ -43,6 +45,13 @@ def test_disc_mrl_builders_normalize_windows_drive_letters():
     assert cdda_track_options(3) == (":cdda-track=3",)
 
 
+def test_cdda_uri_macos_device_path():
+    """On macOS, /dev/diskN drives produce a cdda://... MRL."""
+    uri = cdda_uri("/dev/disk4")
+    assert uri == "cdda:///dev/disk4"
+
+
+@pytest.mark.skipif(sys.platform == "darwin", reason="Windows drive-letter paths only")
 def test_drive_root_preserves_full_windows_paths():
     assert drive_root(r"C:\Users\runneradmin\disc") == r"C:\Users\runneradmin\disc"
 

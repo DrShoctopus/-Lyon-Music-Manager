@@ -7,6 +7,7 @@ probing, and transient Track objects for Audio CD queues.
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -64,6 +65,9 @@ def vlc_device(drive: str) -> str:
 
 
 def cdda_uri(drive: str) -> str:
+    if sys.platform == "darwin" and drive.startswith("/"):
+        # macOS: drive is "/dev/diskN"; VLC accepts "cdda:///dev/diskN"
+        return f"cdda://{drive}"
     return f"cdda:///{vlc_device(drive)}"
 
 

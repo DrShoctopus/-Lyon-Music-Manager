@@ -45,6 +45,7 @@ def test_pyinstaller_spec_resolves_repo_root(monkeypatch):
         "PYZ": lambda *_args, **_kwargs: object(),
         "EXE": lambda *_args, **_kwargs: object(),
         "COLLECT": lambda *_args, **_kwargs: object(),
+        "BUNDLE": lambda *_args, **_kwargs: object(),
     }
 
     runpy.run_path(str(repo / "build" / "lyon.spec"), init_globals=globals_for_spec)

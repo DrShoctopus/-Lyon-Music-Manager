@@ -11,6 +11,8 @@ installer manually. In-place patching is post-1.0.
 """
 from __future__ import annotations
 
+import sys
+
 from PySide6.QtCore import QUrl, Qt, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
@@ -64,7 +66,11 @@ class UpdateAvailableDialog(QDialog):
 
         button_row = QHBoxLayout()
 
-        download_btn = QPushButton("Download Now", self)
+        if sys.platform == "darwin":
+            dl_label = "Download Disk Image"
+        else:
+            dl_label = "Download Installer"
+        download_btn = QPushButton(dl_label, self)
         download_btn.setDefault(True)
         download_btn.clicked.connect(self._on_download)
         button_row.addWidget(download_btn)
