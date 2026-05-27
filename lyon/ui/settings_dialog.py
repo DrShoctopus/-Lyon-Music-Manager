@@ -639,7 +639,6 @@ class SettingsDialog(QDialog):
         if self._lastfm_poll_timer is None:
             self._lastfm_poll_timer = QTimer(self)
             self._lastfm_poll_timer.setInterval(5000)
-            assert self._scrobbler is not None
             self._lastfm_poll_timer.timeout.connect(self._scrobbler.poll_lastfm_session)
         self._lastfm_poll_timer.start()
 

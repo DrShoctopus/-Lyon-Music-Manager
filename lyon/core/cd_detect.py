@@ -310,8 +310,7 @@ def _ctdb_entries_from_windows_toc(raw: bytes) -> list[_CtdbTocEntry]:
         if offset < 0:
             continue
 
-        control_bits = (control_adr & 0x0F) | (control_adr >> 4)
-        is_audio = (control_bits & 0x04) == 0
+        is_audio = (control_adr & 0x40) == 0
         entries.append(
             _CtdbTocEntry(
                 track_number=track_number,
@@ -331,14 +330,10 @@ def _ctdb_toc_from_track_data(entries: list[_CtdbTocEntry]) -> str:
 
     tokens = []
     for entry in sorted(tracks, key=lambda item: item.track_number):
-        if entry.offset < 0:
-            return ""
         prefix = "" if entry.is_audio else "-"
         tokens.append(f"{prefix}{entry.offset}")
 
     leadout = max(leadouts, key=lambda item: item.offset)
-    if leadout.offset < 0:
-        return ""
     tokens.append(str(leadout.offset))
     return ":".join(tokens)
 

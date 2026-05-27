@@ -111,18 +111,18 @@ def _thumb_pixmap(artwork_path: str | None, file_path: str = "",
     )
     cached = _THUMB_CACHE.get(cache_key)
     if cached is not None:
-        return QPixmap(cached)
+        return cached
 
     for src in sources:
         pm = QPixmap(src)
         if not pm.isNull():
             out = _scale_to_fill(pm, w, h)
             _cache_thumb(cache_key, out)
-            return QPixmap(out)
+            return out
     pm = placeholder_cover(max(w, h), "▶")
     out = pm.scaled(w, h, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
     _cache_thumb(cache_key, out)
-    return QPixmap(out)
+    return out
 
 
 def _thumb_source_state(src: str) -> tuple[str, int, int]:
@@ -136,7 +136,7 @@ def _thumb_source_state(src: str) -> tuple[str, int, int]:
 def _cache_thumb(key: tuple[Any, ...], pixmap: QPixmap) -> None:
     if len(_THUMB_CACHE) >= _THUMB_CACHE_MAX:
         _THUMB_CACHE.pop(next(iter(_THUMB_CACHE)))
-    _THUMB_CACHE[key] = QPixmap(pixmap)
+    _THUMB_CACHE[key] = pixmap
 
 
 # ---------------------------------------------------------------------------

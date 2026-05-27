@@ -71,11 +71,16 @@ def _scan(
     should_stop = should_stop or (lambda: False)
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+    except OSError as exc:
+        LOG.warning("Renderer discovery: socket error: %s", exc)
+        return []
+    try:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 2)
         sock.settimeout(0.5)
         sock.bind(("", 0))
     except OSError as exc:
+        sock.close()
         LOG.warning("Renderer discovery: socket error: %s", exc)
         return []
 

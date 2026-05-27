@@ -106,7 +106,7 @@ class CastController(QObject):
         self._dlna: DlnaServer | None = None
         self._remote_playing = False
         self._suppress_state_mirror = False
-        self._session_id = 0
+        self._session_id = 0  # all mutations must occur on the GUI thread
         self._shuffle_played: set[int] = set()
 
         self._thread = QThread()

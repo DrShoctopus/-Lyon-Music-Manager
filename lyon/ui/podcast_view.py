@@ -384,7 +384,8 @@ class PodcastView(QWidget):
         query = text.strip().casefold()
         visible = 0
         for row in range(self.table.rowCount()):
-            episode = self.table.item(row, _COL_SHOW).data(Qt.UserRole)
+            _item = self.table.item(row, _COL_SHOW)
+            episode = _item.data(Qt.UserRole) if _item is not None else None
             haystack = " ".join((
                 episode.feed_title,
                 episode.title,

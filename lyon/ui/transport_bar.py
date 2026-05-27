@@ -208,7 +208,8 @@ class TransportBar(QWidget):
             self.heart_btn.setEnabled(False)
         else:
             self.title_lbl.setText(track.title)
-            self.artist_lbl.setText(f"{track.display_artist} - {track.album}")
+            parts = [p for p in (track.display_artist, track.album) if p]
+            self.artist_lbl.setText(" - ".join(parts))
             self.thumb.setPixmap(cover_pixmap(track.artwork_path, _TRANSPORT_THUMB_SIZE, "♪"))
             self.heart_btn.blockSignals(True)
             self.heart_btn.setChecked(track.liked)
