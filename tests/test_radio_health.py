@@ -44,7 +44,7 @@ def test_head_405_falls_back_to_get():
     """Servers that reject HEAD should be retried with GET."""
     call_count = 0
 
-    def fake_urlopen(req, timeout=None):
+    def fake_urlopen(req, timeout=None, context=None):
         nonlocal call_count
         call_count += 1
         if req.get_method() == "HEAD":
@@ -100,7 +100,7 @@ def test_non_405_head_error_falls_back_to_get():
     """Stream servers often reject HEAD with codes other than 405."""
     call_count = 0
 
-    def fake_urlopen(req, timeout=None):
+    def fake_urlopen(req, timeout=None, context=None):
         nonlocal call_count
         call_count += 1
         if req.get_method() == "HEAD":
@@ -116,7 +116,7 @@ def test_non_405_head_error_falls_back_to_get():
 
 
 def test_get_failure_after_head_error_returns_false_zero():
-    def fake_urlopen(req, timeout=None):
+    def fake_urlopen(req, timeout=None, context=None):
         if req.get_method() == "HEAD":
             raise _http_error(503)
         raise socket.timeout("timed out")
@@ -131,7 +131,7 @@ def test_get_failure_after_head_error_returns_false_zero():
 def test_timeout_parameter_is_forwarded():
     captured: list[float | None] = []
 
-    def fake_urlopen(req, timeout=None):
+    def fake_urlopen(req, timeout=None, context=None):
         captured.append(timeout)
         return _mock_response(200)
 

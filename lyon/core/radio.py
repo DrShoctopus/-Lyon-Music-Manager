@@ -143,15 +143,22 @@ def check_station_health(url: str, *, timeout: float = 5.0) -> tuple[bool, int]:
     connection is closed immediately after receiving the response headers so no
     stream data is consumed.
     """
+    import ssl
     import urllib.error
     import urllib.request
 
+    ssl_ctx = ssl.create_default_context()
+    try:
+        import certifi  # noqa: PLC0415
+        ssl_ctx.load_verify_locations(certifi.where())
+    except Exception:  # noqa: BLE001
+        pass
     ua = radio_user_agent()
     head_error_code = 0
     for method in _HEAD_THEN_GET:
         try:
             req = urllib.request.Request(url, method=method, headers={"User-Agent": ua})
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
+            with urllib.request.urlopen(req, timeout=timeout, context=ssl_ctx) as resp:
                 return True, resp.status
         except urllib.error.HTTPError as exc:
             if method == "HEAD":

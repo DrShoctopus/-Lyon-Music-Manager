@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import ssl
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from urllib.parse import urlencode
@@ -15,6 +16,26 @@ LOG = logging.getLogger(__name__)
 _BASE_URL = "https://all.api.radio-browser.info/json"
 _TIMEOUT = 10
 _CACHE_SIZE = 128
+
+
+def _ssl_context() -> ssl.SSLContext:
+    """Return an SSL context that works on macOS python.org builds.
+
+    The standard python.org installer for macOS ships its own OpenSSL that does
+    not automatically read the system keychain.  Loading *certifi*'s CA bundle
+    (which is almost always installed as a transitive dep) fixes certificate
+    verification without disabling security.
+    """
+    ctx = ssl.create_default_context()
+    try:
+        import certifi  # noqa: PLC0415
+        ctx.load_verify_locations(certifi.where())
+    except Exception:  # noqa: BLE001 — certifi missing or broken; fall through
+        pass
+    return ctx
+
+
+_SSL_CONTEXT = _ssl_context()
 
 
 @dataclass(frozen=True)
@@ -117,7 +138,7 @@ class RadioBrowserClient:
             "User-Agent": radio_user_agent(),
             "Accept": "application/json",
         })
-        with urlopen(req, timeout=_TIMEOUT) as resp:
+        with urlopen(req, timeout=_TIMEOUT, context=_SSL_CONTEXT) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         if not isinstance(data, list):
             return []

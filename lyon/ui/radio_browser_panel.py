@@ -156,7 +156,7 @@ class RadioBrowserPanel(QWidget):
                     results = client.search(name=name, tag=tag, country=country, limit=100)
                     results_signal.emit(results)
                 except Exception as exc:
-                    LOG.debug("radio-browser.info search failed: %s", exc)
+                    LOG.warning("radio-browser.info search failed: %s", exc)
                     error_signal.emit(str(exc))
 
         QThreadPool.globalInstance().start(_SearchTask())
@@ -177,7 +177,7 @@ class RadioBrowserPanel(QWidget):
                     countries = client.list_country_codes()
                     meta_signal.emit(tags, countries)
                 except Exception as exc:
-                    LOG.debug("radio-browser.info meta load failed: %s", exc)
+                    LOG.warning("radio-browser.info meta load failed: %s", exc)
                     error_signal.emit(str(exc))
 
         QThreadPool.globalInstance().start(_MetaTask())
