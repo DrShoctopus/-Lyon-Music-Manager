@@ -1133,7 +1133,7 @@ class Library:
         with self._lock:
             rows = self.conn.execute(
                 f"""SELECT * FROM tracks WHERE liked = 1 {filter_sql}
-                    ORDER BY {DISPLAY_ARTIST_SQL}, {DISPLAY_ALBUM_SQL}, track_number""",
+                    ORDER BY {DISPLAY_ARTIST_SQL}, {DISPLAY_ALBUM_SQL}, disc_no, track_no""",
                 params,
             ).fetchall()
         return [_row_to_track(r) for r in rows]

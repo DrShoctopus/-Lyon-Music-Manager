@@ -90,15 +90,20 @@ def create_startup_splash(app: "QApplication") -> "QSplashScreen | None":
     if splash_pixmap.isNull():
         return None
 
-    max_w, max_h = 640, 400
-    if splash_pixmap.width() > max_w or splash_pixmap.height() > max_h:
-        splash_pixmap = splash_pixmap.scaled(
-            max_w, max_h, Qt.KeepAspectRatio, Qt.SmoothTransformation
-        )
-
-    splash = QSplashScreen(splash_pixmap, Qt.WindowStaysOnTopHint)
-
     screen = app.primaryScreen()
+    dpr = screen.devicePixelRatio() if screen is not None else 1.0
+
+    max_w, max_h = 640, 400
+    scaled = splash_pixmap.scaled(
+        int(max_w * dpr),
+        int(max_h * dpr),
+        Qt.KeepAspectRatio,
+        Qt.SmoothTransformation,
+    )
+    scaled.setDevicePixelRatio(dpr)
+
+    splash = QSplashScreen(scaled, Qt.WindowStaysOnTopHint)
+
     if screen is not None:
         center = screen.availableGeometry().center()
         splash.move(center.x() - splash.width() // 2, center.y() - splash.height() // 2)
