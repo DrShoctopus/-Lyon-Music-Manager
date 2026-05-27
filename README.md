@@ -4,9 +4,10 @@
 
 # Sea Lyon Media Manager
 
-> **Windows 10 / 11 (64-bit) only.** Sea Lyon Media Manager is a desktop
-> media manager for local music, podcasts, internet radio, audio CD ripping,
-> video playback, YouTube search & download, and library organization.
+> Sea Lyon Media Manager is a desktop media manager for local music,
+> podcasts, internet radio, audio CD ripping, video playback, YouTube search
+> & download, and library organization. Runs on **Windows 10 / 11 (64-bit)**
+> and **macOS 11+ (Apple Silicon)**.
 
 Sea Lyon is written in Python with PySide6 and uses SQLite, Mutagen,
 libVLC, ffmpeg, yt-dlp, CUETools DB, MusicBrainz, TheAudioDB, Cover Art
@@ -30,20 +31,27 @@ to Ko-fi itself; clicking the link opens your default browser.
 
 Public installer downloads will appear on the
 [GitHub Releases page](https://github.com/DrShoctopus/Sea-Lyon-Media-Manager/releases)
-when v1.0 ships. Each release ships:
+when v1.0 ships.
+
+### Windows
 
 - `SeaLyonMediaManager-{version}-Setup.exe` — Inno Setup installer (recommended).
 - `SeaLyonMediaManager-{version}-windows.zip` — portable bundle (extract anywhere, run `LyonMusicManager.exe`).
-- `SeaLyonMediaManager-{version}-SHA256SUMS.txt` — SHA-256 manifest you can verify with `Get-FileHash`.
-
-### SmartScreen warning (1.0)
+- `SeaLyonMediaManager-{version}-SHA256SUMS.txt` — SHA-256 manifest, verify with `Get-FileHash`.
 
 The v1.0 installer is **unsigned** — Windows SmartScreen will show a
 "Windows protected your PC" dialog. Click **More info → Run anyway** to
-proceed, and verify the SHA-256 of the installer matches the value
-shipped in `SeaLyonMediaManager-{version}-SHA256SUMS.txt`. Authenticode
-code signing is planned for 1.1. Full guidance lives in
+proceed, and verify the SHA-256 of the installer matches the shipped
+`SeaLyonMediaManager-{version}-SHA256SUMS.txt`. Full guidance lives in
 [`docs/SMARTSCREEN_NOTES.md`](docs/SMARTSCREEN_NOTES.md).
+
+### macOS (Apple Silicon)
+
+- `SeaLyonMediaManager-{version}-arm64.dmg` — signed and notarized disk image.
+- `SeaLyonMediaManager-{version}-macos-SHA256SUMS.txt` — SHA-256 manifest.
+
+Requires **macOS 11 Big Sur or later** on an Apple Silicon (M1 / M2 / M3 / M4)
+Mac. Drag **Sea Lyon Media Manager.app** from the DMG to `/Applications`.
 
 ### Auto-update
 
@@ -61,8 +69,8 @@ plan. The repository is feature-complete for v1.0; release-engineering
 work (installer polish, auto-update wiring, EULA + privacy + license
 attribution) is in flight per [`IMPLEMENTATION_PLAN_1.0.md`](IMPLEMENTATION_PLAN_1.0.md).
 
-Source-only development continues to work on macOS and Linux, but only
-Windows is packaged, tested as a release surface, and supported.
+**Packaged releases ship for Windows 10 / 11 (x64) and macOS 11+
+(Apple Silicon).** Linux source-only development is best-effort.
 
 ## Feature Overview
 
@@ -149,6 +157,9 @@ Windows is packaged, tested as a release surface, and supported.
 ### CD Detection, Metadata, And Ripping
 
 - Windows optical-drive detection through Win32 APIs.
+- macOS optical-drive detection via IOKit; hot-plug polling via
+  QTimer with DiskArbitration as a best-effort enhancement.
+- Disc/Rip tabs hidden on macOS until an optical drive is attached.
 - libdiscid support for MusicBrainz disc IDs and table-of-contents
   data.
 - CUETools DB-compatible TOC reading through Windows APIs.
@@ -176,8 +187,8 @@ Windows is packaged, tested as a release surface, and supported.
 ### Video
 
 - libVLC video player tab with local video catalog sidebar.
-- Optical **Disc** tab for Windows Audio CD playback plus DVD/VCD
-  launch through the VLC video player.
+- Optical **Disc** tab for Audio CD playback plus DVD/VCD launch
+  through the VLC video player (Windows and macOS).
 - Thumbnail cards from library artwork or yt-dlp sidecar images.
 - Open file, play/pause/stop, seek, volume, mute, and playback rate
   from 0.25x to 2x.
@@ -213,10 +224,14 @@ cover **running from source** for development.
 
 ### Python Runtime
 
-- Python 3.11+ 64-bit is the recommended development/runtime target.
+- Python 3.11+ is the recommended development/runtime target.
+  - Windows: 64-bit CPython.
+  - macOS: arm64-native CPython (not Rosetta). Use
+    [python.org](https://www.python.org/downloads/macos/) universal2
+    builds or `brew install python@3.11`.
 - Install pinned runtime packages from `requirements.txt`:
 
-```cmd
+```sh
 pip install -r requirements.txt
 ```
 
@@ -226,12 +241,11 @@ from `requirements.in`. Build machines should install the hashed
 layers PyInstaller, pytest, and build-only icon tooling on top of the
 runtime dependencies.
 
-### Native Runtime Files
+### Native Runtime Files — Windows
 
 For full playback, ripping, and CD support, place native binaries in
-`bin/` at the repository root (the GitHub Actions workflow and
-`scripts\build-windows.ps1` do this automatically with SHA-256
-verification):
+`bin/` at the repository root (`scripts\build-windows.ps1` does this
+automatically with SHA-256 verification):
 
 ```text
 bin/
@@ -244,19 +258,36 @@ bin/
     plugins/
 ```
 
-- ffmpeg should include CDDA/libcdio support when possible. On
-  Windows, Lyon can fall back to its raw CD-DA reader if libcdio is
-  unavailable.
-- The VLC runtime must match the Python/app architecture. Use 64-bit
-  VLC with 64-bit Python.
-- The app launches without these binaries, but CD detection,
-  ripping, local audio playback, video playback, audible EQ, and
-  AcoustID fingerprinting need the relevant runtime.
+- The VLC runtime must match the Python architecture (64-bit).
+- ffmpeg should include CDDA/libcdio support when possible; the raw
+  CD-DA reader is the fallback.
+
+### Native Runtime Files — macOS
+
+Place native binaries at these paths for source runs (the
+`scripts/fetch-macos-vendor-binaries.sh` script does this for CI):
+
+```text
+bin/
+  ffmpeg          (arm64; evermeet.cx build)
+  fpcalc          (arm64; Chromaprint release)
+vendor-mac/
+  libvlc.dylib    (arm64; from VLC 3.0.x DMG)
+  libdiscid.0.dylib
+```
+
+Or install [VLC for Mac](https://www.videolan.org/vlc/download-macos.html)
+to `/Applications`; the app will discover it automatically.
+
+The app launches without these binaries, but CD detection, ripping,
+local audio playback, video playback, audible EQ, and AcoustID
+fingerprinting need the relevant runtime.
 
 ## Running From Source
 
-Source-only support is intended for developers and contributors. The
-public surface is Windows; macOS and Linux are best-effort.
+Source-only support is intended for developers and contributors.
+
+### Windows
 
 ```cmd
 py -3.11 -m venv .venv
@@ -270,20 +301,41 @@ pip install -r requirements.txt
 py main.py
 ```
 
+### macOS (Apple Silicon)
+
+```sh
+python3.11 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+
+# Install VLC to /Applications (for libVLC discovery), or place
+# arm64 libvlc.dylib + plugins in vendor-mac/ and set DYLD_FALLBACK_LIBRARY_PATH.
+
+python main.py
+```
+
 ## Data Locations
 
-User data lives outside the repository in `%APPDATA%\LyonMusicManager\`:
+| Platform | App data root |
+|----------|--------------|
+| Windows  | `%APPDATA%\LyonMusicManager\` |
+| macOS    | `~/Library/Application Support/LyonMusicManager/` |
 
-- `settings.json` — app preferences (chmodded 0600 on Windows).
+Contents of the app data directory:
+
+- `settings.json` — app preferences.
 - `library.sqlite3` — the SQLite media index.
 - `logs/sea-lyon.log` — rotating application log (10 MB × 5 backups).
 - `metadata-diagnostics.log` — only when metadata diagnostics are
   enabled in Settings.
 - `cache/` — album artwork and metadata response cache.
 
-Ripped music defaults to `Music\Lyon` under the current user, and
-YouTube downloads default to `<music_root>\YouTube` unless changed in
-Settings.
+Ripped music defaults to `Music/Lyon` under the current user's home,
+and YouTube downloads default to `<music_root>/YouTube` unless changed
+in Settings.
+
+On macOS, existing `~/.config/LyonMusicManager/` data is migrated to
+the new path automatically on first launch.
 
 Use **Help → Open Log Folder** to jump to the logs directory.
 **Help → Copy Diagnostics to Clipboard** packages the recent logs +
@@ -316,46 +368,59 @@ text bundle for support emails.
 ## Repository Layout
 
 ```text
-main.py                         Top-level launcher
-lyon/__init__.py                App name and version
-lyon/app.py                     QApplication setup, logging, splash, main window
-lyon/core/cd_detect.py          Windows CD-drive, TOC, libdiscid, eject helpers
-lyon/core/ctdb_lookup.py        CUETools DB metadata helpers
-lyon/core/ctdb_verify.py        AccurateRip v1 verification against CTDB
-lyon/core/diagnostics.py        Runtime dependency checks + bundle generator
-lyon/core/equalizer.py          10-band EQ limits and presets
-lyon/core/library.py            SQLite media library and playlist queries
-lyon/core/media_keys.py         Windows media key integration
-lyon/core/metadata.py           CTDB, MusicBrainz, TheAudioDB, artwork lookups
-lyon/core/player.py             Audio queue, transport, crossfade, EQ state
-lyon/core/playback_backend.py   libVLC audio backend and fallback backend
-lyon/core/podcast.py            Podcast feed parsing, OPML import, UA helper
-lyon/core/ripper.py             ffmpeg/raw-CDDA ripping worker
-lyon/core/scrobbler.py          Last.fm + ListenBrainz scrobbling service
-lyon/core/settings.py           Settings model, persistence, bundled-bin paths
-lyon/core/smart_playlist.py     Smart playlist rules and SQL conversion
-lyon/core/tagger.py             Mutagen tag and artwork writing
-lyon/core/updater.py            Sparkle-style appcast poller + worker
-lyon/core/vlc_equalizer.py      Shared libVLC equalizer controller
-lyon/core/yt_downloader.py      yt-dlp download worker
-lyon/ui/                        Main window, views, dialogs, widgets, theme
-docs/brand/                     Checked-in brand assets
-docs/BUILD.md                   Windows build guide
-docs/reviews/                   Historical engineering review notes
-build/lyon.spec                 PyInstaller spec
-build/lyon.iss                  Inno Setup script
-scripts/build-windows.ps1       Windows build automation
-scripts/README.md               Build-script notes
-tests/                          Pytest suite (700+ tests)
-requirements.txt                Hashed Python runtime dependency lock
-requirements.in                 Runtime deps input for uv pip compile
-requirements-build.txt          Hashed build/test dependency lock
-requirements-build.in           Build/test deps input for uv pip compile
-CHANGELOG.md                    Release notes (Keep a Changelog format)
-EULA.txt                        End-user license agreement (MIT + tail)
-PRIVACY.md                      Privacy policy (no telemetry)
-THIRD_PARTY_NOTICES.txt         Bundled-dependency licenses
-IMPLEMENTATION_PLAN_1.0.md      Full v1.0 release plan
+main.py                              Top-level launcher
+lyon/__init__.py                     App name and version
+lyon/app.py                          QApplication setup, logging, splash, main window
+lyon/core/cd_detect.py               CD-drive, TOC, libdiscid, eject helpers (Windows + macOS)
+lyon/core/disc_macos.py              macOS optical-drive detection via IOKit
+lyon/core/disc_watcher.py            macOS hot-plug watcher (QTimer + DiskArbitration)
+lyon/core/ctdb_lookup.py             CUETools DB metadata helpers
+lyon/core/ctdb_verify.py             AccurateRip v1 verification against CTDB
+lyon/core/diagnostics.py             Runtime dependency checks + bundle generator
+lyon/core/equalizer.py               10-band EQ limits and presets
+lyon/core/library.py                 SQLite media library and playlist queries
+lyon/core/media_keys.py              Windows media key integration
+lyon/core/metadata.py                CTDB, MusicBrainz, TheAudioDB, artwork lookups
+lyon/core/player.py                  Audio queue, transport, crossfade, EQ state
+lyon/core/playback_backend.py        libVLC audio backend and fallback backend
+lyon/core/podcast.py                 Podcast feed parsing, OPML import, UA helper
+lyon/core/ripper.py                  ffmpeg/raw-CDDA ripping worker
+lyon/core/scrobbler.py               Last.fm + ListenBrainz scrobbling service
+lyon/core/settings.py                Settings model, persistence, bundled-bin paths
+lyon/core/smart_playlist.py          Smart playlist rules and SQL conversion
+lyon/core/tagger.py                  Mutagen tag and artwork writing
+lyon/core/updater.py                 Sparkle-style appcast poller + worker
+lyon/core/vlc_equalizer.py           Shared libVLC equalizer controller
+lyon/core/yt_downloader.py           yt-dlp download worker
+lyon/ui/                             Main window, views, dialogs, widgets, theme
+docs/brand/                          Checked-in brand assets
+docs/BUILD.md                        Windows build guide
+docs/reviews/                        Historical engineering review notes
+build/lyon.spec                      PyInstaller spec (Windows EXE + macOS .app)
+build/lyon.iss                       Inno Setup script (Windows)
+build/lyon.entitlements              macOS entitlements for code-signing
+scripts/build-windows.ps1            Windows build automation
+scripts/fetch-macos-vendor-binaries.sh  Download + verify macOS vendor binaries
+scripts/build-macos-icon.sh          Build .icns from brand assets
+scripts/build-macos-bundle.sh        Inject libVLC/ffmpeg/fpcalc/libdiscid into .app
+scripts/import-codesign-cert.sh      Import Developer ID certificate into keychain
+scripts/codesign-macos-bundle.sh     Codesign the .app bundle
+scripts/notarize-macos-app.sh        Notarize and staple the .app
+scripts/build-macos-dmg.sh           Build signed .dmg from the .app
+scripts/generate-appcast.py          Generate/update multi-OS appcast.xml
+scripts/README.md                    Build-script notes
+.github/workflows/windows-build.yml Windows CI/release pipeline
+.github/workflows/macos-build.yml   macOS Apple Silicon CI/release pipeline
+tests/                               Pytest suite (790+ tests)
+requirements.txt                     Hashed Python runtime dependency lock
+requirements.in                      Runtime deps input for uv pip compile
+requirements-build.txt               Hashed build/test dependency lock
+requirements-build.in                Build/test deps input for uv pip compile
+CHANGELOG.md                         Release notes (Keep a Changelog format)
+EULA.txt                             End-user license agreement (MIT + tail)
+PRIVACY.md                           Privacy policy (no telemetry)
+THIRD_PARTY_NOTICES.txt              Bundled-dependency licenses
+IMPLEMENTATION_PLAN_1.0.md           Full v1.0 release plan
 ```
 
 ## Testing
@@ -369,7 +434,7 @@ pytest
 
 Useful narrower checks:
 
-```cmd
+```sh
 python -m compileall -q main.py lyon tests
 pytest tests/test_player_equalizer.py
 pytest tests/test_ripper.py tests/test_ctdb_verify.py
@@ -404,13 +469,13 @@ codebase intentionally closes or bounds them:
 - YouTube thumbnail network replies are cancelled when results are
   replaced or the YouTube view shuts down.
 
-## Windows Builds
+## Builds
 
-### Recommended: GitHub Actions
+### Windows — GitHub Actions
 
 `.github/workflows/windows-build.yml` is the canonical release
-pipeline. Trigger it via `workflow_dispatch` (or, for tagged releases,
-via `git tag v*.*.* && git push`). The workflow:
+pipeline. Trigger via `workflow_dispatch` (or `git tag v*.*.* && git push`).
+The workflow:
 
 1. Installs Python deps.
 2. Runs the full pytest suite and aborts on failure (or if the
@@ -423,24 +488,37 @@ via `git tag v*.*.* && git push`). The workflow:
 7. Emits SHA256SUMS for the installer + portable zip.
 8. Uploads the installer, zip, and SHA256SUMS as a single artifact.
 
-### Local script
+#### Local Windows build
 
 ```powershell
 scripts\build-windows.ps1
-```
-
-Useful flags:
-
-```powershell
 scripts\build-windows.ps1 -Clean
 scripts\build-windows.ps1 -SkipBinaries
-scripts\build-windows.ps1 -SkipZip
-scripts\build-windows.ps1 -SkipInstaller
 ```
 
-See [`docs/BUILD.md`](docs/BUILD.md) for the longer build guide
-including registry layout, SmartScreen notes, and reproducible build
-notes.
+See [`docs/BUILD.md`](docs/BUILD.md) for the longer guide including
+registry layout, SmartScreen notes, and reproducible build notes.
+
+### macOS (Apple Silicon) — GitHub Actions
+
+`.github/workflows/macos-build.yml` builds on a `macos-14` (arm64)
+runner. Trigger via `workflow_dispatch` or a `v*.*.*` tag. The workflow:
+
+1. Verifies the runner and Python are arm64-native (not Rosetta).
+2. Installs Python deps (including PyObjC for IOKit/DiskArbitration).
+3. Runs the full pytest suite.
+4. Downloads arm64 ffmpeg, fpcalc, libVLC, and libdiscid with SHA-256
+   verification.
+5. Builds a `.icns` icon from brand assets.
+6. Runs PyInstaller with `--target-arch arm64`.
+7. Injects libVLC, plugins, ffmpeg, fpcalc, and libdiscid into the
+   `.app` bundle; thins any universal2 binaries to arm64 via `lipo`.
+8. Code-signs with a Developer ID Application certificate.
+9. Notarizes and staples the `.app` with `xcrun notarytool`.
+10. Builds a signed `.dmg` with `create-dmg`.
+11. Emits a SHA-256 manifest and uploads artifacts.
+12. On tagged releases, generates a multi-OS `appcast.xml` (waiting
+    for the Windows installer asset before publishing).
 
 ## Troubleshooting
 
@@ -450,28 +528,37 @@ libdiscid/discid, fpcalc, VLC/libVLC, and DLNA networking. Then
 plus a redacted settings snapshot for support.
 
 - **Audio playback is unavailable** — confirm `python-vlc` is
-  installed and a 64-bit VLC runtime is discoverable or present under
-  `bin\vlc\`.
+  installed and the VLC runtime is discoverable.
+  - Windows: VLC 64-bit under `bin\vlc\`.
+  - macOS: VLC installed to `/Applications` or arm64 `libvlc.dylib`
+    in `vendor-mac/` (bundled builds include it automatically).
 - **Video player shows the unavailable screen** — fix the same
   VLC/libVLC setup used for audio playback and EQ.
 - **Equalizer controls move but sound does not change** — the audible
   EQ requires libVLC, not just the Qt UI.
-- **`ffmpeg not found` while ripping or downloading audio** — place
-  `bin\ffmpeg.exe` in the repo root or install ffmpeg on `PATH`. The
-  installer ships ffmpeg.
-- **No CD drive appears** — confirm Windows sees the optical drive
-  and that an audio CD is inserted.
+- **`ffmpeg not found` while ripping or downloading** — place
+  `bin/ffmpeg` (macOS) or `bin\ffmpeg.exe` (Windows) in the repo root,
+  or install ffmpeg on `PATH`. The packaged builds ship ffmpeg.
+- **No CD drive appears (Windows)** — confirm Windows sees the optical
+  drive and an audio CD is inserted.
+- **No CD drive appears (macOS)** — the Disc/Rip tabs are hidden until
+  a drive is detected. If a drive is connected but the tabs don't
+  appear, open **Help → Runtime Diagnostics** to check IOKit detection.
 - **Disc metadata does not resolve** — keep CUETools DB metadata
   lookup enabled, confirm internet access, and set a real MusicBrainz
   contact value in Settings → Metadata.
 - **YouTube search/download fails** — confirm `yt-dlp` is installed
   in the active environment. ffmpeg is also needed for high-quality
   video merging and audio conversion.
-- **SmartScreen warning at install** — expected for 1.0. Click
-  "More info → Run anyway". See
+- **SmartScreen warning at install (Windows)** — expected for 1.0.
+  Click "More info → Run anyway". See
   [`docs/SMARTSCREEN_NOTES.md`](docs/SMARTSCREEN_NOTES.md) for the
-  full FAQ, including how to verify the SHA-256 hash before running.
-  A signed build is planned for 1.1.
+  full FAQ and SHA-256 verification steps. A signed build is planned
+  for 1.1.
+- **macOS: "Sea Lyon is damaged and can't be opened"** — this should
+  not occur with a notarized DMG. If it does, run
+  `xattr -dr com.apple.quarantine /Applications/Sea\ Lyon\ Media\ Manager.app`
+  and verify the DMG SHA-256 matches the published manifest.
 
 ## Legal & Privacy
 

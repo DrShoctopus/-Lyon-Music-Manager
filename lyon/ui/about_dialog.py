@@ -112,7 +112,8 @@ class AboutDialog(QDialog):
 
         description = QLabel(
             "Sea Lyon is a music library manager, CD ripper, podcast / radio "
-            "player, and video player for Windows 10 and 11.",
+            "player, and video player for Windows 10 / 11 and macOS "
+            "(Apple Silicon).",
             widget,
         )
         description.setWordWrap(True)
