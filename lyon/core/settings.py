@@ -179,11 +179,18 @@ def normalize_radio_stations(stations: object, *, limit: int = _MAX_RADIO_STATIO
         name = str(value.get("name") or "").strip() or url
         genre = str(value.get("genre") or "").strip()
         bitrate = _nonnegative_int(value.get("bitrate"), 0)
+        favorite = bool(value.get("favorite", False))
+        raw_tags = value.get("tags") or []
+        if isinstance(raw_tags, str):
+            raw_tags = [t.strip() for t in raw_tags.split(",") if t.strip()]
+        tags = [str(t) for t in raw_tags if t]
         normalized.append({
             "name": name,
             "url": url,
             "genre": genre,
             "bitrate": bitrate,
+            "favorite": favorite,
+            "tags": tags,
         })
         seen.add(key)
         if len(normalized) >= limit:
@@ -279,6 +286,7 @@ class Settings:
     dlna_bind_address: str = "0.0.0.0"
     last_cast_renderer: str = ""
     radio_stations: list[dict[str, object]] = field(default_factory=list)
+    radio_quick_play_history: list[str] = field(default_factory=list)
     podcast_subscriptions: list[dict[str, object]] = field(default_factory=list)
     youtube_acknowledged: bool = False  # gate: user has accepted YouTube ToS disclaimer
     smartscreen_advisory_shown: bool = False  # gate: one-time SmartScreen explainer toast
@@ -365,6 +373,11 @@ class Settings:
     def remember_stream_url(self, url: str) -> None:
         """Move a valid stream URL to the front of the recents list."""
         self.recent_stream_urls = normalize_stream_urls([url, *self.recent_stream_urls])
+
+    def add_quick_play_url(self, url: str, *, limit: int = 10) -> None:
+        """Prepend *url* to the quick-play history, deduplicating and capping at *limit*."""
+        deduped = [u for u in (self.radio_quick_play_history or []) if u != url]
+        self.radio_quick_play_history = [url, *deduped][: limit]
 
     def add_radio_stations(self, stations: list[dict[str, object]]) -> None:
         """Append or update saved radio stations by URL.

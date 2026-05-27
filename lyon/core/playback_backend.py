@@ -239,7 +239,7 @@ class VlcPlaybackBackend(PlaybackBackend):
         vlc_instance_options: tuple[str, ...] = (),
     ):
         super().__init__(parent)
-        from PySide6.QtCore import QTimer
+        from PySide6.QtCore import QMetaObject, Qt, QTimer, Q_ARG
 
         self._vlc = vlc_module
         self._instance = vlc_module.Instance(*vlc_instance_options)
@@ -287,6 +287,9 @@ class VlcPlaybackBackend(PlaybackBackend):
         self._current_source: str = ""
         self._error_emitted_for: str = ""
         self._last_emitted_metadata: dict[str, str] = {}
+        self._QMetaObject = QMetaObject
+        self._Qt = Qt
+        self._Q_ARG = Q_ARG
 
     def set_source(
         self,
@@ -488,11 +491,15 @@ class VlcPlaybackBackend(PlaybackBackend):
         return getattr(event_type_cls, "MediaMetaChanged", None)
 
     def _on_meta_event(self, _event: Any) -> None:
-        # Runs on a VLC worker thread — must be cheap. The QTimer fires on the
-        # thread that owns it (the GUI thread), so the actual VLC reads happen
-        # there. QTimer.start is safe to call from another thread.
+        # Runs on a VLC worker thread — must be cheap. Use invokeMethod to
+        # marshal timer.start() onto the GUI thread that owns the timer object.
         try:
-            self._meta_dispatch.start(60)
+            self._QMetaObject.invokeMethod(
+                self._meta_dispatch,
+                "start",
+                self._Qt.ConnectionType.QueuedConnection,
+                self._Q_ARG(int, 60),
+            )
         except Exception as exc:
             LOG.debug("Could not schedule metadata dispatch: %s", exc)
 
@@ -591,6 +598,15 @@ class VlcPlaybackBackend(PlaybackBackend):
                 self.error_occurred.emit(source)
         elif state == self._vlc.State.Stopped:
             self._emit_state("stopped")
+            source = self._current_source
+            if (
+                source
+                and source != self._error_emitted_for
+                and not self._has_started_playback
+                and self._last_position == (0, 0)
+            ):
+                self._error_emitted_for = source
+                self.error_occurred.emit(source)
 
         current = (max(0, int(player.get_time())), max(0, int(player.get_length())))
         if current != self._last_position:

@@ -309,8 +309,10 @@ class MainWindow(QMainWindow):
         self.library_view.status_message.connect(
             lambda m: self.show_toast(m, level="warning"))
         self.player.track_changed.connect(self.library_view.highlight_track)
+        self.player.track_changed.connect(self._on_player_track_changed)
         self.player.playback_unavailable.connect(self._on_playback_unavailable)
-        self._connect_backend_error_toast()
+        if hasattr(self.player, "error_occurred"):
+            self.player.error_occurred.connect(self._on_stream_error)
         self.library_view.request_add_folder.connect(self.add_folder)
         self.library_view.request_youtube_search.connect(self._search_youtube_for_track)
         self.library_view.request_open_settings.connect(self.open_settings)
@@ -666,16 +668,9 @@ class MainWindow(QMainWindow):
         )
         self.statusBar().showMessage(reason, 6000)
 
-    def _connect_backend_error_toast(self) -> None:
-        """Subscribe to backend ``error_occurred`` to surface stream failures."""
-        backend = getattr(self.player, "_backend", None)
-        signal = getattr(backend, "error_occurred", None)
-        if signal is None:
-            return
-        try:
-            signal.connect(self._on_stream_error)
-        except (RuntimeError, TypeError):
-            pass
+    def _on_player_track_changed(self, track: object) -> None:
+        if track is not None and getattr(track, "is_library_item", True):
+            self._last_radio_request = None
 
     def _on_stream_error(self, url: str) -> None:
         last = self._last_radio_request

@@ -86,12 +86,14 @@ def _library_track() -> Track:
 def test_backend_metadata_updates_streaming_track_title_and_artist(qapp):
     backend = FakeStreamBackend()
     player = Player(backend=backend)
-    received_tracks = []
-    player.track_changed.connect(received_tracks.append)
+    track_changed_tracks = []
+    stream_metadata_tracks = []
+    player.track_changed.connect(track_changed_tracks.append)
+    player.stream_metadata_changed.connect(stream_metadata_tracks.append)
 
     player.play_url("http://stream.example/audio", title="Sea Lyon Jazz")
 
-    received_tracks.clear()
+    track_changed_tracks.clear()
     backend.metadata_changed.emit({
         "now_playing": "Daft Punk - One More Time",
         "title": "One More Time",
@@ -106,8 +108,10 @@ def test_backend_metadata_updates_streaming_track_title_and_artist(qapp):
     # Station name is preserved in album so the transport bar reads
     # "Daft Punk — Sea Lyon Jazz".
     assert track.album == "Sea Lyon Jazz"
-    assert len(received_tracks) == 1
-    assert received_tracks[0] is track
+    # ICY updates go via stream_metadata_changed, not track_changed (Fix 4).
+    assert len(track_changed_tracks) == 0
+    assert len(stream_metadata_tracks) == 1
+    assert stream_metadata_tracks[0] is track
 
 
 def test_backend_metadata_falls_back_to_now_playing_split(qapp):

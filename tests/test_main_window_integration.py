@@ -469,7 +469,7 @@ def test_radio_play_request_uses_audio_player(main_window, monkeypatch):
     monkeypatch.setattr(
         main_window.player,
         "play_url",
-        lambda url, title=None: calls.append(("play_url", url, title)),
+        lambda url, title=None, options=(): calls.append(("play_url", url, title)),
     )
 
     main_window._play_radio_station("https://radio.example.test/live", "Sea Radio")

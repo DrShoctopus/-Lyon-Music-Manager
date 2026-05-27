@@ -50,7 +50,7 @@ _MAX_LISTENED_DELTA_MS = 10_000
 _BACKWARD_SEEK_RESET_THRESHOLD_MS = 5_000
 # Placeholder artist names assigned to one-shot URL plays before live
 # stream metadata arrives; never submit these as scrobbles.
-_PLACEHOLDER_STREAM_ARTISTS = frozenset({"network stream", ""})
+_PLACEHOLDER_STREAM_ARTISTS = frozenset({"network stream", "", "unknown artist"})
 
 
 def _has_scrobbleable_metadata(track: "Track") -> bool:
@@ -148,6 +148,7 @@ class ScrobblerService(QObject):
         self._scrobbled = False
         self._last_position_ms: int | None = None
         self._listened_ms = 0
+        self._last_stream_title: str = ""
         self._auth_token: str = ""
 
         self._token_received.connect(self._on_token_received)
@@ -157,6 +158,9 @@ class ScrobblerService(QObject):
 
         player.track_changed.connect(self._on_track_changed)
         player.position_changed.connect(self._on_position_changed)
+        stream_signal = getattr(player, "stream_metadata_changed", None)
+        if stream_signal is not None:
+            stream_signal.connect(self._on_stream_metadata_changed)
 
     def update_settings(self, settings: "Settings") -> None:
         self._settings = settings
@@ -171,8 +175,22 @@ class ScrobblerService(QObject):
         self._scrobbled = False
         self._last_position_ms = None
         self._listened_ms = 0
+        self._last_stream_title = ""
         self._track_start_time = time.time()
         if track is not None:
+            self._submit_now_playing(track)
+
+    def _on_stream_metadata_changed(self, track: "Track | None") -> None:
+        if track is None or not getattr(track, "playback_is_location", False):
+            return
+        if track is not self._current_track:
+            return
+        new_title = (track.title or "").strip()
+        if new_title and new_title != self._last_stream_title:
+            self._last_stream_title = new_title
+            self._track_start_time = time.time()
+            self._listened_ms = 0
+            self._scrobbled = False
             self._submit_now_playing(track)
 
     def _on_position_changed(self, pos_ms: int, total_ms: int) -> None:

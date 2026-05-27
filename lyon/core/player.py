@@ -30,11 +30,13 @@ class RepeatMode(Enum):
 
 
 class Player(QObject):
-    track_changed = Signal(object)        # Track or None
-    state_changed = Signal(str)           # "playing"/"paused"/"stopped"
-    position_changed = Signal(int, int)   # (ms, total_ms)
+    track_changed = Signal(object)           # Track or None
+    stream_metadata_changed = Signal(object) # ICY/HLS in-stream title updates only
+    state_changed = Signal(str)              # "playing"/"paused"/"stopped"
+    position_changed = Signal(int, int)      # (ms, total_ms)
     queue_changed = Signal()
     playback_unavailable = Signal(str)
+    error_occurred = Signal(str)             # stream URL that failed to open
 
     def __init__(
         self,
@@ -457,6 +459,9 @@ class Player(QObject):
         metadata_signal = getattr(backend, "metadata_changed", None)
         if metadata_signal is not None:
             metadata_signal.connect(self._on_backend_metadata)
+        error_signal = getattr(backend, "error_occurred", None)
+        if error_signal is not None:
+            error_signal.connect(self.error_occurred.emit)
 
     def _disconnect_backend(self, backend: PlaybackBackend) -> None:
         slots: list[tuple[object, object]] = [
@@ -467,6 +472,9 @@ class Player(QObject):
         metadata_signal = getattr(backend, "metadata_changed", None)
         if metadata_signal is not None:
             slots.append((metadata_signal, self._on_backend_metadata))
+        error_signal = getattr(backend, "error_occurred", None)
+        if error_signal is not None:
+            slots.append((error_signal, self.error_occurred.emit))
         for signal, slot in slots:
             try:
                 signal.disconnect(slot)
@@ -605,7 +613,7 @@ class Player(QObject):
         elif now_playing:
             track.title = now_playing
 
-        self.track_changed.emit(track)
+        self.stream_metadata_changed.emit(track)
 
     def _on_track_ended(self) -> None:
         if 0 <= self._index < len(self._queue):

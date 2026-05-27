@@ -1,11 +1,14 @@
 """Internet radio station and playlist parsing helpers."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+import dataclasses
+from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
 from .settings import normalize_stream_urls
+
+_HEAD_THEN_GET = ("HEAD", "GET")
 
 
 def radio_user_agent() -> str:
@@ -47,6 +50,8 @@ class RadioStation:
     url: str
     genre: str = ""
     bitrate: int = 0
+    favorite: bool = False
+    tags: tuple[str, ...] = ()
 
     def as_settings_dict(self) -> dict[str, object]:
         return {
@@ -54,6 +59,8 @@ class RadioStation:
             "url": self.url,
             "genre": self.genre,
             "bitrate": self.bitrate,
+            "favorite": self.favorite,
+            "tags": list(self.tags),
         }
 
 
@@ -71,7 +78,15 @@ def parse_playlist_file(path: str | Path) -> list[RadioStation]:
     return parse_playlist_text(data, default_name=playlist_path.stem)
 
 
-def station_from_url(url: str, *, name: str = "", genre: str = "", bitrate: int = 0) -> RadioStation | None:
+def station_from_url(
+    url: str,
+    *,
+    name: str = "",
+    genre: str = "",
+    bitrate: int = 0,
+    tags: tuple[str, ...] = (),
+    favorite: bool = False,
+) -> RadioStation | None:
     clean_url = _clean_url(url)
     if not normalize_stream_urls([clean_url]):
         return None
@@ -80,18 +95,70 @@ def station_from_url(url: str, *, name: str = "", genre: str = "", bitrate: int 
         url=clean_url,
         genre=genre.strip(),
         bitrate=max(0, int(bitrate or 0)),
+        tags=tags,
+        favorite=bool(favorite),
     )
 
 
 def station_from_settings(value: object) -> RadioStation | None:
     if not isinstance(value, dict):
         return None
+    raw_tags = value.get("tags") or []
+    if isinstance(raw_tags, str):
+        raw_tags = [t.strip() for t in raw_tags.split(",") if t.strip()]
+    tags: tuple[str, ...] = tuple(str(t) for t in raw_tags if t)
     return station_from_url(
         str(value.get("url") or ""),
         name=str(value.get("name") or ""),
         genre=str(value.get("genre") or ""),
         bitrate=_safe_int(value.get("bitrate")),
+        tags=tags,
+        favorite=bool(value.get("favorite", False)),
     )
+
+
+def stations_to_m3u(stations: list[RadioStation]) -> str:
+    """Serialise a list of stations to an M3U playlist string."""
+    lines = ["#EXTM3U"]
+    for s in stations:
+        lines.append(f"#EXTINF:-1,{s.name}")
+        lines.append(s.url)
+    return "\n".join(lines)
+
+
+def stations_to_pls(stations: list[RadioStation]) -> str:
+    """Serialise a list of stations to a PLS playlist string."""
+    lines = ["[playlist]"]
+    for i, s in enumerate(stations, 1):
+        lines += [f"File{i}={s.url}", f"Title{i}={s.name}", f"Length{i}=-1"]
+    lines += [f"NumberOfEntries={len(stations)}", "Version=2"]
+    return "\n".join(lines)
+
+
+def check_station_health(url: str, *, timeout: float = 5.0) -> tuple[bool, int]:
+    """Send HEAD (then GET if HEAD is rejected) to *url* and return ``(ok, status_code)``.
+
+    Returns ``(False, 0)`` on any connection or timeout error.  The GET fallback
+    is needed because most Icecast/SHOUTcast servers do not support HEAD.  The
+    connection is closed immediately after receiving the response headers so no
+    stream data is consumed.
+    """
+    import urllib.error
+    import urllib.request
+
+    ua = radio_user_agent()
+    for method in _HEAD_THEN_GET:
+        try:
+            req = urllib.request.Request(url, method=method, headers={"User-Agent": ua})
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return True, resp.status
+        except urllib.error.HTTPError as exc:
+            if method == "HEAD" and exc.code == 405:
+                continue  # server rejected HEAD — try GET
+            return exc.code < 400, exc.code
+        except Exception:  # noqa: BLE001 — network errors must not crash the caller
+            return False, 0
+    return False, 0
 
 
 def _parse_m3u(text: str, *, base_url: str = "", default_name: str = "") -> list[RadioStation]:
