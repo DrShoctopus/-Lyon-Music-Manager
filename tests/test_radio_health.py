@@ -96,21 +96,36 @@ def test_oserror_returns_false_zero():
     assert code == 0
 
 
-def test_non_405_head_error_does_not_retry_with_get():
-    """A 503 from HEAD should be returned immediately without a GET retry."""
+def test_non_405_head_error_falls_back_to_get():
+    """Stream servers often reject HEAD with codes other than 405."""
     call_count = 0
 
     def fake_urlopen(req, timeout=None):
         nonlocal call_count
         call_count += 1
-        raise _http_error(503)
+        if req.get_method() == "HEAD":
+            raise _http_error(403)
+        return _mock_response(200)
+
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        ok, code = check_station_health("https://radio.example.test/live")
+
+    assert ok is True
+    assert code == 200
+    assert call_count == 2
+
+
+def test_get_failure_after_head_error_returns_false_zero():
+    def fake_urlopen(req, timeout=None):
+        if req.get_method() == "HEAD":
+            raise _http_error(503)
+        raise socket.timeout("timed out")
 
     with patch("urllib.request.urlopen", side_effect=fake_urlopen):
         ok, code = check_station_health("https://radio.example.test/live")
 
     assert ok is False
-    assert code == 503
-    assert call_count == 1  # no GET retry for non-405
+    assert code == 0
 
 
 def test_timeout_parameter_is_forwarded():

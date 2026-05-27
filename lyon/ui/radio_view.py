@@ -535,12 +535,29 @@ class RadioView(QWidget):
             dialog.deleteLater()
         if updated is None:
             return
+        duplicate = next(
+            (
+                raw for raw in self._settings.radio_stations
+                if str(raw.get("url", "")).casefold() == updated.url.casefold()
+                and str(raw.get("url", "")).casefold() != station.url.casefold()
+            ),
+            None,
+        )
+        if duplicate is not None:
+            QMessageBox.warning(
+                self,
+                "Edit Radio Station",
+                "A station with that URL already exists.",
+            )
+            return
         remaining = [
             raw for raw in self._settings.radio_stations
             if str(raw.get("url", "")).casefold() != station.url.casefold()
         ]
-        self._settings.radio_stations = normalize_radio_stations(remaining)
-        self._settings.add_radio_stations([updated.as_settings_dict()])
+        self._settings.radio_stations = normalize_radio_stations([
+            *remaining,
+            updated.as_settings_dict(),
+        ])
         self._save_settings()
         self.refresh()
         self._select_station_url(updated.url)

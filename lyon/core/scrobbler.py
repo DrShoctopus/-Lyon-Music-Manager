@@ -194,12 +194,19 @@ class ScrobblerService(QObject):
             self._submit_now_playing(track)
 
     def _on_position_changed(self, pos_ms: int, total_ms: int) -> None:
-        if self._scrobbled or self._current_track is None or total_ms <= 0:
+        if self._scrobbled or self._current_track is None:
             return
-        duration_s = total_ms / 1000.0
-        if duration_s < _MIN_TRACK_DURATION_S:
-            self._last_position_ms = pos_ms
-            return
+        is_stream = bool(getattr(self._current_track, "playback_is_location", False))
+        if total_ms <= 0:
+            if not is_stream:
+                return
+            threshold_ms = _SCROBBLE_CAP_S * 1000
+        else:
+            duration_s = total_ms / 1000.0
+            if duration_s < _MIN_TRACK_DURATION_S:
+                self._last_position_ms = pos_ms
+                return
+            threshold_ms = min(total_ms // 2, _SCROBBLE_CAP_S * 1000)
         if self._last_position_ms is None:
             self._last_position_ms = pos_ms
             return
@@ -209,7 +216,6 @@ class ScrobblerService(QObject):
             self._listened_ms = 0  # backward seek — reset so threshold can't fire from stale time
         elif 0 < delta_ms:
             self._listened_ms += min(delta_ms, _MAX_LISTENED_DELTA_MS)
-        threshold_ms = min(total_ms // 2, _SCROBBLE_CAP_S * 1000)
         if self._listened_ms >= threshold_ms:
             self._scrobbled = True
             self._submit_scrobble(self._current_track, int(self._track_start_time))

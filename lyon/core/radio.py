@@ -147,18 +147,23 @@ def check_station_health(url: str, *, timeout: float = 5.0) -> tuple[bool, int]:
     import urllib.request
 
     ua = radio_user_agent()
+    head_error_code = 0
     for method in _HEAD_THEN_GET:
         try:
             req = urllib.request.Request(url, method=method, headers={"User-Agent": ua})
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 return True, resp.status
         except urllib.error.HTTPError as exc:
-            if method == "HEAD" and exc.code == 405:
-                continue  # server rejected HEAD — try GET
+            if method == "HEAD":
+                head_error_code = exc.code
+                continue  # many stream servers reject HEAD but serve GET
             return exc.code < 400, exc.code
         except Exception:  # noqa: BLE001 — network errors must not crash the caller
+            if method == "HEAD":
+                head_error_code = 0
+                continue
             return False, 0
-    return False, 0
+    return False, head_error_code
 
 
 def _parse_m3u(text: str, *, base_url: str = "", default_name: str = "") -> list[RadioStation]:

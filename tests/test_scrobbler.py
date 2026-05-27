@@ -28,8 +28,9 @@ def _make_track(
     album="Album",
     duration=240.0,
     track_id=1,
+    playback_is_location=False,
+    is_library_item=True,
 ):
-    from dataclasses import replace
     from lyon.core.library import Track
 
     return Track(
@@ -44,6 +45,9 @@ def _make_track(
         year=2024,
         genre="",
         duration=duration,
+        playback_uri=f"https://stream.example.test/{title}" if playback_is_location else None,
+        playback_is_location=playback_is_location,
+        is_library_item=is_library_item,
     )
 
 
@@ -314,6 +318,24 @@ class TestPositionChanged:
     def test_zero_duration_ignored(self):
         with patch.object(self.svc, "_submit_scrobble") as mock:
             self.svc._on_position_changed(0, 0)
+            mock.assert_not_called()
+
+    def test_durationless_stream_accumulates_until_stream_threshold(self):
+        self.svc._current_track = _make_track(
+            title="One More Time",
+            artist="Daft Punk",
+            duration=0.0,
+            playback_is_location=True,
+            is_library_item=False,
+        )
+        with patch.object(self.svc, "_submit_scrobble") as mock:
+            self._advance_to(_SCROBBLE_CAP_S * 1000, 0)
+            mock.assert_called_once()
+
+    def test_durationless_non_stream_ignored(self):
+        self.svc._current_track = _make_track(duration=0.0)
+        with patch.object(self.svc, "_submit_scrobble") as mock:
+            self._advance_to(_SCROBBLE_CAP_S * 1000, 0)
             mock.assert_not_called()
 
     def test_tiny_backward_seek_keeps_listened_time(self):

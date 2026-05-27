@@ -178,6 +178,94 @@ def test_radio_view_remove_selected_station(qapp, monkeypatch):
         view.deleteLater()
 
 
+def test_radio_view_edit_rejects_duplicate_url(qapp, monkeypatch):
+    settings = Settings(
+        radio_stations=[
+            {"name": "One", "url": "https://one.example.test/live"},
+            {"name": "Two", "url": "https://two.example.test/live"},
+        ]
+    )
+    saves: list[bool] = []
+    warnings: list[str] = []
+    monkeypatch.setattr(settings, "save", lambda: saves.append(True))
+    monkeypatch.setattr(
+        radio_view_module.QMessageBox,
+        "warning",
+        lambda _parent, _title, message: warnings.append(message),
+    )
+
+    class FakeDialog:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def exec(self):
+            return QtWidgets.QDialog.Accepted
+
+        def station(self):
+            return RadioStation("Edited", "https://two.example.test/live")
+
+        def deleteLater(self):
+            pass
+
+    monkeypatch.setattr(radio_view_module, "RadioStationDialog", FakeDialog)
+    view = RadioView(settings)
+
+    try:
+        view.table.selectRow(0)
+        view._edit_station()
+
+        assert [station["name"] for station in settings.radio_stations] == ["One", "Two"]
+        assert saves == []
+        assert warnings == ["A station with that URL already exists."]
+    finally:
+        view.deleteLater()
+
+
+def test_radio_view_edit_replaces_blank_fields(qapp, monkeypatch):
+    settings = Settings(
+        radio_stations=[
+            {
+                "name": "Original",
+                "url": "https://one.example.test/live",
+                "genre": "Jazz",
+                "bitrate": 128,
+            },
+        ]
+    )
+    monkeypatch.setattr(settings, "save", lambda: None)
+
+    class FakeDialog:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def exec(self):
+            return QtWidgets.QDialog.Accepted
+
+        def station(self):
+            return RadioStation("Edited", "https://one.example.test/live")
+
+        def deleteLater(self):
+            pass
+
+    monkeypatch.setattr(radio_view_module, "RadioStationDialog", FakeDialog)
+    view = RadioView(settings)
+
+    try:
+        view.table.selectRow(0)
+        view._edit_station()
+
+        assert settings.radio_stations == [{
+            "name": "Edited",
+            "url": "https://one.example.test/live",
+            "genre": "",
+            "bitrate": 0,
+            "favorite": False,
+            "tags": [],
+        }]
+    finally:
+        view.deleteLater()
+
+
 # ---- PR4: Favorites & Tags ---------------------------------------------------
 
 def test_radio_view_filter_searches_tags(qapp):
