@@ -102,7 +102,8 @@ class RadioBrowserClient:
     def by_uuid(self, uuid: str) -> RadioStation | None:
         data = self._get(f"stations/byuuid/{uuid}")
         if isinstance(data, list) and data:
-            return _station_from_json(data[0])
+            result = _browse_result_from_json(data[0])
+            return result.station if result is not None else None
         return None
 
     def list_country_codes(self) -> list[str]:

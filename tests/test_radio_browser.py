@@ -112,6 +112,16 @@ def test_search_filters_invalid_stations():
     assert len(results) == 1   # bad item filtered out
 
 
+def test_by_uuid_parses_station_response():
+    client = RadioBrowserClient()
+    with patch("lyon.core.radio_browser.urlopen", return_value=_fake_response([_STATION_JSON])):
+        station = client.by_uuid("station-123")
+
+    assert station is not None
+    assert station.name == "Test Radio"
+    assert station.url == "https://test.example.test/live"
+
+
 # ---------------------------------------------------------------------------
 # RadioBrowserClient.list_country_codes / list_tags
 # ---------------------------------------------------------------------------
