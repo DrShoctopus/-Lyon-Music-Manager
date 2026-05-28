@@ -112,13 +112,37 @@ def test_macos_workflow_uses_pinned_arm64_ffmpeg_source():
     assert "mac-vendor-ffmpeg${{ env.FFMPEG_VERSION }}" in workflow
 
 
-def test_macos_vendor_script_verifies_and_replaces_ffmpeg():
+def test_macos_workflow_pins_vendor_archive_checksums():
+    repo = Path(__file__).resolve().parents[1]
+    workflow = (repo / ".github" / "workflows" / "macos-build.yml").read_text(encoding="utf-8")
+
+    assert "FPCALC_SHA256: \"9c5d9565d2396dbcf0e1d797e1ffdf1e19242f3bed88ac3200e144286b57ede6\"" in workflow
+    assert "LIBDISCID_URL: \"https://github.com/metabrainz/libdiscid/releases/download/v0.6.4/libdiscid-0.6.4.tar.gz\"" in workflow
+    assert "LIBDISCID_SHA256: \"dd5e8f1c9aead442e23b749a9cc9336372e62e88ad7079a2b62895b0390cb282\"" in workflow
+    assert "musicbrainz.org/static/libdiscid" not in workflow
+    assert "fpcalc${{ env.FPCALC_VERSION }}" in workflow
+
+
+def test_macos_vendor_script_verifies_and_replaces_vendor_archives():
     repo = Path(__file__).resolve().parents[1]
     script = (repo / "scripts" / "fetch-macos-vendor-binaries.sh").read_text(encoding="utf-8")
 
     assert "FFMPEG_SHA256" in script
+    assert "FPCALC_SHA256" in script
+    assert "LIBDISCID_SHA256" in script
     assert "ffmpeg-darwin-arm64.gz" in script
+    assert "github.com/metabrainz/libdiscid" in script
     assert "Cached ffmpeg is not arm64; refetching" in script
     assert "gzip -dc" in script
     assert "checksum mismatch" in script
     assert "evermeet.cx" not in script
+    assert "musicbrainz.org/static/libdiscid" not in script
+
+
+def test_macos_bundle_script_cleans_up_vlc_mount():
+    repo = Path(__file__).resolve().parents[1]
+    script = (repo / "scripts" / "build-macos-bundle.sh").read_text(encoding="utf-8")
+
+    assert "cleanup_vlc_mount" in script
+    assert "trap cleanup_vlc_mount EXIT" in script
+    assert "mkdir -p \"$VLC_MOUNT\"" in script

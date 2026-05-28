@@ -9,8 +9,11 @@ mkdir -p "$VENDOR"
 VLC_VERSION="${VLC_VERSION:-3.0.21}"
 LIBDISCID_VERSION="${LIBDISCID_VERSION:-0.6.4}"
 FPCALC_URL="${FPCALC_URL:-https://github.com/acoustid/chromaprint/releases/download/v1.5.1/chromaprint-fpcalc-1.5.1-macos-arm64.tar.gz}"
+FPCALC_SHA256="${FPCALC_SHA256:-9c5d9565d2396dbcf0e1d797e1ffdf1e19242f3bed88ac3200e144286b57ede6}"
 FFMPEG_URL="${FFMPEG_URL:-https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffmpeg-darwin-arm64.gz}"
 FFMPEG_SHA256="${FFMPEG_SHA256:-8923876afa8db5585022d7860ec7e589af192f441c56793971276d450ed3bbfa}"
+LIBDISCID_URL="${LIBDISCID_URL:-https://github.com/metabrainz/libdiscid/releases/download/v${LIBDISCID_VERSION}/libdiscid-${LIBDISCID_VERSION}.tar.gz}"
+LIBDISCID_SHA256="${LIBDISCID_SHA256:-dd5e8f1c9aead442e23b749a9cc9336372e62e88ad7079a2b62895b0390cb282}"
 
 verify_checksum() {
     local f="$1"
@@ -85,6 +88,7 @@ verify_arm64_only "$VENDOR/ffmpeg"
 if [ ! -f "$VENDOR/fpcalc" ]; then
     echo "Fetching fpcalc (arm64)..."
     curl -fsSL "${FPCALC_URL}" -o "$VENDOR/fpcalc.tar.gz"
+    verify_checksum "$VENDOR/fpcalc.tar.gz" "$FPCALC_SHA256"
     tar -xzf "$VENDOR/fpcalc.tar.gz" -C "$VENDOR/" --strip-components=1
     rm "$VENDOR/fpcalc.tar.gz"
     chmod +x "$VENDOR/fpcalc"
@@ -112,8 +116,8 @@ fi
 if [ ! -f "$VENDOR/libdiscid.0.dylib" ]; then
     echo "Building libdiscid ${LIBDISCID_VERSION} from source..."
     DISCID_SRC="$VENDOR/libdiscid-src"
-    DISCID_URL="https://musicbrainz.org/static/libdiscid/libdiscid-${LIBDISCID_VERSION}.tar.gz"
-    curl -fsSL "${DISCID_URL}" -o "$VENDOR/libdiscid.tar.gz"
+    curl -fsSL "${LIBDISCID_URL}" -o "$VENDOR/libdiscid.tar.gz"
+    verify_checksum "$VENDOR/libdiscid.tar.gz" "$LIBDISCID_SHA256"
     mkdir -p "$DISCID_SRC"
     tar -xzf "$VENDOR/libdiscid.tar.gz" -C "$DISCID_SRC" --strip-components=1
     rm "$VENDOR/libdiscid.tar.gz"
