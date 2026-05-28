@@ -9,6 +9,7 @@ from pathlib import Path
 from xml.sax.saxutils import escape
 
 import requests
+from defusedxml.ElementTree import fromstring
 from PySide6.QtCore import QObject, QThread, Signal
 
 from .dlna_renderer_discovery import RendererDevice
@@ -545,4 +546,51 @@ def _soap(url: str, service: str, action: str, args: dict[str, str]) -> None:
     }
     resp = requests.post(url, data=body.encode("utf-8"), headers=headers, timeout=5.0)
     if resp.status_code >= 400:
+        detail = _soap_fault_detail(resp.content)
+        if detail:
+            raise RuntimeError(f"renderer rejected {action}: {detail}")
         raise RuntimeError(f"SOAP {action} returned HTTP {resp.status_code}")
+
+
+# Standard UPnP AVTransport / control error codes. Used only as a fallback when
+# a renderer returns a fault without a human-readable <errorDescription>.
+_UPNP_ERROR_NAMES = {
+    "401": "Invalid action",
+    "402": "Invalid args",
+    "501": "Action failed",
+    "701": "Transition not available",
+    "704": "Format not supported for playback",
+    "705": "Transport is locked",
+    "714": "Illegal MIME type",
+    "715": "Content busy",
+    "716": "Resource not found",
+    "718": "Invalid InstanceID",
+}
+
+
+def _soap_fault_detail(body: object) -> str:
+    """Extract a readable UPnP error from a SOAP fault body, or '' if absent."""
+    if not isinstance(body, (bytes, bytearray, str)):
+        return ""
+    try:
+        root = fromstring(body)
+    except Exception:
+        return ""
+    code = ""
+    description = ""
+    for elem in root.iter():
+        local = elem.tag.rsplit("}", 1)[-1]
+        text = (elem.text or "").strip()
+        if not text:
+            continue
+        if local == "errorCode":
+            code = text
+        elif local == "errorDescription":
+            description = text
+    if not description and code:
+        description = _UPNP_ERROR_NAMES.get(code, "")
+    if code and description:
+        return f"UPnP {code} ({description})"
+    if code:
+        return f"UPnP error {code}"
+    return ""

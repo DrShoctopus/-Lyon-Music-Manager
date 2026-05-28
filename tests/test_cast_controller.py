@@ -160,12 +160,50 @@ def test_soap_sends_correct_headers_and_action():
 def test_soap_raises_on_http_error():
     mock_resp = MagicMock()
     mock_resp.status_code = 500
+    mock_resp.content = b"not xml"
 
     with patch("lyon.core.cast_controller.requests.post", return_value=mock_resp):
         with pytest.raises(RuntimeError, match="HTTP 500"):
             _soap("http://renderer/control",
                   "urn:schemas-upnp-org:service:AVTransport:1",
                   "Play", {"InstanceID": "0", "Speed": "1"})
+
+
+_UPNP_FAULT = (
+    b'<?xml version="1.0"?>'
+    b'<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">'
+    b"<s:Body><s:Fault><faultcode>s:Client</faultcode>"
+    b"<faultstring>UPnPError</faultstring><detail>"
+    b'<UPnPError xmlns="urn:schemas-upnp-org:control-1-0">'
+    b"<errorCode>{code}</errorCode>{desc}</UPnPError>"
+    b"</detail></s:Fault></s:Body></s:Envelope>"
+)
+
+
+def test_soap_surfaces_upnp_fault_detail():
+    mock_resp = MagicMock()
+    mock_resp.status_code = 500
+    mock_resp.content = _UPNP_FAULT.replace(
+        b"{code}", b"716"
+    ).replace(b"{desc}", b"<errorDescription>Resource not found</errorDescription>")
+
+    with patch("lyon.core.cast_controller.requests.post", return_value=mock_resp):
+        with pytest.raises(RuntimeError, match="716.*Resource not found"):
+            _soap("http://renderer/control",
+                  "urn:schemas-upnp-org:service:AVTransport:1",
+                  "SetAVTransportURI", {"InstanceID": "0"})
+
+
+def test_soap_fault_falls_back_to_code_name_without_description():
+    mock_resp = MagicMock()
+    mock_resp.status_code = 500
+    mock_resp.content = _UPNP_FAULT.replace(b"{code}", b"714").replace(b"{desc}", b"")
+
+    with patch("lyon.core.cast_controller.requests.post", return_value=mock_resp):
+        with pytest.raises(RuntimeError, match="714.*Illegal MIME type"):
+            _soap("http://renderer/control",
+                  "urn:schemas-upnp-org:service:AVTransport:1",
+                  "SetAVTransportURI", {"InstanceID": "0"})
 
 
 # ---------------------------------------------------------------------------
