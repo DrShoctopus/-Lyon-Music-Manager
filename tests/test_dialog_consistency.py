@@ -105,19 +105,15 @@ def test_first_run_dialog_title_and_form_labels_are_named(app):
     assert len(form_labels) == 2  # music root + library folders
 
 
-def test_settings_about_tab_uses_dialog_typography_classes(app):
+def test_settings_about_tab_matches_about_dialog_layout(app):
+    """Settings About tab must use the same build_about_widget as Help → About."""
+    from lyon import __app_name__, __version__
     from lyon.ui.settings_dialog import SettingsDialog
     dlg = SettingsDialog(Settings.load())
-    titles = [
-        lbl for lbl in dlg.findChildren(QtWidgets.QLabel)
-        if lbl.objectName() == "dialogTitle"
-    ]
-    subtitles = [
-        lbl for lbl in dlg.findChildren(QtWidgets.QLabel)
-        if lbl.objectName() == "dialogSubtitle"
-    ]
-    assert len(titles) == 1
-    assert len(subtitles) == 1
+    labels = [lbl.text() for lbl in dlg.findChildren(QtWidgets.QLabel)]
+    # build_about_widget sets a RichText h2 title and a plain version label.
+    assert any(__app_name__ in t for t in labels), "App name not found in About tab"
+    assert any(__version__ in t for t in labels), "Version not found in About tab"
 
 
 def test_yt_download_dialog_log_is_monospace(app):

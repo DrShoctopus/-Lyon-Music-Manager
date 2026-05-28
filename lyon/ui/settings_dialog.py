@@ -13,10 +13,8 @@ from PySide6.QtWidgets import (
     QPushButton, QScrollArea, QSpinBox, QTabWidget, QVBoxLayout, QWidget,
 )
 
-from .. import __app_name__, __version__
 from ..core.settings import Settings, normalize_library_paths
-from .about import COPYRIGHT_NOTICE, THIRD_PARTY_NOTICE
-from .branding import app_icon
+from .about_dialog import build_about_widget
 
 if TYPE_CHECKING:
     from ..core.scrobbler import ScrobblerService
@@ -674,64 +672,7 @@ class SettingsDialog(QDialog):
         QDesktopServices.openUrl(QUrl("https://listenbrainz.org/profile/"))
 
     def _build_about_tab(self) -> QWidget:
-        w = QWidget()
-        layout = QVBoxLayout(w)
-        layout.setContentsMargins(24, 24, 24, 24)
-        layout.setSpacing(6)
-
-        # Branding header: icon + app name + version stacked beside it.
-        brand = QHBoxLayout()
-        brand.setSpacing(14)
-        icon_label = QLabel()
-        icon_pixmap = app_icon().pixmap(64, 64)
-        if not icon_pixmap.isNull():
-            icon_label.setPixmap(icon_pixmap)
-            icon_label.setFixedSize(64, 64)
-            brand.addWidget(icon_label, 0, Qt.AlignTop)
-        text_col = QVBoxLayout()
-        text_col.setSpacing(2)
-        name_label = QLabel(__app_name__)
-        name_label.setObjectName("dialogTitle")
-        text_col.addWidget(name_label)
-        version_label = QLabel(f"Version {__version__}")
-        version_label.setObjectName("dialogSubtitle")
-        text_col.addWidget(version_label)
-        text_col.addStretch(1)
-        brand.addLayout(text_col, 1)
-        layout.addLayout(brand)
-
-        layout.addSpacing(12)
-
-        desc = QLabel(
-            "Sea Lyon is a music library manager, CD ripper, podcast / radio "
-            "player, and video player for Windows 10 and 11."
-        )
-        desc.setWordWrap(True)
-        layout.addWidget(desc)
-
-        layout.addSpacing(12)
-
-        copyright_label = QLabel(COPYRIGHT_NOTICE)
-        copyright_label.setObjectName("mutedText")
-        layout.addWidget(copyright_label)
-
-        license_label = QLabel("Released under the MIT License.")
-        license_label.setObjectName("mutedText")
-        layout.addWidget(license_label)
-
-        layout.addSpacing(12)
-
-        credits_label = QLabel("Third-Party Acknowledgements")
-        credits_label.setObjectName("sectionHeader")
-        layout.addWidget(credits_label)
-
-        third_party = QLabel(THIRD_PARTY_NOTICE)
-        third_party.setObjectName("mutedText")
-        third_party.setWordWrap(True)
-        layout.addWidget(third_party)
-
-        layout.addStretch(1)
-        return w
+        return build_about_widget(self)
 
     # ------------------------------------------------------------------ inline validators
 

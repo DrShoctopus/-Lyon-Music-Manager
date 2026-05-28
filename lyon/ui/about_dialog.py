@@ -60,6 +60,67 @@ def _find_bundled_file(filename: str) -> Path | None:
     return None
 
 
+def build_about_widget(parent: QWidget | None = None) -> QWidget:
+    """Build the About panel widget.
+
+    Shared by :class:`AboutDialog` and the Settings dialog so both surfaces
+    always show identical content and layout.
+    """
+    widget = QWidget(parent)
+    layout = QVBoxLayout(widget)
+    layout.setSpacing(12)
+
+    icon_row = QHBoxLayout()
+    icon_label = QLabel(widget)
+    icon_label.setPixmap(app_icon().pixmap(72, 72))
+    icon_row.addWidget(icon_label, 0, Qt.AlignTop)
+
+    text_col = QVBoxLayout()
+    title = QLabel(f"<h2>{__app_name__}</h2>", widget)
+    title.setTextFormat(Qt.RichText)
+    version = QLabel(f"Version {__version__}", widget)
+    version.setStyleSheet("color: #888;")
+    text_col.addWidget(title)
+    text_col.addWidget(version)
+    text_col.addStretch(1)
+    icon_row.addLayout(text_col, 1)
+    layout.addLayout(icon_row)
+
+    description = QLabel(
+        "Sea Lyon is a music library manager, CD ripper, podcast / radio "
+        "player, and video player for Windows 10 / 11 and macOS "
+        "(Apple Silicon).",
+        widget,
+    )
+    description.setWordWrap(True)
+    layout.addWidget(description)
+
+    copyright_label = QLabel(COPYRIGHT_NOTICE, widget)
+    copyright_label.setWordWrap(True)
+    layout.addWidget(copyright_label)
+
+    links_row = QHBoxLayout()
+    homepage_btn = QPushButton("Open Project Page", widget)
+    homepage_btn.clicked.connect(
+        lambda: QDesktopServices.openUrl(
+            QUrl("https://github.com/DrShoctopus/Sea-Lyon-Media-Manager")
+        )
+    )
+    releases_btn = QPushButton("Releases / Changelog", widget)
+    releases_btn.clicked.connect(
+        lambda: QDesktopServices.openUrl(
+            QUrl("https://github.com/DrShoctopus/Sea-Lyon-Media-Manager/releases")
+        )
+    )
+    links_row.addWidget(homepage_btn)
+    links_row.addWidget(releases_btn)
+    links_row.addStretch(1)
+    layout.addLayout(links_row)
+
+    layout.addStretch(1)
+    return widget
+
+
 class AboutDialog(QDialog):
     """Tabbed About / Acknowledgements / Licenses / System Info dialog."""
 
@@ -90,59 +151,7 @@ class AboutDialog(QDialog):
     # -- tabs --------------------------------------------------------------
 
     def _build_about_tab(self) -> QWidget:
-        widget = QWidget(self)
-        layout = QVBoxLayout(widget)
-        layout.setSpacing(12)
-
-        icon_row = QHBoxLayout()
-        icon_label = QLabel(widget)
-        icon_label.setPixmap(app_icon().pixmap(72, 72))
-        icon_row.addWidget(icon_label, 0, Qt.AlignTop)
-
-        text_col = QVBoxLayout()
-        title = QLabel(f"<h2>{__app_name__}</h2>", widget)
-        title.setTextFormat(Qt.RichText)
-        version = QLabel(f"Version {__version__}", widget)
-        version.setStyleSheet("color: #888;")
-        text_col.addWidget(title)
-        text_col.addWidget(version)
-        text_col.addStretch(1)
-        icon_row.addLayout(text_col, 1)
-        layout.addLayout(icon_row)
-
-        description = QLabel(
-            "Sea Lyon is a music library manager, CD ripper, podcast / radio "
-            "player, and video player for Windows 10 / 11 and macOS "
-            "(Apple Silicon).",
-            widget,
-        )
-        description.setWordWrap(True)
-        layout.addWidget(description)
-
-        copyright_label = QLabel(COPYRIGHT_NOTICE, widget)
-        copyright_label.setWordWrap(True)
-        layout.addWidget(copyright_label)
-
-        links_row = QHBoxLayout()
-        homepage_btn = QPushButton("Open Project Page", widget)
-        homepage_btn.clicked.connect(
-            lambda: QDesktopServices.openUrl(
-                QUrl("https://github.com/DrShoctopus/Sea-Lyon-Media-Manager")
-            )
-        )
-        releases_btn = QPushButton("Releases / Changelog", widget)
-        releases_btn.clicked.connect(
-            lambda: QDesktopServices.openUrl(
-                QUrl("https://github.com/DrShoctopus/Sea-Lyon-Media-Manager/releases")
-            )
-        )
-        links_row.addWidget(homepage_btn)
-        links_row.addWidget(releases_btn)
-        links_row.addStretch(1)
-        layout.addLayout(links_row)
-
-        layout.addStretch(1)
-        return widget
+        return build_about_widget(self)
 
     def _build_acknowledgements_tab(self) -> QWidget:
         widget = QWidget(self)

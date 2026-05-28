@@ -439,11 +439,6 @@ QLabel#resultTitle {
 QLabel#warningLabel { color: #e8a830; font-size: 8pt; }
 
 /* Dialog typography (used across Settings, First Run, Queue, Diagnostics, YT) */
-QLabel#dialogTitle {
-    color: #eef7ff;
-    font-size: 16pt;
-    font-weight: 700;
-}
 QLabel#dialogSubtitle {
     color: #8a93a0;
     font-size: 9pt;

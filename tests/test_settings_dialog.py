@@ -181,17 +181,18 @@ def test_settings_dialog_connect_lastfm_starts_auth(app):
     scrobbler.start_lastfm_auth.assert_called_once()
 
 
-def test_settings_dialog_about_tab_mentions_copyright_and_third_parties(app):
+def test_settings_dialog_about_tab_matches_help_about(app):
+    """Settings About tab must mirror Help → About: copyright + description present,
+    no third-party acknowledgements (those live in a separate Acknowledgements tab)."""
+    from lyon import __app_name__, __version__
     dialog = SettingsDialog(Settings(), None)
     about_text = "\n".join(label.text() for label in dialog.findChildren(QtWidgets.QLabel))
 
     assert COPYRIGHT_NOTICE in about_text
-    # The structured ATTRIBUTIONS list renders names with conventional spacing
-    # ("Qt / PySide6", "libVLC", "python-vlc"); check the canonical tokens.
-    assert "Qt" in about_text and "PySide6" in about_text
-    assert "libVLC" in about_text and "python-vlc" in about_text
-    assert "MusicBrainz" in about_text
-    assert "LRCLIB" in about_text
+    assert __app_name__ in about_text
+    assert __version__ in about_text
+    assert "Windows 10 / 11" in about_text
+    assert "Apple Silicon" in about_text
 
 
 def test_settings_dialog_rejects_new_missing_library_path(app, monkeypatch):
