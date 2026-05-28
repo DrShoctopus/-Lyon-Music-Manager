@@ -9,6 +9,7 @@ from the bundle's Contents/Frameworks before the discid package is imported.
 from __future__ import annotations
 
 import ctypes
+import ctypes.util
 from ctypes import wintypes
 import importlib
 import importlib.util
@@ -287,6 +288,27 @@ def _load_discid():
     if importlib.util.find_spec("discid") is None:
         return None
     try:
+        if sys.platform == "darwin" and getattr(sys, "frozen", False):
+            bundle_dylib = None
+            fw = bundled_frameworks_dir()
+            if fw is not None:
+                for name in ("libdiscid.0.dylib", "libdiscid.dylib"):
+                    candidate = fw / name
+                    if candidate.exists():
+                        bundle_dylib = candidate
+                        break
+            original_find_library = ctypes.util.find_library
+
+            def _find_library(name: str):
+                if bundle_dylib is not None and name == "discid":
+                    return str(bundle_dylib)
+                return original_find_library(name)
+
+            try:
+                ctypes.util.find_library = _find_library
+                return importlib.import_module("discid")
+            finally:
+                ctypes.util.find_library = original_find_library
         return importlib.import_module("discid")
     except Exception:
         return None

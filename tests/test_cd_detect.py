@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from lyon.core.cd_detect import (
     _CtdbTocEntry,
     _DLL_DIRECTORY_HANDLES,
@@ -108,3 +110,42 @@ def test_bin_dir_dll_handle_is_retained_and_closed(monkeypatch, tmp_path):
     close_dll_handles()
     assert handle.closed
     assert _DLL_DIRECTORY_HANDLES == []
+
+
+def test_load_discid_prefers_bundled_macos_dylib_without_changing_cwd(monkeypatch, tmp_path):
+    macos_dir = tmp_path / "Sea Lyon Media Manager.app" / "Contents" / "MacOS"
+    frameworks_dir = tmp_path / "Sea Lyon Media Manager.app" / "Contents" / "Frameworks"
+    macos_dir.mkdir(parents=True)
+    frameworks_dir.mkdir(parents=True)
+    bundled = frameworks_dir / "libdiscid.0.dylib"
+    bundled.write_bytes(b"fake dylib")
+    start_dir = tmp_path / "launch"
+    start_dir.mkdir()
+    monkeypatch.chdir(start_dir)
+    monkeypatch.setattr(cd_detect.sys, "platform", "darwin")
+    monkeypatch.setattr(cd_detect.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(
+        cd_detect.sys,
+        "executable",
+        str(macos_dir / "LyonMusicManager"),
+        raising=False,
+    )
+    monkeypatch.setattr(cd_detect.importlib.util, "find_spec", lambda name: object())
+
+    monkeypatch.setattr(cd_detect.ctypes.util, "find_library", lambda name: None)
+
+    seen_cwds: list[Path] = []
+    seen_library_paths: list[str | None] = []
+    sentinel = object()
+
+    def fake_import_module(name: str):
+        seen_cwds.append(Path.cwd())
+        seen_library_paths.append(cd_detect.ctypes.util.find_library("discid"))
+        return sentinel
+
+    monkeypatch.setattr(cd_detect.importlib, "import_module", fake_import_module)
+
+    assert cd_detect._load_discid() is sentinel
+    assert seen_cwds == [start_dir]
+    assert seen_library_paths == [str(bundled)]
+    assert Path.cwd() == start_dir
