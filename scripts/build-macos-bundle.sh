@@ -15,24 +15,29 @@ STAGED_FPCALC="${STAGED_FPCALC:-vendor-mac/fpcalc}"
 mkdir -p "$FW/plugins" "$BIN"
 
 # --- Mount VLC DMG and copy libvlc + plugins --------------------------
-VLC_MOUNT="/Volumes/SeaLyonVLC_$$"
 VLC_STAGE="$(mktemp -d)/VLC.app"
-VLC_ATTACHED=0
+VLC_DEVICE=""
+VLC_MOUNT=""
 
 cleanup_vlc_mount() {
-    if [ "$VLC_ATTACHED" -eq 1 ] && [ -d "$VLC_MOUNT" ]; then
+    if [ -n "$VLC_MOUNT" ]; then
         hdiutil detach "$VLC_MOUNT" -quiet >/dev/null 2>&1 || true
+    elif [ -n "$VLC_DEVICE" ]; then
+        hdiutil detach "$VLC_DEVICE" -quiet >/dev/null 2>&1 || true
     fi
-    rmdir "$VLC_MOUNT" >/dev/null 2>&1 || true
 }
 trap cleanup_vlc_mount EXIT
 
+attach_out=$(hdiutil attach "$STAGED_VLC_DMG" -nobrowse)
+VLC_DEVICE=$(printf "%s\n" "$attach_out" | awk '/\/dev\// { dev=$1 } END { print dev }')
+VLC_MOUNT=$(printf "%s\n" "$attach_out" | awk '/\/Volumes\// { m = match($0, /\/Volumes\/.*/); if (m) mount = substr($0, RSTART, RLENGTH) } END { print mount }')
 mkdir -p "$VLC_MOUNT"
-hdiutil attach "$STAGED_VLC_DMG" -mountpoint "$VLC_MOUNT" -nobrowse -quiet
-VLC_ATTACHED=1
+[ -n "$VLC_DEVICE" ] || { echo "Failed to determine mounted DMG device" >&2; exit 1; }
+[ -n "$VLC_MOUNT" ] || { echo "Failed to determine mounted DMG path" >&2; exit 1; }
 cp -R "$VLC_MOUNT/VLC.app" "$VLC_STAGE"
-hdiutil detach "$VLC_MOUNT" -quiet
-VLC_ATTACHED=0
+hdiutil detach "$VLC_DEVICE" -quiet
+VLC_DEVICE=""
+VLC_MOUNT=""
 
 VLC_LIB="$VLC_STAGE/Contents/MacOS/lib"
 VLC_PLUGINS="$VLC_STAGE/Contents/MacOS/plugins"
