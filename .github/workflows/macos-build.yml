@@ -81,7 +81,7 @@ jobs:
             "$LASTFM_KEY" "$LASTFM_SECRET" > lyon/core/_secrets.py
 
       - name: PyInstaller (arm64-only)
-        run: python -m PyInstaller --noconfirm --target-arch arm64 build/lyon.spec
+        run: python -m PyInstaller --noconfirm build/lyon.spec
 
       - name: Inject libVLC, plugins, ffmpeg, fpcalc, libdiscid
         env:
