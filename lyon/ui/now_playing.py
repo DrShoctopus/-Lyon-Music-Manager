@@ -556,7 +556,7 @@ class NowPlayingView(QWidget):
             self._update_background(None)
         else:
             self.title.setText(track.title or "Untitled")
-            self.artist.setText(track.display_artist)
+            self.artist.setText(track.artist or track.display_artist)
             self.album.setText(track.album or "")
             self.format_strip.setText(self._format_strip_text(track))
             self.cover.setPixmap(cover_pixmap(track.artwork_path, 280, "♪"))

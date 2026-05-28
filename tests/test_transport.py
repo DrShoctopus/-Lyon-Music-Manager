@@ -180,6 +180,22 @@ def test_now_playing_view_updates_on_track_change(player):
     assert view.title.text() == "Nothing playing"
 
 
+def test_now_playing_view_prefers_track_artist_over_album_artist(player):
+    view = NowPlayingView(player)
+    first = _track("Compilation A")
+    first.artist = "First Artist"
+    first.album_artist = "Various Artists"
+    second = _track("Compilation B")
+    second.artist = "Second Artist"
+    second.album_artist = "Various Artists"
+
+    view._on_track(first)
+    assert view.artist.text() == "First Artist"
+
+    view._on_track(second)
+    assert view.artist.text() == "Second Artist"
+
+
 def test_now_playing_view_renders_queue_preview(player):
     view = NowPlayingView(player)
     player.set_queue([_track(f"T{i}") for i in range(5)], start_index=0)
