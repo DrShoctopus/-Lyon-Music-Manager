@@ -9,7 +9,29 @@ mkdir -p "$VENDOR"
 VLC_VERSION="${VLC_VERSION:-3.0.21}"
 LIBDISCID_VERSION="${LIBDISCID_VERSION:-0.6.4}"
 FPCALC_URL="${FPCALC_URL:-https://github.com/acoustid/chromaprint/releases/download/v1.5.1/chromaprint-fpcalc-1.5.1-macos-arm64.tar.gz}"
-FFMPEG_URL="${FFMPEG_URL:-https://evermeet.cx/ffmpeg/getrelease/zip}"
+FFMPEG_URL="${FFMPEG_URL:-https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffmpeg-darwin-arm64.gz}"
+FFMPEG_SHA256="${FFMPEG_SHA256:-8923876afa8db5585022d7860ec7e589af192f441c56793971276d450ed3bbfa}"
+
+verify_checksum() {
+    local f="$1"
+    local expected="$2"
+    local got
+    if [ -z "$expected" ]; then
+        return 0
+    fi
+    got=$(shasum -a 256 "$f" | awk '{print $1}')
+    if [ "$expected" != "$got" ]; then
+        echo "FAIL: $f checksum mismatch (expected $expected, got $got)" >&2
+        exit 1
+    fi
+}
+
+is_arm64_only() {
+    local f="$1"
+    local archs
+    archs=$(lipo -archs "$f" 2>/dev/null || echo "unknown")
+    [ "$archs" = "arm64" ]
+}
 
 verify_arm64_only() {
     local f="$1"
@@ -21,13 +43,41 @@ verify_arm64_only() {
     fi
 }
 
+fetch_ffmpeg() {
+    local archive
+    rm -f "$VENDOR/ffmpeg"
+    case "$FFMPEG_URL" in
+        *.gz)
+            archive="$VENDOR/ffmpeg.gz"
+            curl -fsSL "${FFMPEG_URL}" -o "$archive"
+            verify_checksum "$archive" "$FFMPEG_SHA256"
+            gzip -dc "$archive" > "$VENDOR/ffmpeg"
+            rm "$archive"
+            ;;
+        *.zip)
+            archive="$VENDOR/ffmpeg.zip"
+            curl -fsSL "${FFMPEG_URL}" -o "$archive"
+            verify_checksum "$archive" "$FFMPEG_SHA256"
+            unzip -o -j "$archive" "ffmpeg" -d "$VENDOR/"
+            rm "$archive"
+            ;;
+        *)
+            archive="$VENDOR/ffmpeg.download"
+            curl -fsSL "${FFMPEG_URL}" -o "$archive"
+            verify_checksum "$archive" "$FFMPEG_SHA256"
+            mv "$archive" "$VENDOR/ffmpeg"
+            ;;
+    esac
+    chmod +x "$VENDOR/ffmpeg"
+}
+
 # --- ffmpeg -----------------------------------------------------------
 if [ ! -f "$VENDOR/ffmpeg" ]; then
     echo "Fetching ffmpeg (arm64)..."
-    curl -fsSL "${FFMPEG_URL}" -o "$VENDOR/ffmpeg.zip"
-    unzip -o -j "$VENDOR/ffmpeg.zip" "ffmpeg" -d "$VENDOR/"
-    rm "$VENDOR/ffmpeg.zip"
-    chmod +x "$VENDOR/ffmpeg"
+    fetch_ffmpeg
+elif ! is_arm64_only "$VENDOR/ffmpeg"; then
+    echo "Cached ffmpeg is not arm64; refetching..."
+    fetch_ffmpeg
 fi
 verify_arm64_only "$VENDOR/ffmpeg"
 

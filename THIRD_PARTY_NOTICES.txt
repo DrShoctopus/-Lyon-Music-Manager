@@ -44,11 +44,13 @@ are themselves GPL-2.0+; if you redistribute the bundle, your
 redistribution is subject to those plugins' GPL terms as well.
 
 ----------------------------------------------------------------
-ffmpeg (gyan.dev "essentials" Windows build)
+ffmpeg (gyan.dev Windows build; ffmpeg-static macOS arm64 build)
 ----------------------------------------------------------------
-Version:     7.1.1
+Version:     7.1.1 (Windows); 6.1.1 (macOS arm64)
 Home page:   https://ffmpeg.org/
-Build:       https://www.gyan.dev/ffmpeg/builds/
+Build:       https://www.gyan.dev/ffmpeg/builds/ (Windows)
+             https://github.com/eugeneware/ffmpeg-static/releases/tag/b6.1.1
+             (macOS arm64)
 Source:      https://ffmpeg.org/download.html#releases
 License:     The "essentials" build is **GPL 2.0 or later**, because it
              links against GPL-licensed libraries (libx264, libx265).
@@ -56,10 +58,11 @@ License:     The "essentials" build is **GPL 2.0 or later**, because it
 Copyright:   © 2000–present, the FFmpeg project and contributors;
              additional copyrights for bundled GPL libraries.
 
-The bundle ships an unmodified copy of `ffmpeg.exe` from the gyan.dev
-essentials Windows x86_64 build. Because that build links libx264 and
-libx265, **the combined Sea Lyon Media Manager installer is effectively
-distributed under the GPL** with respect to ffmpeg and its
+The bundle ships unmodified copies of `ffmpeg.exe` from the gyan.dev
+essentials Windows x86_64 build and `ffmpeg` from the eugeneware
+ffmpeg-static macOS arm64 release. Because the Windows build links
+libx264 and libx265, **the combined Sea Lyon Media Manager installer is
+effectively distributed under the GPL** with respect to ffmpeg and its
 dependencies. You may obtain the corresponding source from the FFmpeg
 project at the URL above. A future release plans to switch to a
 strict-LGPL ffmpeg build that does not include GPL libraries.

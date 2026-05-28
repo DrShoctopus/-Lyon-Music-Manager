@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Package the signed .app into a signed, notarized DMG.
+# Package the .app into a DMG. Sign/notarize only when CI credentials exist.
 set -euo pipefail
 
 APP="dist/Sea Lyon Media Manager.app"
 VERSION=$(python -c "from lyon import __version__; print(__version__)")
 DMG_OUT="dist/SeaLyonMediaManager-${VERSION}-arm64.dmg"
-DEV_ID="Developer ID Application: DrShoctopus (${APPLE_TEAM_ID})"
+SIGNING_ENABLED="${MACOS_SIGNING_ENABLED:-0}"
 
 BG="docs/brand/dmg-background.png"
 BG_ARG=""
@@ -24,6 +24,18 @@ create-dmg \
     $BG_ARG \
     "$DMG_OUT" \
     "$APP"
+
+if [ "$SIGNING_ENABLED" != "1" ]; then
+    echo "MACOS_SIGNING_ENABLED is not 1; leaving unsigned DMG: $DMG_OUT"
+    echo "DMG ready: $DMG_OUT"
+    exit 0
+fi
+
+: "${APPLE_TEAM_ID:?APPLE_TEAM_ID is required when MACOS_SIGNING_ENABLED=1}"
+: "${APPLE_ID:?APPLE_ID is required when MACOS_SIGNING_ENABLED=1}"
+: "${APPLE_APP_PASSWORD:?APPLE_APP_PASSWORD is required when MACOS_SIGNING_ENABLED=1}"
+
+DEV_ID="Developer ID Application: DrShoctopus (${APPLE_TEAM_ID})"
 
 echo "Signing DMG..."
 codesign --force --sign "$DEV_ID" --timestamp "$DMG_OUT"

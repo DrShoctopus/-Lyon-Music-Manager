@@ -47,7 +47,8 @@ proceed, and verify the SHA-256 of the installer matches the shipped
 
 ### macOS (Apple Silicon)
 
-- `SeaLyonMediaManager-{version}-arm64.dmg` — signed and notarized disk image.
+- `SeaLyonMediaManager-{version}-arm64.dmg` — signed and notarized when
+  Apple Developer ID secrets are configured; otherwise unsigned.
 - `SeaLyonMediaManager-{version}-macos-SHA256SUMS.txt` — SHA-256 manifest.
 
 Requires **macOS 11 Big Sur or later** on an Apple Silicon (M1 / M2 / M3 / M4)
@@ -269,7 +270,7 @@ Place native binaries at these paths for source runs (the
 
 ```text
 bin/
-  ffmpeg          (arm64; evermeet.cx build)
+  ffmpeg          (arm64; eugeneware/ffmpeg-static build)
   fpcalc          (arm64; Chromaprint release)
 vendor-mac/
   libvlc.dylib    (arm64; from VLC 3.0.x DMG)
@@ -406,7 +407,7 @@ scripts/build-macos-bundle.sh        Inject libVLC/ffmpeg/fpcalc/libdiscid into 
 scripts/import-codesign-cert.sh      Import Developer ID certificate into keychain
 scripts/codesign-macos-bundle.sh     Codesign the .app bundle
 scripts/notarize-macos-app.sh        Notarize and staple the .app
-scripts/build-macos-dmg.sh           Build signed .dmg from the .app
+scripts/build-macos-dmg.sh           Build .dmg; sign/notarize when configured
 scripts/generate-appcast.py          Generate/update multi-OS appcast.xml
 scripts/README.md                    Build-script notes
 .github/workflows/windows-build.yml Windows CI/release pipeline
@@ -513,9 +514,11 @@ runner. Trigger via `workflow_dispatch` or a `v*.*.*` tag. The workflow:
 6. Runs PyInstaller with `--target-arch arm64`.
 7. Injects libVLC, plugins, ffmpeg, fpcalc, and libdiscid into the
    `.app` bundle; thins any universal2 binaries to arm64 via `lipo`.
-8. Code-signs with a Developer ID Application certificate.
-9. Notarizes and staples the `.app` with `xcrun notarytool`.
-10. Builds a signed `.dmg` with `create-dmg`.
+8. Detects Apple Developer ID / notary secrets.
+9. If signing secrets are present, code-signs, notarizes, and staples
+   the `.app`; otherwise leaves the app unsigned.
+10. Builds a `.dmg` with `create-dmg`; signs/notarizes it only when
+    signing secrets are present.
 11. Emits a SHA-256 manifest and uploads artifacts.
 12. On tagged releases, generates a multi-OS `appcast.xml` (waiting
     for the Windows installer asset before publishing).
@@ -555,8 +558,10 @@ plus a redacted settings snapshot for support.
   [`docs/SMARTSCREEN_NOTES.md`](docs/SMARTSCREEN_NOTES.md) for the
   full FAQ and SHA-256 verification steps. A signed build is planned
   for 1.1.
-- **macOS: "Sea Lyon is damaged and can't be opened"** — this should
-  not occur with a notarized DMG. If it does, run
+- **macOS: "Sea Lyon is damaged and can't be opened"** — unsigned DMGs
+  can trigger Gatekeeper warnings until Developer ID signing and
+  notarization are configured. For a notarized DMG, this should not
+  occur; if it does, run
   `xattr -dr com.apple.quarantine /Applications/Sea\ Lyon\ Media\ Manager.app`
   and verify the DMG SHA-256 matches the published manifest.
 

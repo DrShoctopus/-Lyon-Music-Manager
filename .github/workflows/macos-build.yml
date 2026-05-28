@@ -7,7 +7,9 @@ on:
       - 'v*.*.*'
 
 env:
-  FFMPEG_URL: "https://evermeet.cx/ffmpeg/getrelease/zip"
+  FFMPEG_VERSION: "6.1.1"
+  FFMPEG_URL: "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffmpeg-darwin-arm64.gz"
+  FFMPEG_SHA256: "8923876afa8db5585022d7860ec7e589af192f441c56793971276d450ed3bbfa"
   FPCALC_URL: "https://github.com/acoustid/chromaprint/releases/download/v1.5.1/chromaprint-fpcalc-1.5.1-macos-arm64.tar.gz"
   VLC_VERSION: "3.0.21"
   LIBDISCID_VERSION: "0.6.4"
@@ -58,7 +60,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: vendor-mac
-          key: mac-vendor-vlc${{ env.VLC_VERSION }}-discid${{ env.LIBDISCID_VERSION }}-v1
+          key: mac-vendor-ffmpeg${{ env.FFMPEG_VERSION }}-vlc${{ env.VLC_VERSION }}-discid${{ env.LIBDISCID_VERSION }}-v1
 
       - name: Fetch and verify vendor binaries
         run: scripts/fetch-macos-vendor-binaries.sh
@@ -85,18 +87,42 @@ jobs:
           STAGED_FPCALC: vendor-mac/fpcalc
         run: scripts/build-macos-bundle.sh
 
+      - name: Detect macOS signing credentials
+        id: macos-signing
+        env:
+          CERT_P12: ${{ secrets.APPLE_DEVELOPER_ID_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERT_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          if [ -n "$CERT_P12" ] && [ -n "$CERT_PASSWORD" ] && \
+             [ -n "$APPLE_ID" ] && [ -n "$APPLE_TEAM_ID" ] && \
+             [ -n "$APPLE_APP_PASSWORD" ]; then
+            echo "enabled=1" >> "$GITHUB_OUTPUT"
+            echo "MACOS_SIGNING_ENABLED=1" >> "$GITHUB_ENV"
+            echo "macOS signing credentials found; signed and notarized DMG will be produced."
+          else
+            echo "enabled=0" >> "$GITHUB_OUTPUT"
+            echo "MACOS_SIGNING_ENABLED=0" >> "$GITHUB_ENV"
+            echo "macOS signing credentials not configured; unsigned DMG will be produced."
+          fi
+
       - name: Import signing certificate
+        if: steps.macos-signing.outputs.enabled == '1'
         env:
           CERT_P12: ${{ secrets.APPLE_DEVELOPER_ID_CERT_P12 }}
           CERT_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERT_PASSWORD }}
         run: scripts/import-codesign-cert.sh
 
       - name: Codesign bundle
+        if: steps.macos-signing.outputs.enabled == '1'
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: scripts/codesign-macos-bundle.sh
 
       - name: Notarize and staple .app
+        if: steps.macos-signing.outputs.enabled == '1'
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -105,6 +131,7 @@ jobs:
 
       - name: Build DMG
         env:
+          MACOS_SIGNING_ENABLED: ${{ steps.macos-signing.outputs.enabled }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}

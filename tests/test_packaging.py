@@ -78,3 +78,47 @@ def test_macos_build_gate_counts_pytest_collected_output():
 
     assert "tests? collected" in workflow
     assert "tests? selected" not in workflow
+
+
+def test_macos_workflow_skips_signing_when_credentials_are_missing():
+    repo = Path(__file__).resolve().parents[1]
+    workflow = (repo / ".github" / "workflows" / "macos-build.yml").read_text(encoding="utf-8")
+
+    assert "Detect macOS signing credentials" in workflow
+    assert "id: macos-signing" in workflow
+    assert "MACOS_SIGNING_ENABLED=0" in workflow
+    assert "unsigned DMG will be produced" in workflow
+    assert "if: steps.macos-signing.outputs.enabled == '1'" in workflow
+    assert "MACOS_SIGNING_ENABLED: ${{ steps.macos-signing.outputs.enabled }}" in workflow
+
+
+def test_macos_dmg_script_can_leave_dmg_unsigned():
+    repo = Path(__file__).resolve().parents[1]
+    script = (repo / "scripts" / "build-macos-dmg.sh").read_text(encoding="utf-8")
+
+    assert "MACOS_SIGNING_ENABLED" in script
+    assert "leaving unsigned DMG" in script
+    assert "APPLE_TEAM_ID is required when MACOS_SIGNING_ENABLED=1" in script
+
+
+def test_macos_workflow_uses_pinned_arm64_ffmpeg_source():
+    repo = Path(__file__).resolve().parents[1]
+    workflow = (repo / ".github" / "workflows" / "macos-build.yml").read_text(encoding="utf-8")
+
+    assert "FFMPEG_VERSION: \"6.1.1\"" in workflow
+    assert "FFMPEG_URL: \"https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffmpeg-darwin-arm64.gz\"" in workflow
+    assert "FFMPEG_SHA256: \"8923876afa8db5585022d7860ec7e589af192f441c56793971276d450ed3bbfa\"" in workflow
+    assert "evermeet.cx" not in workflow
+    assert "mac-vendor-ffmpeg${{ env.FFMPEG_VERSION }}" in workflow
+
+
+def test_macos_vendor_script_verifies_and_replaces_ffmpeg():
+    repo = Path(__file__).resolve().parents[1]
+    script = (repo / "scripts" / "fetch-macos-vendor-binaries.sh").read_text(encoding="utf-8")
+
+    assert "FFMPEG_SHA256" in script
+    assert "ffmpeg-darwin-arm64.gz" in script
+    assert "Cached ffmpeg is not arm64; refetching" in script
+    assert "gzip -dc" in script
+    assert "checksum mismatch" in script
+    assert "evermeet.cx" not in script
