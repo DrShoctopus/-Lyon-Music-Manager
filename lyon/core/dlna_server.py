@@ -7,6 +7,7 @@ import mimetypes
 import os
 import socket
 import stat as stat_module
+import sys
 import threading
 import time
 import uuid
@@ -109,7 +110,7 @@ class DlnaServer:
         httpd = _DlnaHTTPServer((host, port), _DlnaRequestHandler)
         httpd.dlna = self
         actual_port = int(httpd.server_address[1])
-        advertised_host = "127.0.0.1" if host in {"127.0.0.1", "localhost"} else _local_ip()
+        advertised_host = _advertised_host_for_bind(host)
         self._base_url = f"http://{advertised_host}:{actual_port}"
         self._httpd = httpd
         self._thread = threading.Thread(
@@ -758,7 +759,7 @@ class _SsdpResponder:
     def start(self) -> None:
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            _set_udp_port_reuse(sock)
             sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 2)
             sock.settimeout(1.0)
             try:
@@ -1156,6 +1157,32 @@ def _is_allowed_client(host: str) -> bool:
     except ValueError:
         return False
     return address.is_loopback or address.is_private or address.is_link_local
+
+
+def _advertised_host_for_bind(host: str) -> str:
+    bind_host = (host or "0.0.0.0").strip()
+    if bind_host.casefold() == "localhost":
+        return "127.0.0.1"
+    try:
+        address = ip_address(bind_host.split("%", 1)[0])
+    except ValueError:
+        return _local_ip()
+    if address.is_loopback:
+        return "127.0.0.1"
+    if address.is_unspecified:
+        return _local_ip()
+    return str(address)
+
+
+def _set_udp_port_reuse(sock: socket.socket) -> None:
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    reuseport = getattr(socket, "SO_REUSEPORT", None)
+    if reuseport is None or sys.platform != "darwin":
+        return
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, reuseport, 1)
+    except OSError as exc:
+        LOG.debug("DLNA SSDP: SO_REUSEPORT unavailable: %s", exc)
 
 
 def _local_ip() -> str:

@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import socket
 from io import BytesIO
 from pathlib import Path
 
+import pytest
+
 from lyon.core.dlna_server import (
     DlnaServer,
+    _SsdpResponder,
     _encode_object_value,
     _is_allowed_client,
     _server_header,
@@ -131,6 +135,99 @@ def test_dlna_server_binds_configured_address(tmp_path, monkeypatch):
         library.close()
 
     assert addresses == [("127.0.0.1", 0)]
+
+
+def test_dlna_server_advertises_configured_lan_bind_address(tmp_path, monkeypatch):
+    class FakeHTTPServer:
+        server_address = ("192.168.50.10", 12345)
+
+        def __init__(self, _address, _handler):
+            self.dlna = None
+
+        def serve_forever(self):
+            pass
+
+        def shutdown(self):
+            pass
+
+        def server_close(self):
+            pass
+
+    class FakeSsdpResponder:
+        def __init__(self, _server):
+            pass
+
+        def start(self):
+            pass
+
+        def stop(self):
+            pass
+
+    library = Library(tmp_path / "library.db")
+    server = DlnaServer(
+        library,
+        Settings(
+            music_root=str(tmp_path),
+            dlna_port=0,
+            dlna_bind_address="192.168.50.10",
+        ),
+    )
+    monkeypatch.setattr("lyon.core.dlna_server._DlnaHTTPServer", FakeHTTPServer)
+    monkeypatch.setattr("lyon.core.dlna_server._SsdpResponder", FakeSsdpResponder)
+    monkeypatch.setattr("lyon.core.dlna_server._local_ip", lambda: "10.0.0.2")
+    try:
+        server.start()
+        base_url = server.base_url
+    finally:
+        server.stop()
+        library.close()
+
+    assert base_url == "http://192.168.50.10:12345"
+
+
+def test_ssdp_responder_enables_macos_reuseport_when_available(monkeypatch):
+    reuseport = getattr(socket, "SO_REUSEPORT", None)
+    if reuseport is None:
+        pytest.skip("SO_REUSEPORT is not available on this platform")
+
+    calls: list[tuple[int, int, int]] = []
+
+    class FakeSocket:
+        def setsockopt(self, level, option, value):
+            calls.append((level, option, value))
+
+        def settimeout(self, _timeout):
+            pass
+
+        def bind(self, _address):
+            pass
+
+        def close(self):
+            pass
+
+    class FakeThread:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            pass
+
+        def join(self, timeout=None):
+            pass
+
+    server = type("Server", (), {"uuid": "test", "base_url": "http://127.0.0.1:8200"})()
+    responder = _SsdpResponder(server)
+
+    monkeypatch.setattr("lyon.core.dlna_server.socket.socket", lambda *args: FakeSocket())
+    monkeypatch.setattr("lyon.core.dlna_server.sys.platform", "darwin")
+    monkeypatch.setattr("lyon.core.dlna_server.threading.Thread", FakeThread)
+    monkeypatch.setattr(_SsdpResponder, "_notify", lambda self, nts: None)
+
+    responder.start()
+    responder.stop()
+
+    assert (socket.SOL_SOCKET, socket.SO_REUSEADDR, 1) in calls
+    assert (socket.SOL_SOCKET, reuseport, 1) in calls
 
 
 def test_dlna_browse_returns_library_tracks(tmp_path):
