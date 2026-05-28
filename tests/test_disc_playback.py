@@ -51,6 +51,14 @@ def test_cdda_uri_macos_device_path():
     assert uri == "cdda:///dev/disk4"
 
 
+def test_cdda_uri_posix_device_path_does_not_depend_on_host_platform(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    uri = cdda_uri("/dev/disk4")
+
+    assert uri == "cdda:///dev/disk4"
+
+
 @pytest.mark.skipif(sys.platform == "darwin", reason="Windows drive-letter paths only")
 def test_drive_root_preserves_full_windows_paths():
     assert drive_root(r"C:\Users\runneradmin\disc") == r"C:\Users\runneradmin\disc"
