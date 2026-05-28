@@ -5,6 +5,7 @@ import bisect
 from decimal import Decimal, InvalidOperation
 import json
 import re
+import ssl
 import threading
 import urllib.parse
 import urllib.request
@@ -84,6 +85,27 @@ def _read_embedded_lyrics(path: str) -> str | None:
     return None
 
 
+def _ssl_context() -> ssl.SSLContext:
+    """SSL context backed by certifi's CA bundle.
+
+    macOS python.org / PyInstaller builds ship an OpenSSL that doesn't read the
+    system keychain, so the default context fails LRCLIB's HTTPS certificate
+    with CERTIFICATE_VERIFY_FAILED — making every track look like it has no
+    lyrics. Loading certifi (a transitive dependency) fixes verification
+    without weakening it. Mirrors radio_browser._ssl_context.
+    """
+    ctx = ssl.create_default_context()
+    try:
+        import certifi  # noqa: PLC0415
+        ctx.load_verify_locations(certifi.where())
+    except Exception:  # noqa: BLE001 — certifi missing/broken; fall back to defaults
+        pass
+    return ctx
+
+
+_LRCLIB_SSL_CONTEXT = _ssl_context()
+
+
 def _fetch_lrclib(artist: str, title: str, album: str, duration_s: float) -> tuple[str, str]:
     """Query LRCLIB for lyrics. Returns (synced_lrc, plain_text); empty string = not found."""
     params: dict[str, str | int] = {
@@ -95,7 +117,7 @@ def _fetch_lrclib(artist: str, title: str, album: str, duration_s: float) -> tup
     url = "https://lrclib.net/api/get?" + urllib.parse.urlencode(params)
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "Sea-Lyon-Media-Manager"})
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        with urllib.request.urlopen(req, timeout=5, context=_LRCLIB_SSL_CONTEXT) as resp:
             if resp.status != 200:
                 return "", ""
             data = json.loads(resp.read().decode())

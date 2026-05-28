@@ -163,7 +163,7 @@ def test_fetch_lrclib_handles_missing_fields():
 def test_fetch_lrclib_sends_correct_query_string():
     captured: dict[str, str] = {}
 
-    def _capture(req, timeout):
+    def _capture(req, timeout, context=None):
         captured["url"] = req.full_url
         return _FakeResponse(200, b'{"syncedLyrics":"","plainLyrics":""}')
 
