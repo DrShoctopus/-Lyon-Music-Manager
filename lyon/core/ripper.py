@@ -80,7 +80,11 @@ class _RawReadInfo(ctypes.Structure):
     ]
 
 
-class _WindowsCddaReadError(OSError):
+class _CddaReadError(OSError):
+    """Base for platform-specific CD-DA raw-read errors."""
+
+
+class _WindowsCddaReadError(_CddaReadError):
     """Raised when Windows cannot return raw CD-DA sectors."""
 
 
@@ -529,6 +533,89 @@ def _read_windows_cdda_sectors(
         yield from reader.read_sectors(start_sector, sector_count)
 
 
+class _MacDarwinCddaReadError(_CddaReadError):
+    """Raised when macOS cannot return raw CD-DA sectors."""
+
+
+class _MacDarwinCddaReader:
+    """Raw CD-DA sector reader for macOS optical drives via /dev/rdiskN.
+
+    macOS exposes CDDA frames as 2352-byte sectors on the raw block device
+    starting from the physical LBA 0 of the disc (before the 2-second lead-in).
+    `first_track_lba` is the absolute LBA of track 1 (typically 150) and is
+    added to every relative sector offset so seeks land at the correct frame.
+    """
+
+    def __init__(
+        self,
+        drive: str,
+        *,
+        first_track_lba: int = 0,
+        chunk_sectors: int = CD_SECTORS_PER_SECOND,
+    ):
+        self.drive = drive
+        self.first_track_lba = int(first_track_lba)
+        self.chunk_sectors = max(1, int(chunk_sectors))
+        if drive.startswith("/dev/disk"):
+            self.raw_path = "/dev/r" + drive[len("/dev/"):]
+        else:
+            self.raw_path = drive
+        self._fp = None
+
+    @property
+    def active_chunk_sectors(self) -> int:
+        return self.chunk_sectors
+
+    @property
+    def using_fallback_chunk(self) -> bool:
+        return False
+
+    def __enter__(self) -> "_MacDarwinCddaReader":
+        if sys.platform != "darwin":
+            raise _MacDarwinCddaReadError("macOS raw CD reads are only available on darwin")
+        try:
+            self._fp = open(self.raw_path, "rb")
+        except OSError as exc:
+            raise _MacDarwinCddaReadError(
+                f"could not open {self.raw_path}: {exc}"
+            ) from exc
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
+
+    def close(self) -> None:
+        if self._fp is not None:
+            try:
+                self._fp.close()
+            finally:
+                self._fp = None
+
+    def read_sectors(self, start_sector: int, sector_count: int):
+        if self._fp is None:
+            raise _MacDarwinCddaReadError("macOS raw CD reader is not open")
+        remaining = int(sector_count)
+        current_sector = int(start_sector)
+        while remaining > 0:
+            count = min(self.chunk_sectors, remaining)
+            absolute_sector = current_sector + self.first_track_lba
+            try:
+                self._fp.seek(absolute_sector * CDDA_SECTOR_SIZE)
+                data = self._fp.read(count * CDDA_SECTOR_SIZE)
+            except OSError as exc:
+                raise _MacDarwinCddaReadError(
+                    f"could not read CD audio sector {absolute_sector}: {exc}"
+                ) from exc
+            if not data:
+                break
+            yield data
+            sectors_read = len(data) // CDDA_SECTOR_SIZE
+            if sectors_read == 0:
+                break
+            current_sector += sectors_read
+            remaining -= sectors_read
+
+
 # ---------------------------------------------------------------- worker
 @dataclass
 class RipRequest:
@@ -742,10 +829,14 @@ class RipWorker(QObject):
             self.log.emit(
                 "ffmpeg does not include libcdio; using the Windows raw CD reader."
             )
+        elif sys.platform == "darwin":
+            self.log.emit(
+                "ffmpeg does not include libcdio; using the macOS raw CD reader."
+            )
         else:
             message = (
                 "ffmpeg does not include libcdio CD input support, and the raw CD "
-                "reader fallback is only available on Windows."
+                "reader fallback is not available on this platform."
             )
             failures.append(RipFailure(None, "Rip setup", None, message))
             self._emit_failure_log(folder, ff, failures, message)
@@ -766,7 +857,7 @@ class RipWorker(QObject):
         success = True
         ripped_files: dict[int, Path] = {}
         output_paths = track_output_files(folder, tracks_to_rip, total, ext)
-        raw_reader: _WindowsCddaReader | None = None
+        raw_reader: _WindowsCddaReader | _MacDarwinCddaReader | None = None
         logged_raw_fallback = False
         if not self._ffmpeg_has_libcdio and sys.platform == "win32":
             try:
@@ -778,6 +869,23 @@ class RipWorker(QObject):
                 )
             except _WindowsCddaReadError as e:
                 message = f"Windows raw CD reader failed: {e}"
+                failures.append(RipFailure(None, "Rip setup", None, message))
+                self._emit_failure_log(folder, ff, failures, message)
+                self.finished.emit(False, message)
+                return
+        elif not self._ffmpeg_has_libcdio and sys.platform == "darwin":
+            try:
+                raw_reader = _MacDarwinCddaReader(
+                    self.request.drive,
+                    first_track_lba=self._track_offsets[0] if self._track_offsets else 0,
+                )
+                raw_reader.__enter__()
+                self.log.emit(
+                    "Raw CD reader opened "
+                    f"({raw_reader.active_chunk_sectors} sectors per read)."
+                )
+            except _MacDarwinCddaReadError as e:
+                message = f"macOS raw CD reader failed: {e}"
                 failures.append(RipFailure(None, "Rip setup", None, message))
                 self._emit_failure_log(folder, ff, failures, message)
                 self.finished.emit(False, message)
@@ -888,7 +996,7 @@ class RipWorker(QObject):
         title: str,
         out: Path,
         *,
-        raw_reader: _WindowsCddaReader | None = None,
+        raw_reader: _WindowsCddaReader | _MacDarwinCddaReader | None = None,
     ) -> Optional[RipFailure]:
         drive = self.request.drive
         codec_args = _codec_args(self.settings)
@@ -918,14 +1026,14 @@ class RipWorker(QObject):
             reason = failures[-1].reason if failures else "Track rip failed for an unknown reason."
             return RipFailure(track_no, title, out, reason, failures)
 
-        if sys.platform != "win32":
+        if sys.platform not in ("win32", "darwin"):
             reason = (
                 "ffmpeg does not include libcdio CD input support, and the raw CD "
-                "reader fallback is only available on Windows."
+                "reader fallback is not available on this platform."
             )
             return RipFailure(track_no, title, out, reason)
 
-        attempt_failure = self._run_windows_cdda_ffmpeg(
+        attempt_failure = self._run_raw_cdda_ffmpeg(
             ffmpeg,
             track_no,
             out,
@@ -937,7 +1045,7 @@ class RipWorker(QObject):
             return None
         return RipFailure(track_no, title, out, attempt_failure.reason, [attempt_failure])
 
-    def _run_windows_cdda_ffmpeg(
+    def _run_raw_cdda_ffmpeg(
         self,
         ffmpeg: str,
         track_no: int,
@@ -945,7 +1053,7 @@ class RipWorker(QObject):
         codec_args: list[str],
         sector_span: tuple[int, int],
         *,
-        raw_reader: _WindowsCddaReader | None = None,
+        raw_reader: _WindowsCddaReader | _MacDarwinCddaReader | None = None,
     ) -> Optional[FfmpegAttemptFailure]:
         start, end = sector_span
         total_sectors = end - start
@@ -1028,8 +1136,8 @@ class RipWorker(QObject):
             proc.wait()
             reader.join(timeout=2)
             output = _collected_output()
-        except _WindowsCddaReadError as e:
-            reason = f"Windows raw CD reader failed: {e}"
+        except _CddaReadError as e:
+            reason = f"Raw CD reader failed: {e}"
             self.log.emit(reason)
             _stop_process(proc)
             reader.join(timeout=2)

@@ -686,7 +686,7 @@ def test_rip_worker_reuses_one_raw_reader_for_multiple_tracks(monkeypatch, tmp_p
     monkeypatch.setattr("lyon.core.ripper.find_ffmpeg", lambda: "ffmpeg")
     monkeypatch.setattr("lyon.core.ripper._ffmpeg_supports_demuxer", lambda *_: False)
     monkeypatch.setattr("lyon.core.ripper._WindowsCddaReader", FakeReader)
-    monkeypatch.setattr(RipWorker, "_run_windows_cdda_ffmpeg", fake_run_windows)
+    monkeypatch.setattr(RipWorker, "_run_raw_cdda_ffmpeg", fake_run_windows)
     monkeypatch.setitem(
         sys.modules,
         "lyon.core.tagger",

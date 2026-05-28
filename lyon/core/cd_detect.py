@@ -266,7 +266,11 @@ def _read_disc_darwin(drive: str | None) -> DiscToc | None:
     try:
         d = discid.read(device, features=["mcn", "isrc"])
     except Exception:
-        return None
+        # Some drives reject ISRC/MCN feature requests; retry without them.
+        try:
+            d = discid.read(device)
+        except Exception:
+            return None
 
     tracks = list(getattr(d, "tracks", []) or [])
     return DiscToc(

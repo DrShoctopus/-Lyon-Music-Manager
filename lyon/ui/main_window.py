@@ -210,6 +210,11 @@ class MainWindow(QMainWindow):
         self.tab_bar.setExpanding(False)
         self.tab_bar.setDrawBase(False)
         self.tab_bar.setCursor(Qt.PointingHandCursor)
+        # Scroll buttons (rather than text elision) are the right overflow
+        # behavior when more tabs are visible than fit horizontally — e.g.
+        # when the Disc/Rip tabs appear on macOS after a drive is connected.
+        self.tab_bar.setUsesScrollButtons(True)
+        self.tab_bar.setElideMode(Qt.TextElideMode.ElideNone)
         hlayout.addWidget(self.tab_bar)
         hlayout.addStretch(1)
 
@@ -477,6 +482,15 @@ class MainWindow(QMainWindow):
 
         for name in self._DISC_TABS:
             self.tab_bar.setTabVisible(self._tab_index[name], drives_present)
+
+        # Force the header layout to recompute immediately so the tab bar's
+        # allocated width grows/shrinks with the new visible-tab count.
+        # Without this, on macOS the tab bar can keep its previous width
+        # and squish the newly-visible tabs.
+        self.tab_bar.updateGeometry()
+        header = self.tab_bar.parentWidget()
+        if header is not None and header.layout() is not None:
+            header.layout().activate()
 
         # If the active tab just became hidden, fall back to Library
         if not drives_present and current_name in self._DISC_TABS:
