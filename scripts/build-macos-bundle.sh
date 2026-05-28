@@ -30,7 +30,7 @@ trap cleanup_vlc_mount EXIT
 
 attach_out=$(hdiutil attach "$STAGED_VLC_DMG" -nobrowse)
 VLC_DEVICE=$(printf "%s\n" "$attach_out" | awk '/\/dev\// { dev=$1 } END { print dev }')
-VLC_MOUNT=$(printf "%s\n" "$attach_out" | awk '/\/Volumes\// { mount=$NF } END { print mount }')
+VLC_MOUNT=$(printf "%s\n" "$attach_out" | awk '/\/Volumes\// { m = match($0, /\/Volumes\/.*/); if (m) mount = substr($0, RSTART, RLENGTH) } END { print mount }')
 mkdir -p "$VLC_MOUNT"
 [ -n "$VLC_DEVICE" ] || { echo "Failed to determine mounted DMG device" >&2; exit 1; }
 [ -n "$VLC_MOUNT" ] || { echo "Failed to determine mounted DMG path" >&2; exit 1; }
