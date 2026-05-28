@@ -81,7 +81,7 @@ jobs:
             "$LASTFM_KEY" "$LASTFM_SECRET" > lyon/core/_secrets.py
 
       - name: PyInstaller (arm64-only)
-        run: python -m PyInstaller --noconfirm --target-arch arm64 build/lyon.spec
+        run: python -m PyInstaller --noconfirm build/lyon.spec
 
       - name: Inject libVLC, plugins, ffmpeg, fpcalc, libdiscid
         env:
@@ -139,8 +139,16 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          HOMEBREW_NO_AUTO_UPDATE: "1"
         run: |
-          brew install create-dmg
+          if ! command -v create-dmg >/dev/null 2>&1; then
+            for attempt in 1 2 3; do
+              brew install create-dmg && break
+              echo "brew install create-dmg failed (attempt ${attempt}/3); retrying..."
+              sleep 10
+            done
+          fi
+          command -v create-dmg >/dev/null 2>&1 || { echo "create-dmg is not available" >&2; exit 1; }
           scripts/build-macos-dmg.sh
 
       - name: Compute SHA256SUMS

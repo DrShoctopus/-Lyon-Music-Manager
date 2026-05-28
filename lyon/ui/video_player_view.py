@@ -1158,7 +1158,7 @@ class VideoPlayerView(QWidget):
         if self._should_prompt_resume(resume_position):
             generation = self._video_output_generation
             QTimer.singleShot(
-                350,
+                0,
                 lambda: self._emit_resume_prompt(generation, resume_position),
             )
 
