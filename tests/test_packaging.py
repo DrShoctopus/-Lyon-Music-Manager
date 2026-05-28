@@ -70,3 +70,11 @@ def test_lockfiles_include_macos_runtime_dependencies(lockfile):
     assert re.search(r"discid==1\.3\.0 ; .*sys_platform == 'darwin'", text)
     assert "pyobjc-framework-cocoa==10.3.2 ; sys_platform == 'darwin'" in text
     assert "pyobjc-framework-diskarbitration==10.3.2 ; sys_platform == 'darwin'" in text
+
+
+def test_macos_build_gate_counts_pytest_collected_output():
+    repo = Path(__file__).resolve().parents[1]
+    workflow = (repo / ".github" / "workflows" / "macos-build.yml").read_text(encoding="utf-8")
+
+    assert "tests? collected" in workflow
+    assert "tests? selected" not in workflow

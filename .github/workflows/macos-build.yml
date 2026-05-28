@@ -43,9 +43,15 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          count=$(python -m pytest --collect-only -q 2>/dev/null | grep -oE '^[0-9]+ tests? selected' | grep -oE '^[0-9]+' || echo "0")
-          echo "Collected $count tests"
-          [ "${count:-0}" -ge "$PYTEST_FLOOR" ] || { echo "Test count $count below floor $PYTEST_FLOOR"; exit 1; }
+          if ! collect=$(python -m pytest --collect-only -q 2>&1); then
+            printf '%s\n' "$collect"
+            echo "pytest collection failed."
+            exit 1
+          fi
+          count=$(printf '%s\n' "$collect" | sed -nE 's/^([0-9]+) tests? collected.*/\1/p' | head -n 1)
+          [ -n "$count" ] || { printf '%s\n' "$collect"; echo "Could not determine collected test count from pytest output."; exit 1; }
+          echo "Collected $count tests (floor $PYTEST_FLOOR)."
+          [ "$count" -ge "$PYTEST_FLOOR" ] || { echo "Test count $count below floor $PYTEST_FLOOR"; exit 1; }
           python -m pytest -q
 
       - name: Cache vendor binaries
