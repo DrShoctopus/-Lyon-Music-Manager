@@ -1,18 +1,15 @@
 """Live optical-drive presence notifications for macOS.
 
-Uses a QTimer polling loop (2 s interval) as the primary mechanism.  Attempts
-to register DiskArbitration callbacks for faster notification; falls back to
-polling if DA is unavailable.
+Polls IOKit on a 1 s QTimer. Optical-media changes are not latency-critical
+(drives take several seconds to spin up), so a simple poll is more robust than
+wiring a DiskArbitration CFRunLoop into Qt's event loop.
 """
 from __future__ import annotations
 
-import logging
 import sys
 from typing import Optional
 
 from PySide6.QtCore import QObject, Signal, QTimer
-
-LOG = logging.getLogger(__name__)
 
 
 class OpticalDriveWatcher(QObject):
@@ -24,7 +21,9 @@ class OpticalDriveWatcher(QObject):
     def __init__(self, parent: Optional[QObject] = None) -> None:
         super().__init__(parent)
         self._poll_timer = QTimer(self)
-        self._poll_timer.setInterval(2000)
+        # Optical-media changes are not latency-critical (drives take several
+        # seconds to spin up), so a 1 s poll is responsive enough.
+        self._poll_timer.setInterval(1000)
         self._poll_timer.timeout.connect(self._poll)
         # Snapshot of (bsd_name, has_audio_disc) pairs from the last poll
         self._last_drives: set[str] = set()
@@ -38,48 +37,10 @@ class OpticalDriveWatcher(QObject):
         import os
         if os.environ.get("PYTEST_CURRENT_TEST"):
             return
-        if not self._try_disk_arbitration():
-            self._poll_timer.start()
+        self._poll_timer.start()
 
     def stop(self) -> None:
         self._poll_timer.stop()
-
-    # ------------------------------------------------------------------
-    # DiskArbitration (best-effort; polling is the guaranteed path)
-    # ------------------------------------------------------------------
-
-    def _try_disk_arbitration(self) -> bool:
-        """Attempt to register DA callbacks; return True if successful."""
-        try:
-            import objc
-
-            _g: dict = {}
-            objc.loadBundle(
-                "DiskArbitration", _g,
-                bundle_path=objc.pathForFramework(
-                    "/System/Library/Frameworks/DiskArbitration.framework"
-                ),
-            )
-            # We need DASessionCreate plus CFRunLoop integration.  Rather than
-            # embedding a CFRunLoop inside Qt's event loop (fragile), we use
-            # the polling timer augmented with DA for immediate wake-up on
-            # appearance/disappearance.  If DA setup fails for any reason we
-            # fall through to polling.
-            DASessionCreate = _g.get("DASessionCreate")
-            if DASessionCreate is None:
-                return False
-
-            # DA is available but full run-loop integration is non-trivial.
-            # Use polling at a tighter interval (1 s) when DA is present so
-            # users get < 1 s latency without the complexity of mixing event
-            # loops.
-            self._poll_timer.setInterval(1000)
-            self._poll_timer.start()
-            LOG.debug("DiskArbitration available; using 1 s polling")
-            return True
-        except Exception as exc:
-            LOG.debug("DiskArbitration setup skipped: %s", exc)
-            return False
 
     # ------------------------------------------------------------------
     # Polling

@@ -61,19 +61,38 @@ def eject_drive(drive: MacOpticalDrive) -> bool:
 # Private helpers
 # ---------------------------------------------------------------------------
 
-def _enumerate_via_iokit() -> list[MacOpticalDrive]:
-    """Use IOKit (via PyObjC objc.loadBundle) to find optical block storage devices."""
+# IOKit's framework bundle and its BridgeSupport-defined C functions are loaded
+# once and cached here. The optical-drive watcher calls _enumerate_via_iokit()
+# on a ~1 s poll for the life of the app; re-running objc.loadBundle on every
+# call re-parses IOKit's BridgeSupport and allocates a fresh set of PyObjC
+# function wrappers each time, which steadily grows resident memory. Loading the
+# bundle a single time keeps the symbol table stable.
+_IOKIT_SYMBOLS: dict | None = None
+
+
+def _load_iokit() -> dict:
+    """Load IOKit's C function table once and reuse it across enumerations."""
+    global _IOKIT_SYMBOLS
+    if _IOKIT_SYMBOLS is not None:
+        return _IOKIT_SYMBOLS
     from Foundation import NSString  # noqa: F401  — forces PyObjC runtime bootstrap
 
     import objc
 
-    _g: dict = {}
+    symbols: dict = {}
     objc.loadBundle(
-        "IOKit", _g,
+        "IOKit", symbols,
         bundle_path=objc.pathForFramework(
             "/System/Library/Frameworks/IOKit.framework"
         ),
     )
+    _IOKIT_SYMBOLS = symbols
+    return symbols
+
+
+def _enumerate_via_iokit() -> list[MacOpticalDrive]:
+    """Use IOKit (via PyObjC objc.loadBundle) to find optical block storage devices."""
+    _g = _load_iokit()
 
     io_service_matching = _g["IOServiceMatching"]
     io_service_get_matching = _g["IOServiceGetMatchingServices"]
