@@ -85,13 +85,22 @@ def _configure_vlc_runtime_path_darwin() -> None:
         if path in _CONFIGURED_VLC_DIRS:
             return
         os.environ.setdefault("DYLD_FALLBACK_LIBRARY_PATH", str(path))
-        plugins = path / "plugins"
-        if not plugins.exists():
-            plugins = path / "vlc" / "plugins"
-        if plugins.exists():
+        plugins = _vlc_plugins_dir_for(path)
+        if plugins is not None:
             os.environ.setdefault("VLC_PLUGIN_PATH", str(plugins))
         _CONFIGURED_VLC_DIRS.add(path)
         return
+
+
+def _vlc_plugins_dir_for(lib_dir: Path) -> Path | None:
+    for plugins in (
+        lib_dir / "plugins",
+        lib_dir / "vlc" / "plugins",
+        lib_dir.parent / "plugins",
+    ):
+        if plugins.exists():
+            return plugins
+    return None
 
 
 def close_dll_handles() -> None:
@@ -270,7 +279,11 @@ class VlcPlaybackBackend(PlaybackBackend):
 
         self._vlc = vlc_module
         self._instance = vlc_module.Instance(*vlc_instance_options)
+        if self._instance is None:
+            raise RuntimeError("vlc.Instance() returned None")
         self._player = self._instance.media_player_new()
+        if self._player is None:
+            raise RuntimeError("libVLC media_player_new() returned None")
         if audio_output:
             try:
                 self._player.audio_output_set(audio_output)

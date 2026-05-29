@@ -423,6 +423,11 @@ def test_gapless_prebuffer_loads_next_track_without_starting_silent_backend():
     assert ("set_muted", False) in backends[1].operations[play_at + 1:]
 
 
+def test_gapless_vlc_options_use_supported_time_stretch_flag():
+    assert "--no-audio-time-stretch" in player_module._GAPLESS_VLC_OPTIONS
+    assert "--audio-time-stretch-enabled=0" not in player_module._GAPLESS_VLC_OPTIONS
+
+
 def test_crossfade_starts_next_backend_before_stopping_current():
     backends: list[FakeBackend] = []
 

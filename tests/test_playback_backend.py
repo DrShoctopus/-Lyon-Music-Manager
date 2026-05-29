@@ -44,6 +44,50 @@ def test_create_playback_backend_returns_unavailable_backend_when_libvlc_fails(m
     assert "libVLC runtime could not be initialized" in backend.unavailable_reason()
 
 
+def test_create_playback_backend_reports_when_libvlc_returns_no_instance(monkeypatch):
+    class BrokenVlc:
+        @staticmethod
+        def Instance(*_args):
+            return None
+
+    monkeypatch.setattr(playback_backend, "_configure_vlc_runtime_path", lambda: None)
+    monkeypatch.setattr(playback_backend.importlib, "import_module", lambda name: BrokenVlc)
+
+    backend = create_playback_backend(vlc_instance_options=("--bad-option",))
+
+    assert isinstance(backend, UnavailablePlaybackBackend)
+    assert not backend.is_available()
+    assert "vlc.Instance() returned None" in backend.unavailable_reason()
+
+
+def test_macos_vlc_runtime_path_uses_vlc_app_sibling_plugins(monkeypatch, tmp_path):
+    vlc_root = tmp_path / "VLC.app" / "Contents" / "MacOS"
+    vlc_lib = vlc_root / "lib"
+    plugins = vlc_root / "plugins"
+    vlc_lib.mkdir(parents=True)
+    plugins.mkdir()
+    (vlc_lib / "libvlc.dylib").write_bytes(b"fake dylib")
+
+    real_path = playback_backend.Path
+
+    def fake_path(value):
+        if value == "/Applications/VLC.app/Contents/MacOS/lib":
+            return vlc_lib
+        return real_path(value)
+
+    monkeypatch.setattr(playback_backend.sys, "platform", "darwin")
+    monkeypatch.setattr(playback_backend, "bundled_frameworks_dir", lambda: None)
+    monkeypatch.setattr(playback_backend, "Path", fake_path)
+    monkeypatch.setattr(playback_backend, "_CONFIGURED_VLC_DIRS", set())
+    monkeypatch.delenv("DYLD_FALLBACK_LIBRARY_PATH", raising=False)
+    monkeypatch.delenv("VLC_PLUGIN_PATH", raising=False)
+
+    playback_backend._configure_vlc_runtime_path()
+
+    assert playback_backend.os.environ["DYLD_FALLBACK_LIBRARY_PATH"] == str(vlc_lib)
+    assert playback_backend.os.environ["VLC_PLUGIN_PATH"] == str(plugins)
+
+
 def test_vlc_backend_uses_path_media_for_regular_files(qapp):
     class Media:
         def __init__(self):

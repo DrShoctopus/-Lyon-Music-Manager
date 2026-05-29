@@ -18,7 +18,7 @@ from .radio import parse_stream_title
 
 _GAPLESS_PREBUFFER_MS = 2000
 _GAPLESS_VLC_OPTIONS: tuple[str, ...] = (
-    "--audio-time-stretch-enabled=0",
+    "--no-audio-time-stretch",
     "--file-caching=150",
 )
 
