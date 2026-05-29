@@ -1,6 +1,6 @@
 """Live optical-drive presence notifications for macOS.
 
-Polls IOKit on a 1 s QTimer. Optical-media changes are not latency-critical
+Polls diskutil on a 1 s QTimer. Optical-media changes are not latency-critical
 (drives take several seconds to spin up), so a simple poll is more robust than
 wiring a DiskArbitration CFRunLoop into Qt's event loop.
 """
