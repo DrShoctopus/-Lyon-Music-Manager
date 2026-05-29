@@ -335,6 +335,50 @@ def test_selecting_video_tab_pauses_music_player(main_window, fake_backend):
     assert not main_window.player.is_playing()
 
 
+def test_transport_resume_from_library_keeps_paused_track(main_window, monkeypatch):
+    from lyon.core.library import Track
+
+    paused_track = Track(
+        id=1,
+        path="/music/paused.flac",
+        title="Paused Song",
+        artist="Artist",
+        album_artist="Artist",
+        album="Album",
+        track_no=1,
+        disc_no=1,
+        year=2026,
+        genre="",
+        duration=120.0,
+    )
+    highlighted_track = Track(
+        id=2,
+        path="/music/highlighted.flac",
+        title="Highlighted Song",
+        artist="Artist",
+        album_artist="Artist",
+        album="Album",
+        track_no=2,
+        disc_no=1,
+        year=2026,
+        genre="",
+        duration=120.0,
+    )
+    main_window.player.set_queue([paused_track], 0)
+    main_window.player.pause()
+    main_window.tab_bar.setCurrentIndex(main_window._tab_index["Library"])
+    monkeypatch.setattr(
+        main_window.library_view,
+        "highlighted_playback",
+        lambda: ([highlighted_track], 0),
+    )
+
+    main_window._on_transport_play_requested()
+
+    assert main_window.player.current() is paused_track
+    assert main_window.player.is_playing()
+
+
 def test_disc_tab_no_drive_state(main_window):
     main_window.tab_bar.setCurrentIndex(main_window._tab_index["Disc"])
 

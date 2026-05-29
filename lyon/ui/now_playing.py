@@ -657,12 +657,14 @@ class NowPlayingView(QWidget):
         threading.Thread(target=_worker, daemon=True).start()
 
     def _on_lyrics_ready(self, task_id: int, synced_lrc: str, plain: str) -> None:
-        # Cache the response unconditionally — even empty results, so we don't
-        # re-hit LRCLIB for a track we've already determined has no online lyrics.
-        self._lyrics_cache[task_id] = (synced_lrc, plain)
-        if len(self._lyrics_cache) > self._PANEL_CACHE_MAX:
-            for key in list(self._lyrics_cache.keys())[:-self._PANEL_CACHE_MAX]:
-                del self._lyrics_cache[key]
+        # Keep successful hits only. Empty results can also mean a transient
+        # network/certificate failure, so caching them makes known-good tracks
+        # look lyric-less until the app restarts.
+        if synced_lrc or plain:
+            self._lyrics_cache[task_id] = (synced_lrc, plain)
+            if len(self._lyrics_cache) > self._PANEL_CACHE_MAX:
+                for key in list(self._lyrics_cache.keys())[:-self._PANEL_CACHE_MAX]:
+                    del self._lyrics_cache[key]
         if task_id != self._lyrics_task_id:
             return  # stale result — track changed while fetch was in flight
         self._apply_lyrics_result(synced_lrc, plain)

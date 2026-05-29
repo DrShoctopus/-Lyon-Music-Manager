@@ -219,11 +219,25 @@ def test_on_lyrics_ready_shows_placeholder_when_both_empty(player):
 
 # ---- Cache behaviour ----------------------------------------------------
 
-def test_lyrics_cache_persists_empty_result(player):
+def test_lyrics_cache_skips_empty_result(player):
     view = NowPlayingView(player, settings=Settings())
     view._lyrics_task_id = 5
     view._on_lyrics_ready(5, "", "")
-    assert view._lyrics_cache[5] == ("", "")
+
+    assert 5 not in view._lyrics_cache
+
+
+def test_empty_lyrics_result_does_not_block_later_retry(player):
+    view = NowPlayingView(player, settings=Settings())
+    view._lyrics_task_id = 5
+    view._on_lyrics_ready(5, "", "")
+    track = _track(track_id=5)
+
+    with patch("lyon.ui.now_playing.threading.Thread") as mock_thread:
+        view._load_lyrics(track)
+
+    mock_thread.assert_called_once()
+    assert view._lyrics_task_id == 5
 
 
 def test_lyrics_cache_serves_hit_without_spawning_thread(player, tmp_path):

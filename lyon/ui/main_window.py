@@ -684,7 +684,11 @@ class MainWindow(QMainWindow):
         if self.cast_controller.is_casting:
             self.cast_controller.toggle_play_pause()
             return
-        if self.stack.currentWidget() is self.library_view and not self.player.is_playing():
+        if (
+            self.stack.currentWidget() is self.library_view
+            and not self.player.is_playing()
+            and self.player.current() is None
+        ):
             playback = self.library_view.highlighted_playback()
             if playback is not None:
                 tracks, start_index = playback
