@@ -3,6 +3,8 @@ import importlib.util
 import sys
 import types
 
+import pytest
+
 
 def _install_dependency_stubs() -> bool:
     try:
@@ -128,9 +130,9 @@ def _install_dependency_stubs() -> bool:
 
 _PYSIDE_STUBBED = _install_dependency_stubs()
 
+from lyon.core import ripper as ripper_module  # noqa: E402
 from lyon.core.cd_detect import DiscToc  # noqa: E402
 from lyon.core.metadata import AlbumInfo, TrackInfo  # noqa: E402
-from lyon.core.settings import Settings  # noqa: E402
 from lyon.core.ripper import (  # noqa: E402
     CDDA_SECTOR_SIZE,
     FfmpegAttemptFailure,
@@ -139,6 +141,8 @@ from lyon.core.ripper import (  # noqa: E402
     RipWorker,
     WINDOWS_CDDA_FALLBACK_READ_CHUNK_SECTORS,
     WINDOWS_CDDA_INITIAL_READ_CHUNK_SECTORS,
+    _MacDarwinCddaReadError,
+    _MacDarwinCddaReader,
     _WindowsCddaReadError,
     _WindowsCddaReader,
     _build_libcdio_track_command,
@@ -157,6 +161,7 @@ from lyon.core.ripper import (  # noqa: E402
     track_output_files,
     unique_target_folder,
 )
+from lyon.core.settings import Settings  # noqa: E402
 from lyon.ui import ripper_view as ripper_view_module  # noqa: E402
 from lyon.ui.ripper_view import RipperView, _existing_target_files, _rip_request_from_toc  # noqa: E402
 
@@ -171,6 +176,16 @@ def test_track_sector_span_normalises_musicbrainz_toc_offsets():
     assert _track_sector_span(1, offsets, 45150) == (0, 15000)
     assert _track_sector_span(2, offsets, 45150) == (15000, 30000)
     assert _track_sector_span(3, offsets, 45150) == (30000, 45000)
+
+
+def test_macos_cdda_reader_rejects_short_sector_reads(monkeypatch, tmp_path):
+    monkeypatch.setattr(ripper_module.sys, "platform", "darwin")
+    raw_device = tmp_path / "rdisk-test"
+    raw_device.write_bytes(b"\0" * CDDA_SECTOR_SIZE)
+
+    with _MacDarwinCddaReader(str(raw_device), chunk_sectors=2) as reader:
+        with pytest.raises(_MacDarwinCddaReadError, match="expected"):
+            list(reader.read_sectors(0, 2))
 
 
 def test_libcdio_command_extracts_one_audio_stream_with_toc_timing(tmp_path):

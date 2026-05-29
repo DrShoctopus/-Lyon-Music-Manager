@@ -601,19 +601,19 @@ class _MacDarwinCddaReader:
             absolute_sector = current_sector + self.first_track_lba
             try:
                 self._fp.seek(absolute_sector * CDDA_SECTOR_SIZE)
-                data = self._fp.read(count * CDDA_SECTOR_SIZE)
+                expected = count * CDDA_SECTOR_SIZE
+                data = self._fp.read(expected)
             except OSError as exc:
                 raise _MacDarwinCddaReadError(
                     f"could not read CD audio sector {absolute_sector}: {exc}"
                 ) from exc
-            if not data:
-                break
+            if len(data) != expected:
+                raise _MacDarwinCddaReadError(
+                    f"read {len(data)} bytes from sector {absolute_sector}; expected {expected}"
+                )
             yield data
-            sectors_read = len(data) // CDDA_SECTOR_SIZE
-            if sectors_read == 0:
-                break
-            current_sector += sectors_read
-            remaining -= sectors_read
+            current_sector += count
+            remaining -= count
 
 
 # ---------------------------------------------------------------- worker
