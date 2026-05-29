@@ -226,11 +226,11 @@ cover **running from source** for development.
 
 ### Python Runtime
 
-- Python 3.11+ is the recommended development/runtime target.
+- Python 3.14 is the recommended development/runtime target.
   - Windows: 64-bit CPython.
   - macOS: arm64-native CPython (not Rosetta). Use
     [python.org](https://www.python.org/downloads/macos/) universal2
-    builds or `brew install python@3.11`.
+    builds or `brew install python@3.14`.
 - Install pinned runtime packages from `requirements.txt`:
 
 ```sh
@@ -292,7 +292,7 @@ Source-only support is intended for developers and contributors.
 ### Windows
 
 ```cmd
-py -3.11 -m venv .venv
+py -3.14 -m venv .venv
 .venv\Scripts\activate
 python -m pip install --upgrade pip
 pip install -r requirements.txt
@@ -306,7 +306,7 @@ py main.py
 ### macOS (Apple Silicon)
 
 ```sh
-python3.11 -m venv .venv
+python3.14 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 

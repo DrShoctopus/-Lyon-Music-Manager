@@ -3,7 +3,7 @@
 **Supported platform:** Windows 10 and 11 (64-bit). The source runs on
 macOS / Linux for development, but only Windows is packaged.
 
-**Toolchain:** Python 3.11 (64-bit) + PyInstaller + Inno Setup 6.
+**Toolchain:** Python 3.14 (64-bit) + PyInstaller + Inno Setup 6.
 
 There are three ways to build:
 
@@ -12,14 +12,14 @@ There are three ways to build:
    signed-ready installer, a portable zip, and a SHA-256 manifest as
    release artifacts. This is the canonical path.
 2. **Local end-to-end** — run `scripts\build-windows.ps1` from the
-   project root on a Windows machine with Python 3.11 and Inno Setup 6
+   project root on a Windows machine with Python 3.14 and Inno Setup 6
    installed. Produces the same artifacts as CI.
 3. **Manual** — for incremental debugging only (no installer); covered
    under §4 below.
 
 ## 1. Prerequisites
 
-- **Python 3.11+ (64-bit)** from python.org — tick "Add Python to PATH".
+- **Python 3.14 (64-bit)** from python.org — tick "Add Python to PATH".
 - **Inno Setup 6** from <https://jrsoftware.org/isinfo.php> (only needed
   for the installer step).
 
@@ -45,7 +45,7 @@ bin\
 ## 2. Install dependencies
 
 ```cmd
-py -3.11 -m venv .venv
+py -3.14 -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements-build.txt
 ```
@@ -214,7 +214,7 @@ and compare against the value in `SHA256SUMS.txt`.
 
 To get byte-identical artefacts on two machines, you need:
 
-1. The same Python 3.11.x point release.
+1. The same Python 3.14.x point release.
 2. The locked transitive dependency lists. Before tagging a release,
    regenerate `requirements.txt` and `requirements-build.txt` with `uv`
    from the `.in` files:

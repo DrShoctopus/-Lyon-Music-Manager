@@ -13,7 +13,7 @@ scripts\build-windows.ps1
 
 ### What it does
 
-1. Locates Python 3.11 (`py -3.11` first, then `python` if it's 3.11).
+1. Locates Python 3.14 (`py -3.14` first, then `python` if it's 3.14).
 2. Creates `.venv\` and upgrades pip.
 3. Installs the hashed lock in `requirements-build.txt`.
 4. Downloads `ffmpeg.exe` (gyan.dev essentials build), pinned Chromaprint
@@ -29,7 +29,7 @@ scripts\build-windows.ps1
 
 ### Prerequisites
 
-- **Python 3.11 (64-bit)** — https://www.python.org/downloads/. Tick
+- **Python 3.14 (64-bit)** — https://www.python.org/downloads/. Tick
   *Add Python to PATH* during install.
 
 ### Flags

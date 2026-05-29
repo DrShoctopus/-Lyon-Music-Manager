@@ -7,7 +7,7 @@
     (dist\SeaLyonMediaManager-{version}-windows.zip), and an Inno Setup 6
     installer (dist\SeaLyonMediaManager-{version}-Setup.exe).
 
-    Steps: create Python 3.11 venv, install dependencies, download
+    Steps: create Python 3.14 venv, install dependencies, download
     ffmpeg.exe, fpcalc.exe, libdiscid.dll, and the VLC runtime into bin\, run
     PyInstaller, zip output, compile installer.
 
@@ -21,7 +21,7 @@
         -Clean          Wipe .venv, dist\, and generated PyInstaller build artefacts.
 
 .NOTES
-    Requires Python 3.11 64-bit on PATH (or the py launcher: py -3.11 ...).
+    Requires Python 3.14 64-bit on PATH (or the py launcher: py -3.14 ...).
 #>
 [CmdletBinding()]
 param(
@@ -163,21 +163,21 @@ if ($Clean) {
         }
 }
 
-# 1. Locate Python 3.11 -------------------------------------------------------
-Write-Host "==> Locating Python 3.11" -ForegroundColor Cyan
+# 1. Locate Python 3.14 -------------------------------------------------------
+Write-Host "==> Locating Python 3.14" -ForegroundColor Cyan
 $python = $null
 try {
-    & py -3.11 -c "import sys; print(sys.version)" | Out-Null
-    if ($LASTEXITCODE -eq 0) { $python = 'py -3.11' }
+    & py -3.14 -c "import sys; print(sys.version)" | Out-Null
+    if ($LASTEXITCODE -eq 0) { $python = 'py -3.14' }
 } catch { }
 if (-not $python) {
     try {
         $ver = & python --version 2>&1
-        if ($ver -match '3\.11') { $python = 'python' }
+        if ($ver -match '3\.14') { $python = 'python' }
     } catch { }
 }
 if (-not $python) {
-    throw "Python 3.11 not found. Install from https://www.python.org/downloads/ and tick 'Add Python to PATH'."
+    throw "Python 3.14 not found. Install from https://www.python.org/downloads/ and tick 'Add Python to PATH'."
 }
 Write-Host "    Using: $python"
 
