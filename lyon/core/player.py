@@ -852,9 +852,8 @@ class Player(QObject):
         backend.apply_equalizer(self._equalizer_enabled, self._equalizer_bands, self._equalizer_preamp)
         backend.set_muted(True)
         backend.set_volume(0)
-        backend.play()
-        backend.pause()
-        backend.set_position(0)
+        # Avoid a silent play/pause pre-roll. On CoreAudio, opening a second
+        # output stream near a track boundary can still produce an audible pop.
         self._gapless_prebuffer_backend = backend
         self._gapless_prebuffer_index = idx
 
@@ -876,11 +875,14 @@ class Player(QObject):
         self._connect_backend(backend)
         track = self._queue[idx]
         self._rg_multiplier = self._rg_multiplier_for_track(track)
-        backend.set_muted(muted)
-        backend.set_volume(self._rg_applied_vol(self._user_volume, self._rg_multiplier))
+        target_volume = self._rg_applied_vol(self._user_volume, self._rg_multiplier)
+        backend.set_volume(0)
+        backend.set_muted(True)
         backend.play()
         old_backend.stop()
         self._dispose_transient_backend(old_backend)
+        backend.set_volume(target_volume)
+        backend.set_muted(muted)
         self._commit_track_index(idx, previous_index)
 
     def _cancel_gapless_prebuffer(self) -> None:

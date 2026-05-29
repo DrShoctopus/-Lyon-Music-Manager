@@ -22,6 +22,7 @@ class FakeBackend(QObject):
         self.equalizer_calls: list[tuple[bool, list[int]]] = []
         self.sources: list[str] = []
         self.source_calls: list[tuple[str, bool, tuple[str, ...]]] = []
+        self.operations: list[tuple[str, object | None]] = []
         self.play_count = 0
         self._position = 0
         self._volume = 80
@@ -37,15 +38,19 @@ class FakeBackend(QObject):
     ) -> None:
         self.sources.append(path)
         self.source_calls.append((path, is_location, options))
+        self.operations.append(("set_source", path))
 
     def play(self) -> None:
+        self.operations.append(("play", None))
         self.play_count += 1
         self._playing = True
 
     def pause(self) -> None:
+        self.operations.append(("pause", None))
         self._playing = False
 
     def stop(self) -> None:
+        self.operations.append(("stop", None))
         self._playing = False
 
     def position(self) -> int:
@@ -55,15 +60,18 @@ class FakeBackend(QObject):
         return 0
 
     def set_position(self, ms: int) -> None:
+        self.operations.append(("set_position", ms))
         self._position = ms
 
     def set_volume(self, percent: int) -> None:
+        self.operations.append(("set_volume", percent))
         self._volume = percent
 
     def volume(self) -> int:
         return self._volume
 
     def set_muted(self, muted: bool) -> None:
+        self.operations.append(("set_muted", muted))
         self._muted = muted
 
     def is_muted(self) -> bool:
@@ -73,6 +81,7 @@ class FakeBackend(QObject):
         return self._playing
 
     def apply_equalizer(self, enabled: bool, bands: list[int], preamp: int = 0) -> None:
+        self.operations.append(("apply_equalizer", enabled))
         self.equalizer_calls.append((enabled, list(bands), preamp))
 
     def cleanup(self) -> None:
@@ -373,7 +382,7 @@ def test_default_backend_factory_accepts_legacy_one_arg_stub(monkeypatch):
     assert backend.parent() is player
 
 
-def test_gapless_prebuffer_does_not_advance_next_track_before_promotion():
+def test_gapless_prebuffer_loads_next_track_without_starting_silent_backend():
     backends: list[FakeBackend] = []
 
     def factory(parent=None):
@@ -392,18 +401,26 @@ def test_gapless_prebuffer_does_not_advance_next_track_before_promotion():
 
     assert len(backends) == 2
     assert backends[1].sources == ["C:/Music/two.flac"]
-    assert backends[1].play_count == 1
+    assert backends[1].play_count == 0
     assert not backends[1].is_playing()
     assert backends[1].position() == 0
     assert backends[1].is_muted()
+    assert ("play", None) not in backends[1].operations
+    assert ("pause", None) not in backends[1].operations
 
     backends[0].end_reached.emit()
 
     assert player.current_index() == 1
-    assert backends[1].play_count == 2
+    assert backends[1].play_count == 1
     assert backends[1].is_playing()
     assert not backends[1].is_muted()
     assert backends[0].parent() is None
+    play_at = backends[1].operations.index(("play", None))
+    assert backends[1].operations[play_at - 2:play_at] == [
+        ("set_volume", 0),
+        ("set_muted", True),
+    ]
+    assert ("set_muted", False) in backends[1].operations[play_at + 1:]
 
 
 def test_crossfade_starts_next_backend_before_stopping_current():
