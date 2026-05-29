@@ -375,23 +375,21 @@ pyobjc-core==12.1 ; sys_platform == 'darwin' \
     # via
     #   pyobjc-framework-cocoa
     #   pyobjc-framework-diskarbitration
-pyobjc-framework-cocoa==10.3.2 ; sys_platform == 'darwin' \
-    --hash=sha256:08e48b9ee4eb393447b2b781d16663b954bd10a26927df74f92e924c05568d89 \
-    --hash=sha256:61f44c2adab28fdf3aa3d593c9497a2d9ceb9583ed9814adb48828c385d83ff4 \
-    --hash=sha256:673968e5435845bef969bfe374f31a1a6dc660c98608d2b84d5cae6eafa5c39d \
-    --hash=sha256:7caaf8b260e81b27b7b787332846f644b9423bfc1536f6ec24edbde59ab77a87 \
-    --hash=sha256:7faa448d2038ae0e0287a326d390002e744bb6470e45995e2dbd16c892e4495a \
-    --hash=sha256:838fcf0d10674bde9ff64a3f20c0e188f2dc5e804476d80509b81c4ac1dabc59 \
-    --hash=sha256:c49e99fc4b9e613fb308651b99d52a8a9ae9916c8ef27aa2f5d585b6678a59bf \
-    --hash=sha256:f1161b5713f9b9934c12649d73a6749617172e240f9431eff9e22175262fdfda \
-    --hash=sha256:fcd53fee2be9708576617994b107aedc2c40824b648cd51e780e8399c0a447b6
+pyobjc-framework-cocoa==12.1 ; sys_platform == 'darwin' \
+    --hash=sha256:03342a60fc0015bcdf9b93ac0b4f457d3938e9ef761b28df9564c91a14f0129a \
+    --hash=sha256:547c182837214b7ec4796dac5aee3aa25abc665757b75d7f44f83c994bcb0858 \
+    --hash=sha256:5556c87db95711b985d5efdaaf01c917ddd41d148b1e52a0c66b1a2e2c5c1640 \
+    --hash=sha256:5a3dcd491cacc2f5a197142b3c556d8aafa3963011110102a093349017705118 \
+    --hash=sha256:6ba1dc1bfa4da42d04e93d2363491275fb2e2be5c20790e561c8a9e09b8cf2cc \
+    --hash=sha256:914b74328c22d8ca261d78c23ef2befc29776e0b85555973927b338c5734ca44 \
+    --hash=sha256:9b880d3bdcd102809d704b6d8e14e31611443aa892d9f60e8491e457182fdd48 \
+    --hash=sha256:f52228bcf38da64b77328787967d464e28b981492b33a7675585141e1b0a01e6
     # via
     #   -r requirements.in
     #   pyobjc-framework-diskarbitration
-pyobjc-framework-diskarbitration==10.3.2 ; sys_platform == 'darwin' \
-    --hash=sha256:4c1e901351ea8e264ab673ff181d4d67cd68b5bdff344353b385b05e084be243 \
-    --hash=sha256:5e3a4a35b209bd9b983ae6248275784f913318d689b368f7ef584c87b7157336 \
-    --hash=sha256:b7524092e8aae06262243523ff9dc7480185d8cbe4d3dd3604bca02a1ad66b7b
+pyobjc-framework-diskarbitration==12.1 ; sys_platform == 'darwin' \
+    --hash=sha256:54caf3079fe4ae5ac14466a9b68923ee260a1a88a8290686b4a2015ba14c2db6 \
+    --hash=sha256:6703bc5a09b38a720c9ffca356b58f7e99fa76fc988c9ec4d87112344e63dfc2
     # via -r requirements.in
 pyside6-essentials==6.11.1 \
     --hash=sha256:11253ea52aabecefe9febddbbe78b43a824129e3af1cec98431028fba7fa954f \
