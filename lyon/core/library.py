@@ -1640,7 +1640,24 @@ def _row_disc_id(row: sqlite3.Row) -> str:
     return str(row["disc_id"] or "").strip()
 
 
+_TAG_READ_TRACE: dict[str, float] = {}  # TEMP DIAG (LMM-DEV #4); remove after diagnosis
+
+
 def _read_tags(path: str) -> dict | None:
+    # --- TEMP DIAG (LMM-DEV #4): trace duplicate tag reads; remove after diagnosis ---
+    import threading
+    import time as _t
+    import traceback
+    _now = _t.monotonic()
+    _prev = _TAG_READ_TRACE.get(path)
+    _TAG_READ_TRACE[path] = _now
+    if _prev is not None and _now - _prev < 5.0:
+        LOG.warning(
+            "DIAG duplicate tag-read (+%.0f ms) thread=%s path=%s\n%s",
+            (_now - _prev) * 1000.0, threading.current_thread().name, path,
+            "".join(traceback.format_stack(limit=15)),
+        )
+    # --- END TEMP DIAG ---
     try:
         f = MutagenFile(path, easy=True)
     except Exception as exc:
