@@ -226,7 +226,7 @@ cover **running from source** for development.
 
 ### Python Runtime
 
-- Python 3.14 is the recommended development/runtime target.
+- Python 3.14 is required for development and builds.
   - Windows: 64-bit CPython.
   - macOS: arm64-native CPython (not Rosetta). Use
     [python.org](https://www.python.org/downloads/macos/) universal2

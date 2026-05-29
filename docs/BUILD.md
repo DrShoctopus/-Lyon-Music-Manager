@@ -220,8 +220,8 @@ To get byte-identical artefacts on two machines, you need:
    from the `.in` files:
    ```pwsh
    pip install uv
-   uv pip compile requirements.in --universal --python-version 3.11 --generate-hashes --output-file requirements.txt
-   uv pip compile requirements-build.in --universal --python-version 3.11 --generate-hashes --output-file requirements-build.txt
+   uv pip compile requirements.in --universal --python-version 3.14 --generate-hashes --output-file requirements.txt
+   uv pip compile requirements-build.in --universal --python-version 3.14 --generate-hashes --output-file requirements-build.txt
    ```
 3. The pinned binary runtimes from `windows-build.yml`'s `env:` block
    and `scripts/build-windows.ps1`.
