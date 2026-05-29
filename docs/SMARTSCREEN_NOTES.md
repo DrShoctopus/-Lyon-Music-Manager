@@ -44,8 +44,7 @@ certificates cost between roughly $200 and $700 per year, plus
 hardware-token shipping for EV certificates. For an indie project at
 v1.0 we deliberately chose to ship the first public release without a
 certificate and ask users to verify the SHA-256 hash instead. **A
-signed build is planned for v1.1** (see
-[`IMPLEMENTATION_PLAN_1.0.md`](../IMPLEMENTATION_PLAN_1.0.md)).
+signed build is planned for v1.1**.
 
 ## Is the installer safe?
 

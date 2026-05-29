@@ -116,7 +116,5 @@ on every machine that uses fractional scaling.
 
 ## See also
 
-- [`RELEASE_CHECKLIST.md`](RELEASE_CHECKLIST.md) §M — abbreviated
-  matrix wired into the release-blocker sheet.
 - Qt high-DPI documentation:
   <https://doc.qt.io/qt-6/highdpi.html>

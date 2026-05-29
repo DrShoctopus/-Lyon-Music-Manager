@@ -554,6 +554,7 @@ class NowPlayingView(QWidget):
             for idx, button in enumerate(self._panel_tabs):
                 if idx != page:
                     button.setChecked(False)
+                    button.clearFocus()
             self._panel_stack.setCurrentIndex(page)
             return
         if not any(button.isChecked() for button in self._panel_tabs):

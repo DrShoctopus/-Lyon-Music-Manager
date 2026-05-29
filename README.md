@@ -14,7 +14,7 @@ libVLC, ffmpeg, yt-dlp, CUETools DB, MusicBrainz, TheAudioDB, Cover Art
 Archive, LRCLIB, and libdiscid.
 
 **Current version:** `0.9.0-rc1` (LMM-DEV) — see [`lyon/__init__.py`](lyon/__init__.py).
-**Targeted public release:** `1.0.0` — see [`IMPLEMENTATION_PLAN_1.0.md`](IMPLEMENTATION_PLAN_1.0.md).
+**Targeted public release:** `1.0.0`.
 
 ## Support
 
@@ -65,10 +65,11 @@ for Updates…**.
 
 ## Status
 
-`LMM-DEV` is the active development branch tracking the v1.0 release
-plan. The repository is feature-complete for v1.0; release-engineering
-work (installer polish, auto-update wiring, EULA + privacy + license
-attribution) is in flight per [`IMPLEMENTATION_PLAN_1.0.md`](IMPLEMENTATION_PLAN_1.0.md).
+`LMM-DEV` is the active development branch tracking the v1.0 release.
+The repository is feature-complete for v1.0; release-engineering work
+(installer polish, auto-update wiring, EULA + privacy + license
+attribution) is documented in [`docs/BUILD.md`](docs/BUILD.md) and
+[`CHANGELOG.md`](CHANGELOG.md).
 
 **Packaged releases ship for Windows 10 / 11 (x64) and macOS 11+
 (Apple Silicon).** Linux source-only development is best-effort.
@@ -421,7 +422,6 @@ CHANGELOG.md                         Release notes (Keep a Changelog format)
 EULA.txt                             End-user license agreement (MIT + tail)
 PRIVACY.md                           Privacy policy (no telemetry)
 THIRD_PARTY_NOTICES.txt              Bundled-dependency licenses
-IMPLEMENTATION_PLAN_1.0.md           Full v1.0 release plan
 ```
 
 ## Testing
