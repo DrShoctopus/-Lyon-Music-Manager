@@ -316,6 +316,8 @@ def test_update_dialog_does_not_open_unsafe_download_url(qapp, monkeypatch):
     dialog._on_download()
 
     assert opened == []
+    # Failure is surfaced inline instead of silently closing the dialog.
+    assert not dialog._status.isHidden()
 
 
 def test_update_dialog_rejects_cleartext_download_url(qapp, monkeypatch):
@@ -341,6 +343,8 @@ def test_update_dialog_rejects_cleartext_download_url(qapp, monkeypatch):
     dialog._on_download()
 
     assert opened == []
+    # Failure is surfaced inline instead of silently closing the dialog.
+    assert not dialog._status.isHidden()
 
 
 def test_update_dialog_filters_release_note_links(qapp, monkeypatch):
@@ -367,6 +371,9 @@ def test_update_dialog_filters_release_note_links(qapp, monkeypatch):
     notes = dialog.findChild(QTextBrowser)
     assert notes is not None
     assert notes.openExternalLinks() is False
+    # openLinks must also be off, or the browser navigates to the link itself
+    # (via setSource) and blanks the release notes despite our custom handler.
+    assert notes.openLinks() is False
 
     notes.anchorClicked.emit(QUrl("file:///tmp/nope"))
     notes.anchorClicked.emit(QUrl("http://example.test/nope"))

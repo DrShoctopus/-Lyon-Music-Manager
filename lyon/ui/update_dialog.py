@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 
 from .. import __version__
 from ..core.updater import UpdateInfo
+from .theme import STATUS_ERROR
 
 _OPENABLE_UPDATE_SCHEMES = {"https"}
 
@@ -71,6 +72,10 @@ class UpdateAvailableDialog(QDialog):
 
         notes = QTextBrowser(self)
         notes.setOpenExternalLinks(False)
+        # We intercept link activation via anchorClicked. Without also disabling
+        # openLinks, QTextBrowser would still try to navigate to the URL as its
+        # own document — which it can't fetch — blanking the release notes.
+        notes.setOpenLinks(False)
         notes.anchorClicked.connect(_open_update_url)
         notes.setHtml(info.release_notes_html or "<i>No release notes provided.</i>")
         layout.addWidget(notes, 1)
@@ -88,7 +93,7 @@ class UpdateAvailableDialog(QDialog):
 
         if info.release_url:
             view_btn = QPushButton("View Release Page", self)
-            view_btn.clicked.connect(lambda: _open_update_url(info.release_url))
+            view_btn.clicked.connect(self._on_view_release)
             button_row.addWidget(view_btn)
 
         button_row.addStretch(1)
@@ -101,13 +106,31 @@ class UpdateAvailableDialog(QDialog):
         later_btn.clicked.connect(self.reject)
         button_row.addWidget(later_btn)
 
+        self._status = QLabel("", self)
+        self._status.setWordWrap(True)
+        self._status.setStyleSheet(f"color: {STATUS_ERROR};")
+        self._status.hide()
+        layout.addWidget(self._status)
+
         layout.addLayout(button_row)
 
     def _on_download(self) -> None:
         for target in (self._info.download_url, self._info.release_url):
             if _open_update_url(target):
-                break
-        self.accept()
+                self.accept()
+                return
+        self._show_open_failure()
+
+    def _on_view_release(self) -> None:
+        if not _open_update_url(self._info.release_url):
+            self._show_open_failure()
+
+    def _show_open_failure(self) -> None:
+        self._status.setText(
+            "Couldn't open the link automatically. Visit the project's "
+            "Releases page in your browser to download this update."
+        )
+        self._status.show()
 
     def _on_skip(self) -> None:
         self.version_skipped.emit(self._info.version)
