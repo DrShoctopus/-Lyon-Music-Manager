@@ -10,7 +10,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFileDialog,
     QFormLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QMessageBox,
-    QPushButton, QScrollArea, QSpinBox, QTabWidget, QVBoxLayout, QWidget,
+    QPushButton, QScrollArea, QSizePolicy, QSpinBox, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from ..core.settings import Settings, normalize_library_paths
@@ -34,6 +34,10 @@ _RIP_FORMATS = [
 _LOSSY_FORMATS = {"mp3", "aac", "opus", "ogg", "wma"}
 _FLAC_FORMAT = "flac"
 _DIALOG_DEFAULT_HEIGHT = 520
+_FORM_FIELD_MIN_WIDTH = 280
+_PATH_FIELD_MIN_WIDTH = 420
+_COMBO_FIELD_MIN_WIDTH = 220
+_SPIN_FIELD_MIN_WIDTH = 160
 
 
 class SettingsDialog(QDialog):
@@ -95,19 +99,49 @@ class SettingsDialog(QDialog):
         self.setMinimumSize(dialog_width, _DIALOG_DEFAULT_HEIGHT)
         self.resize(dialog_width, _DIALOG_DEFAULT_HEIGHT)
 
-    def _build_library_tab(self, settings: Settings) -> QWidget:
-        w = QWidget()
-        form = QFormLayout(w)
+    @staticmethod
+    def _settings_form(parent: QWidget) -> QFormLayout:
+        form = QFormLayout(parent)
         form.setContentsMargins(12, 12, 12, 12)
         form.setVerticalSpacing(8)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        return form
+
+    @staticmethod
+    def _expand_field(widget: QWidget, minimum_width: int = _FORM_FIELD_MIN_WIDTH) -> None:
+        widget.setMinimumWidth(minimum_width)
+        widget.setSizePolicy(QSizePolicy.Policy.Expanding, widget.sizePolicy().verticalPolicy())
+
+    @classmethod
+    def _prepare_combo(
+        cls,
+        combo: QComboBox,
+        *,
+        minimum_width: int = _COMBO_FIELD_MIN_WIDTH,
+        minimum_contents_length: int = 18,
+    ) -> None:
+        combo.setMinimumWidth(minimum_width)
+        combo.setMinimumContentsLength(minimum_contents_length)
+        combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        combo.setSizePolicy(QSizePolicy.Policy.Expanding, combo.sizePolicy().verticalPolicy())
+
+    @staticmethod
+    def _prepare_spinbox(spinbox: QSpinBox | QDoubleSpinBox) -> None:
+        spinbox.setMinimumWidth(_SPIN_FIELD_MIN_WIDTH)
+
+    def _build_library_tab(self, settings: Settings) -> QWidget:
+        w = QWidget()
+        form = self._settings_form(w)
 
         root_row = QHBoxLayout()
         self.root_edit = QLineEdit(settings.music_root)
+        self._expand_field(self.root_edit, _PATH_FIELD_MIN_WIDTH)
         browse = QPushButton("Browse…")
         browse.clicked.connect(self._browse_root)
         root_row.addWidget(self.root_edit, 1)
         root_row.addWidget(browse)
         root_w = QWidget(); root_w.setLayout(root_row)
+        self._expand_field(root_w, _PATH_FIELD_MIN_WIDTH)
         form.addRow("Music folder:", root_w)
 
         self._root_warn = QLabel("")
@@ -119,6 +153,7 @@ class SettingsDialog(QDialog):
         folders_box = QVBoxLayout()
         self.library_paths = QListWidget()
         self.library_paths.setMinimumHeight(100)
+        self._expand_field(self.library_paths, _PATH_FIELD_MIN_WIDTH)
         for folder in normalize_library_paths(settings.library_paths):
             self.library_paths.addItem(folder)
         folder_buttons = QHBoxLayout()
@@ -132,6 +167,7 @@ class SettingsDialog(QDialog):
         folders_box.addWidget(self.library_paths)
         folders_box.addLayout(folder_buttons)
         folders_w = QWidget(); folders_w.setLayout(folders_box)
+        self._expand_field(folders_w, _PATH_FIELD_MIN_WIDTH)
         form.addRow("Library folders:", folders_w)
 
         self.watch_library_folders = QCheckBox("Watch library folders for changes")
@@ -146,9 +182,7 @@ class SettingsDialog(QDialog):
 
     def _build_playback_tab(self, settings: Settings) -> QWidget:
         w = QWidget()
-        form = QFormLayout(w)
-        form.setContentsMargins(12, 12, 12, 12)
-        form.setVerticalSpacing(8)
+        form = self._settings_form(w)
 
         # ---- Audio Output section
         ao_label = QLabel("Audio Output")
@@ -156,6 +190,7 @@ class SettingsDialog(QDialog):
         form.addRow(ao_label)
 
         self.audio_output_combo = QComboBox()
+        self._prepare_combo(self.audio_output_combo, minimum_contents_length=24)
         for out_id, out_desc in self._audio_outputs:
             self.audio_output_combo.addItem(out_desc, out_id)
         current_output = settings.audio_output
@@ -166,6 +201,7 @@ class SettingsDialog(QDialog):
         form.addRow("Output module:", self.audio_output_combo)
 
         self.audio_device_combo = QComboBox()
+        self._prepare_combo(self.audio_device_combo, minimum_contents_length=24)
         self._repopulate_device_combo(settings.audio_output, settings.audio_output_device)
         form.addRow("Output device:", self.audio_device_combo)
 
@@ -181,6 +217,7 @@ class SettingsDialog(QDialog):
         form.addRow(rg_label)
 
         self.rg_mode = QComboBox()
+        self._prepare_combo(self.rg_mode)
         self.rg_mode.addItem("Off", "off")
         self.rg_mode.addItem("Track Gain", "track")
         self.rg_mode.addItem("Album Gain", "album")
@@ -191,6 +228,7 @@ class SettingsDialog(QDialog):
         form.addRow("Normalization mode:", self.rg_mode)
 
         self.rg_preamp = QDoubleSpinBox()
+        self._prepare_spinbox(self.rg_preamp)
         self.rg_preamp.setRange(-6.0, 6.0)
         self.rg_preamp.setSingleStep(0.5)
         self.rg_preamp.setDecimals(1)
@@ -212,6 +250,7 @@ class SettingsDialog(QDialog):
         form.addRow(cf_label)
 
         self.crossfade_seconds = QSpinBox()
+        self._prepare_spinbox(self.crossfade_seconds)
         self.crossfade_seconds.setRange(0, 60)
         self.crossfade_seconds.setSingleStep(1)
         self.crossfade_seconds.setSpecialValueText("Off")
@@ -263,15 +302,15 @@ class SettingsDialog(QDialog):
 
     def _build_ripping_tab(self, settings: Settings) -> QWidget:
         w = QWidget()
-        form = QFormLayout(w)
-        form.setContentsMargins(12, 12, 12, 12)
-        form.setVerticalSpacing(8)
+        form = self._settings_form(w)
 
         self.drive = QLineEdit(settings.cd_drive)
+        self._expand_field(self.drive)
         self.drive.setPlaceholderText("e.g. D:  (leave blank for auto)")
         form.addRow("CD drive:", self.drive)
 
         self.rip_fmt = QComboBox()
+        self._prepare_combo(self.rip_fmt)
         for label, key in _RIP_FORMATS:
             self.rip_fmt.addItem(label, key)
         current_fmt = settings.rip_format or "flac"
@@ -282,6 +321,7 @@ class SettingsDialog(QDialog):
         form.addRow("Output format:", self.rip_fmt)
 
         self.compression = QSpinBox()
+        self._prepare_spinbox(self.compression)
         self.compression.setRange(0, 8)
         self.compression.setValue(settings.flac_compression)
         self.compression.setToolTip("0 = fastest encode, 8 = smallest file size")
@@ -289,6 +329,7 @@ class SettingsDialog(QDialog):
         form.addRow(self._compression_label, self.compression)
 
         self.bitrate_combo = QComboBox()
+        self._prepare_combo(self.bitrate_combo)
         self.bitrate_combo.addItems(["128", "192", "256", "320", "512"])
         self.bitrate_combo.setCurrentText(str(settings.rip_audio_bitrate))
         self.bitrate_combo.setToolTip("Audio bitrate in kilobits per second")
@@ -319,9 +360,7 @@ class SettingsDialog(QDialog):
 
     def _build_metadata_tab(self, settings: Settings) -> QWidget:
         w = QWidget()
-        form = QFormLayout(w)
-        form.setContentsMargins(12, 12, 12, 12)
-        form.setVerticalSpacing(8)
+        form = self._settings_form(w)
 
         self.lookup = QCheckBox("Look up metadata online automatically")
         self.lookup.setChecked(settings.auto_lookup_metadata)
@@ -348,6 +387,7 @@ class SettingsDialog(QDialog):
         form.addRow("", self.fetch_lyrics_online)
 
         self.contact = QLineEdit(settings.musicbrainz_contact)
+        self._expand_field(self.contact, _PATH_FIELD_MIN_WIDTH)
         form.addRow("MusicBrainz contact:", self.contact)
 
         self._contact_warn = QLabel("Contact still uses the placeholder 'example.invalid' — metadata lookups may be rate-limited or rejected.")
@@ -358,6 +398,7 @@ class SettingsDialog(QDialog):
         self.contact.textChanged.connect(self._check_contact)
 
         self.audiodb_key = QLineEdit(settings.theaudiodb_api_key)
+        self._expand_field(self.audiodb_key)
         self.audiodb_key.setPlaceholderText("e.g. 123 (free tier)")
         form.addRow("TheAudioDB API key:", self.audiodb_key)
 
@@ -365,16 +406,16 @@ class SettingsDialog(QDialog):
 
     def _build_youtube_tab(self, settings: Settings) -> QWidget:
         w = QWidget()
-        form = QFormLayout(w)
-        form.setContentsMargins(12, 12, 12, 12)
-        form.setVerticalSpacing(8)
+        form = self._settings_form(w)
 
         self.yt_audio_fmt = QComboBox()
+        self._prepare_combo(self.yt_audio_fmt)
         self.yt_audio_fmt.addItems(["flac", "mp3"])
         self.yt_audio_fmt.setCurrentText(settings.yt_audio_format)
         form.addRow("Audio-only format:", self.yt_audio_fmt)
 
         self.yt_video_fmt = QComboBox()
+        self._prepare_combo(self.yt_video_fmt)
         self.yt_video_fmt.addItems(["mp4", "mkv", "webm"])
         self.yt_video_fmt.setCurrentText(settings.yt_video_format)
         form.addRow("Video format (video + audio):", self.yt_video_fmt)
@@ -386,6 +427,7 @@ class SettingsDialog(QDialog):
             ("4K (2160p)",      "4k"),
         ]
         self.yt_video_quality = QComboBox()
+        self._prepare_combo(self.yt_video_quality)
         for label, key in _QUALITY_LABELS:
             self.yt_video_quality.addItem(label, key)
         current_q = settings.yt_video_quality
@@ -401,12 +443,14 @@ class SettingsDialog(QDialog):
         save_dir_row = QHBoxLayout()
         default_save = settings.yt_output_dir or str(Path(settings.music_root) / "YouTube")
         self.yt_save_dir = QLineEdit(settings.yt_output_dir)
+        self._expand_field(self.yt_save_dir, _PATH_FIELD_MIN_WIDTH)
         self.yt_save_dir.setPlaceholderText(default_save)
         browse_save = QPushButton("Browse…")
         browse_save.clicked.connect(lambda: self._browse_yt_dir(self.yt_save_dir))
         save_dir_row.addWidget(self.yt_save_dir, 1)
         save_dir_row.addWidget(browse_save)
         save_dir_w = QWidget(); save_dir_w.setLayout(save_dir_row)
+        self._expand_field(save_dir_w, _PATH_FIELD_MIN_WIDTH)
         form.addRow("Save folder:", save_dir_w)
 
         self.yt_auto_add = QCheckBox("Automatically add downloads to library")
@@ -467,6 +511,7 @@ class SettingsDialog(QDialog):
 
         lbz_token_row = QHBoxLayout()
         self.lbz_token = QLineEdit(settings.listenbrainz_token)
+        self._expand_field(self.lbz_token, _PATH_FIELD_MIN_WIDTH)
         self.lbz_token.setPlaceholderText("Paste your ListenBrainz user token here…")
         self.lbz_token.setEchoMode(QLineEdit.Password)
         lbz_token_row.addWidget(self.lbz_token, 1)
@@ -481,19 +526,19 @@ class SettingsDialog(QDialog):
 
     def _build_dlna_tab(self, settings: Settings) -> QWidget:
         w = QWidget()
-        form = QFormLayout(w)
-        form.setContentsMargins(12, 12, 12, 12)
-        form.setVerticalSpacing(8)
+        form = self._settings_form(w)
 
         self.dlna_enabled = QCheckBox("Share library over DLNA / UPnP")
         self.dlna_enabled.setChecked(settings.dlna_enabled)
         form.addRow("", self.dlna_enabled)
 
         self.dlna_name = QLineEdit(settings.dlna_friendly_name)
+        self._expand_field(self.dlna_name)
         self.dlna_name.setPlaceholderText("Sea Lyon Media Manager")
         form.addRow("Server name:", self.dlna_name)
 
         self.dlna_port = QSpinBox()
+        self._prepare_spinbox(self.dlna_port)
         self.dlna_port.setRange(0, 65535)
         self.dlna_port.setSpecialValueText("Auto")
         self.dlna_port.setValue(settings.dlna_port)
@@ -501,6 +546,7 @@ class SettingsDialog(QDialog):
         form.addRow("Port:", self.dlna_port)
 
         self.dlna_bind_address = QLineEdit(settings.dlna_bind_address)
+        self._expand_field(self.dlna_bind_address)
         self.dlna_bind_address.setPlaceholderText("0.0.0.0")
         self.dlna_bind_address.setToolTip(
             "Use 127.0.0.1 for this computer only, or 0.0.0.0 for local network devices."
@@ -519,9 +565,7 @@ class SettingsDialog(QDialog):
 
     def _build_updates_tab(self, settings: Settings) -> QWidget:
         w = QWidget()
-        form = QFormLayout(w)
-        form.setContentsMargins(12, 12, 12, 12)
-        form.setVerticalSpacing(8)
+        form = self._settings_form(w)
 
         self.update_check_enabled = QCheckBox(
             "Check for updates automatically (once a day)"
@@ -530,6 +574,7 @@ class SettingsDialog(QDialog):
         form.addRow("", self.update_check_enabled)
 
         self.update_appcast_url = QLineEdit(settings.update_appcast_url)
+        self._expand_field(self.update_appcast_url, _PATH_FIELD_MIN_WIDTH)
         self.update_appcast_url.setPlaceholderText(
             "https://drshoctopus.github.io/Sea-Lyon-Media-Manager/appcast.xml"
         )

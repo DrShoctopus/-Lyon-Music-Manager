@@ -84,6 +84,39 @@ def test_settings_dialog_opens_wide_enough_for_top_tabs(app):
         app.setStyleSheet(previous_stylesheet)
 
 
+def test_settings_dialog_form_fields_have_room_to_grow(app):
+    dialog = SettingsDialog(Settings(), None)
+
+    forms = dialog.findChildren(QtWidgets.QFormLayout)
+    assert forms
+    for form in forms:
+        assert form.fieldGrowthPolicy() == (
+            QtWidgets.QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow
+        )
+
+    for widget in (
+        dialog.root_edit,
+        dialog.library_paths,
+        dialog.contact,
+        dialog.yt_save_dir,
+        dialog.lbz_token,
+        dialog.update_appcast_url,
+    ):
+        assert widget.minimumWidth() >= 420
+
+    for combo in (
+        dialog.audio_output_combo,
+        dialog.audio_device_combo,
+        dialog.rg_mode,
+        dialog.rip_fmt,
+        dialog.yt_video_quality,
+    ):
+        assert combo.minimumWidth() >= 220
+        assert combo.sizeAdjustPolicy() == (
+            QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+
+
 def test_settings_dialog_spinbox_up_buttons_increment(app):
     previous_stylesheet = app.styleSheet()
     app.setStyleSheet(WMP_QSS)

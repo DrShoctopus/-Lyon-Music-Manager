@@ -17,10 +17,17 @@ import pytest
 QtCore = pytest.importorskip("PySide6.QtCore", exc_type=ImportError)
 QtWidgets = pytest.importorskip("PySide6.QtWidgets", exc_type=ImportError)
 
-from lyon.ui.styles import WMP_QSS
+from lyon.ui.styles import MACOS_QSS, WMP_QSS
 
 
-def test_qss_parses_without_warnings(qapp):
+@pytest.mark.parametrize(
+    "stylesheet",
+    [
+        pytest.param(WMP_QSS, id="base"),
+        pytest.param(WMP_QSS + MACOS_QSS, id="macos"),
+    ],
+)
+def test_qss_parses_without_warnings(qapp, stylesheet):
     """Applying the stylesheet must not produce Qt parser warnings."""
     warnings: list[str] = []
 
@@ -31,7 +38,7 @@ def test_qss_parses_without_warnings(qapp):
     original = QtCore.qInstallMessageHandler(handler)
     try:
         widget = QtWidgets.QWidget()
-        widget.setStyleSheet(WMP_QSS)
+        widget.setStyleSheet(stylesheet)
         widget.deleteLater()
     finally:
         QtCore.qInstallMessageHandler(original)
@@ -45,7 +52,7 @@ _HEX_COLOR_RE = re.compile(r"^[0-9a-fA-F]{3}(?:[0-9a-fA-F]{3})?$")
 
 def _qss_object_name_selectors() -> set[str]:
     """Extract every #objectName referenced in WMP_QSS, excluding hex colors."""
-    raw = re.findall(r"#([A-Za-z_][A-Za-z0-9_]*)", WMP_QSS)
+    raw = re.findall(r"#([A-Za-z_][A-Za-z0-9_]*)", WMP_QSS + MACOS_QSS)
     return {name for name in raw if not _HEX_COLOR_RE.match(name)}
 
 

@@ -9,6 +9,8 @@ Aesthetic notes:
 
 from __future__ import annotations
 
+import sys
+
 WMP_QSS = r"""
 * { color: #eef7ff; font-family: "Segoe UI", -apple-system, "SF Pro Text", "Helvetica Neue", "Tahoma", sans-serif; }
 
@@ -84,6 +86,10 @@ QToolButton#navToolBtn:pressed {
     color: #72f4ff;
     background: rgba(107,231,255,0.18);
     border-left: 1px solid #1c2430;
+}
+QToolButton#navToolBtn::menu-indicator {
+    width: 0px;
+    height: 0px;
 }
 
 /* Sidebar & lists */
@@ -591,6 +597,20 @@ QLabel#osdLabel {
 }
 """
 
+MACOS_QSS = r"""
+/* macOS renders the text-only header tool buttons smaller than Windows. */
+QWidget#headerBar {
+    min-height: 46px;
+}
+QToolButton#navToolBtn {
+    font-size: 10pt;
+    font-weight: 700;
+    padding: 8px 12px;
+    min-width: 0;
+    min-height: 42px;
+}
+"""
+
 
 def apply_app_styles(widget=None) -> None:
     """Apply the central stylesheet to the application when possible.
@@ -617,4 +637,5 @@ def apply_app_styles(widget=None) -> None:
     app = QApplication.instance()
     target = app if app is not None else widget
     if target is not None:
-        target.setStyleSheet(WMP_QSS + arrow_rules)
+        platform_rules = MACOS_QSS if sys.platform == "darwin" else ""
+        target.setStyleSheet(WMP_QSS + platform_rules + arrow_rules)
