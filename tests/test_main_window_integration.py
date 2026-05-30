@@ -171,6 +171,64 @@ def test_failed_auto_update_records_retry_timestamp(main_window, monkeypatch):
     assert saves == [True]
 
 
+def test_manual_update_check_ignores_click_while_thread_cleanup_pending(main_window, monkeypatch):
+    from lyon.core import updater as updater_mod
+    from lyon.ui import main_window as main_window_mod
+
+    class PendingThread:
+        def isRunning(self) -> bool:
+            return True
+
+    class FakeSignal:
+        def connect(self, _slot):
+            pass
+
+    class FakeThread:
+        created = False
+
+        def __init__(self) -> None:
+            FakeThread.created = True
+            self.started = FakeSignal()
+            self.finished = FakeSignal()
+
+        def start(self) -> None:
+            pass
+
+        def deleteLater(self) -> None:
+            pass
+
+    class FakeWorker:
+        def __init__(self, *_args, **_kwargs) -> None:
+            self.finished = FakeSignal()
+            self.failed = FakeSignal()
+
+        def moveToThread(self, _thread) -> None:
+            pass
+
+        def run(self) -> None:
+            pass
+
+        def deleteLater(self) -> None:
+            pass
+
+    toasts: list[tuple[str, str]] = []
+    main_window._update_thread = PendingThread()
+    main_window._update_worker = None
+    main_window.settings.update_appcast_url = "https://example.test/appcast.xml"
+    monkeypatch.setattr(main_window_mod, "QThread", FakeThread)
+    monkeypatch.setattr(updater_mod, "UpdateCheckWorker", FakeWorker)
+    monkeypatch.setattr(
+        main_window,
+        "show_toast",
+        lambda message, level="info", **_kwargs: toasts.append((message, level)),
+    )
+
+    main_window._start_update_check(manual=True)
+
+    assert FakeThread.created is False
+    assert toasts == [("An update check is already running.", "info")]
+
+
 def test_settings_dlna_bind_address_change_restarts_running_server(main_window, monkeypatch):
     restarts: list[bool] = []
     main_window.settings.dlna_enabled = True

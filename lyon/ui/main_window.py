@@ -1691,10 +1691,16 @@ class MainWindow(QMainWindow):
         """Help → Check for Updates… entry point. Surfaces a result toast even if up-to-date."""
         self._start_update_check(manual=True)
 
+    def _update_check_in_progress(self) -> bool:
+        thread = self._update_thread
+        if thread is not None and thread.isRunning():
+            return True
+        return self._update_worker is not None
+
     def _start_update_check(self, *, manual: bool) -> None:
         from ..core.updater import UpdateCheckWorker
 
-        if self._update_worker is not None:
+        if self._update_check_in_progress():
             if manual:
                 self.show_toast("An update check is already running.", level="info")
             return
@@ -1712,8 +1718,8 @@ class MainWindow(QMainWindow):
         worker.failed.connect(worker.deleteLater)
         worker.finished.connect(self._on_update_check_finished)
         worker.failed.connect(self._on_update_check_failed)
-        worker.finished.connect(self._finish_update_thread)
-        worker.failed.connect(self._finish_update_thread)
+        worker.finished.connect(lambda *_args, thread=thread: self._finish_update_thread(thread))
+        worker.failed.connect(lambda *_args, thread=thread: self._finish_update_thread(thread))
         self._update_thread = thread
         self._update_worker = worker
         self._update_manual_request = manual
@@ -1722,7 +1728,6 @@ class MainWindow(QMainWindow):
     def _on_update_check_finished(self, info: object) -> None:
         from ..core.updater import UpdateInfo
 
-        self._update_worker = None
         manual = self._update_manual_request
         self._update_manual_request = False
 
@@ -1753,7 +1758,6 @@ class MainWindow(QMainWindow):
         self._show_update_dialog(info)
 
     def _on_update_check_failed(self, message: str) -> None:
-        self._update_worker = None
         manual = self._update_manual_request
         self._update_manual_request = False
         import time
@@ -1768,13 +1772,17 @@ class MainWindow(QMainWindow):
                 level="warning",
             )
 
-    def _finish_update_thread(self, *_args: object) -> None:
-        thread = self._update_thread
+    def _finish_update_thread(self, thread: QThread | None = None) -> None:
+        if thread is None:
+            thread = self._update_thread
         if thread is None:
             return
-        self._update_thread = None
         thread.quit()
-        thread.wait(2000)
+        if not thread.wait(2000):
+            return
+        if self._update_thread is thread:
+            self._update_thread = None
+            self._update_worker = None
 
     def _show_update_dialog(self, info: object) -> None:
         from .update_dialog import UpdateAvailableDialog
