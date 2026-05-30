@@ -656,7 +656,7 @@ class SettingsDialog(QDialog):
                 parent.settings.update_appcast_url = self.result_settings.update_appcast_url
             except Exception:  # noqa: BLE001
                 pass
-            check()
+            check(toast_host=self)
         else:
             QMessageBox.information(
                 self,

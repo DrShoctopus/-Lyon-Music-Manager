@@ -184,6 +184,7 @@ class MainWindow(QMainWindow):
         self._update_worker = None  # type: ignore[assignment]
         self._update_dialog = None  # type: ignore[assignment]
         self._update_manual_request: bool = False
+        self._update_toast_host: QWidget | None = None
         self._youtube_view = None
         self._disc_view = None
         self._ripper_view = None
@@ -761,6 +762,7 @@ class MainWindow(QMainWindow):
         level: str = "info",
         duration_ms: int = 2500,
         action: tuple[str, Callable[[], None]] | None = None,
+        host: QWidget | None = None,
     ) -> Toast:
         """Display a transient toast notification above the transport bar.
 
@@ -772,12 +774,13 @@ class MainWindow(QMainWindow):
             self._current_toast = None
 
         action_label = action[0] if action else None
+        toast_host = host or self
         toast = Toast(
             message,
             level=level,
             duration_ms=duration_ms,
             action_label=action_label,
-            parent=self,
+            parent=toast_host,
         )
         if action and toast.action_button is not None:
             cb = action[1]
@@ -791,7 +794,8 @@ class MainWindow(QMainWindow):
             toast.action_button.clicked.connect(_run_action)
         toast.closed.connect(lambda: self._on_toast_closed(toast))
         self._current_toast = toast
-        toast.show_at(self, bottom_margin=self._toast_bottom_margin())
+        bottom_margin = self._toast_bottom_margin() if toast_host is self else 24
+        toast.show_at(toast_host, bottom_margin=bottom_margin)
         return toast
 
     def _on_toast_closed(self, toast: Toast) -> None:
@@ -1687,9 +1691,9 @@ class MainWindow(QMainWindow):
             return
         self._start_update_check(manual=False)
 
-    def check_for_updates_now(self) -> None:
+    def check_for_updates_now(self, *, toast_host: QWidget | None = None) -> None:
         """Help → Check for Updates… entry point. Surfaces a result toast even if up-to-date."""
-        self._start_update_check(manual=True)
+        self._start_update_check(manual=True, toast_host=toast_host)
 
     def _update_check_in_progress(self) -> bool:
         thread = self._update_thread
@@ -1697,17 +1701,53 @@ class MainWindow(QMainWindow):
             return True
         return self._update_worker is not None
 
-    def _start_update_check(self, *, manual: bool) -> None:
+    def _update_notification_host(self, host: QWidget | None) -> QWidget | None:
+        if host is None:
+            return None
+        try:
+            if host.isVisible():
+                return host
+        except RuntimeError:
+            return None
+        return None
+
+    def _show_update_toast(
+        self,
+        message: str,
+        *,
+        level: str,
+        toast_host: QWidget | None,
+    ) -> None:
+        self.show_toast(
+            message,
+            level=level,
+            host=self._update_notification_host(toast_host),
+        )
+
+    def _start_update_check(
+        self,
+        *,
+        manual: bool,
+        toast_host: QWidget | None = None,
+    ) -> None:
         from ..core.updater import UpdateCheckWorker
 
         if self._update_check_in_progress():
             if manual:
-                self.show_toast("An update check is already running.", level="info")
+                self._show_update_toast(
+                    "An update check is already running.",
+                    level="info",
+                    toast_host=toast_host,
+                )
             return
         url = self.settings.update_appcast_url
         if not url:
             if manual:
-                self.show_toast("No update server is configured.", level="warning")
+                self._show_update_toast(
+                    "No update server is configured.",
+                    level="warning",
+                    toast_host=toast_host,
+                )
             return
         thread = QThread()
         worker = UpdateCheckWorker(url, __version__)
@@ -1723,6 +1763,7 @@ class MainWindow(QMainWindow):
         self._update_thread = thread
         self._update_worker = worker
         self._update_manual_request = manual
+        self._update_toast_host = toast_host
         thread.start()
 
     def _on_update_check_finished(self, info: object) -> None:
@@ -1730,6 +1771,8 @@ class MainWindow(QMainWindow):
 
         manual = self._update_manual_request
         self._update_manual_request = False
+        toast_host = self._update_toast_host
+        self._update_toast_host = None
 
         import time
         self.settings.last_update_check_ts = int(time.time())
@@ -1743,9 +1786,10 @@ class MainWindow(QMainWindow):
 
         if info is None or not isinstance(info, UpdateInfo):
             if manual:
-                self.show_toast(
+                self._show_update_toast(
                     f"You're running the latest version ({__version__}).",
                     level="success",
+                    toast_host=toast_host,
                 )
             return
         # Don't auto-surface an explicitly skipped version unless this is a manual check.
@@ -1755,11 +1799,16 @@ class MainWindow(QMainWindow):
             and self.settings.skipped_update_version == info.version
         ):
             return
-        self._show_update_dialog(info)
+        self._show_update_dialog(
+            info,
+            parent=self._update_notification_host(toast_host),
+        )
 
     def _on_update_check_failed(self, message: str) -> None:
         manual = self._update_manual_request
         self._update_manual_request = False
+        toast_host = self._update_toast_host
+        self._update_toast_host = None
         import time
         self.settings.last_update_failure_ts = int(time.time())
         try:
@@ -1767,9 +1816,10 @@ class MainWindow(QMainWindow):
         except Exception:  # noqa: BLE001 — must never crash on save failure
             pass
         if manual:
-            self.show_toast(
+            self._show_update_toast(
                 f"Could not check for updates: {message}",
                 level="warning",
+                toast_host=toast_host,
             )
 
     def _finish_update_thread(self, thread: QThread | None = None) -> None:
@@ -1784,14 +1834,14 @@ class MainWindow(QMainWindow):
             self._update_thread = None
             self._update_worker = None
 
-    def _show_update_dialog(self, info: object) -> None:
+    def _show_update_dialog(self, info: object, *, parent: QWidget | None = None) -> None:
         from .update_dialog import UpdateAvailableDialog
 
         if self._update_dialog is not None and self._update_dialog.isVisible():
             self._update_dialog.raise_()
             self._update_dialog.activateWindow()
             return
-        dlg = UpdateAvailableDialog(info, self)  # type: ignore[arg-type]
+        dlg = UpdateAvailableDialog(info, parent or self)  # type: ignore[arg-type]
         dlg.setAttribute(Qt.WA_DeleteOnClose)
         dlg.version_skipped.connect(self._on_update_skipped)
         dlg.destroyed.connect(lambda *_: setattr(self, "_update_dialog", None))

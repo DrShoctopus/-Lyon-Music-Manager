@@ -734,6 +734,30 @@ def test_show_toast_creates_and_replaces_previous(main_window, qapp):
     assert t1._closing is True
 
 
+def test_show_toast_can_render_on_supplied_host(main_window):
+    host = QtWidgets.QDialog(main_window)
+    host.resize(360, 220)
+    host.show()
+
+    toast = main_window.show_toast("From settings", duration_ms=0, host=host)
+
+    assert toast.parentWidget() is host
+
+
+def test_manual_update_result_toast_uses_requested_host(main_window, monkeypatch):
+    host = QtWidgets.QDialog(main_window)
+    host.resize(360, 220)
+    host.show()
+    main_window._update_manual_request = True
+    main_window._update_toast_host = host
+    monkeypatch.setattr(main_window.settings, "save", lambda: None)
+
+    main_window._on_update_check_failed("offline")
+
+    assert main_window._current_toast is not None
+    assert main_window._current_toast.parentWidget() is host
+
+
 def test_show_toast_with_action_button(main_window):
     captured = []
     main_window.show_toast(

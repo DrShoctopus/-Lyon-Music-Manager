@@ -220,9 +220,11 @@ def test_settings_dialog_check_now_rejects_non_https_update_feed_url(app):
             super().__init__()
             self.settings = Settings(update_appcast_url=default_url)
             self.checked = False
+            self.toast_host = None
 
-        def check_for_updates_now(self):
+        def check_for_updates_now(self, *, toast_host=None):
             self.checked = True
+            self.toast_host = toast_host
 
     parent = Parent()
     dialog = SettingsDialog(Settings(update_appcast_url=default_url), parent)
@@ -231,6 +233,7 @@ def test_settings_dialog_check_now_rejects_non_https_update_feed_url(app):
     dialog._on_check_for_updates_clicked()
 
     assert parent.checked is True
+    assert parent.toast_host is dialog
     assert parent.settings.update_appcast_url == default_url
 
 
