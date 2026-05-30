@@ -41,3 +41,11 @@ def test_macos_tag_release_reads_windows_asset_from_draft_aware_release_listing(
     assert 'gh api "repos/${repo}/releases?per_page=100"' in workflow
     assert "release.get(\"tag_name\") != tag" in workflow
     assert "releases/tags/${tag}" not in workflow
+
+
+def test_macos_artifact_name_does_not_use_branch_ref_name():
+    workflow = (REPO_ROOT / ".github" / "workflows" / "macos-build.yml").read_text(encoding="utf-8")
+
+    assert "SeaLyonMediaManager-${{ github.ref_name }}-macos" not in workflow
+    assert "SeaLyonMediaManager-${{ steps.appver.outputs.version }}-macos" in workflow
+    assert "version=$ver" in workflow

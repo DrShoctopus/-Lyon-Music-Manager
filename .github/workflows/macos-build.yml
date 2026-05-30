@@ -148,15 +148,17 @@ jobs:
           scripts/build-macos-dmg.sh
 
       - name: Compute SHA256SUMS
+        id: appver
         run: |
           ver=$(python -c "from lyon import __version__; print(__version__)")
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
           shasum -a 256 "dist/SeaLyonMediaManager-${ver}-arm64.dmg" \
               > "dist/SeaLyonMediaManager-${ver}-macos-SHA256SUMS.txt"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SeaLyonMediaManager-${{ github.ref_name }}-macos
+          name: SeaLyonMediaManager-${{ steps.appver.outputs.version }}-macos
           path: |
             dist/*.dmg
             dist/*-macos-SHA256SUMS.txt
