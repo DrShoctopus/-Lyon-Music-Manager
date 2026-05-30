@@ -8,7 +8,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import pytest
-
 from lyon.core import updater
 from lyon.core.updater import (
     UpdateInfo,
@@ -18,7 +17,6 @@ from lyon.core.updater import (
     check_for_update,
     parse_appcast,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -277,6 +275,15 @@ def test_settings_update_appcast_url_has_https_default():
     assert "appcast" in url
 
 
+def test_settings_rejects_non_https_update_appcast_url():
+    from lyon.core.settings import Settings
+
+    default_url = Settings().update_appcast_url
+
+    assert Settings(update_appcast_url="http://example.test/appcast.xml").update_appcast_url == default_url
+    assert Settings(update_appcast_url="file:///tmp/appcast.xml").update_appcast_url == default_url
+
+
 def test_skipped_update_version_roundtrips(monkeypatch, tmp_path):
     from lyon.core import settings as settings_mod
     monkeypatch.setattr(settings_mod, "app_data_dir", lambda: tmp_path)
@@ -284,3 +291,85 @@ def test_skipped_update_version_roundtrips(monkeypatch, tmp_path):
     s.save()
     loaded = settings_mod.Settings.load()
     assert loaded.skipped_update_version == "1.0.1"
+
+
+def test_update_dialog_does_not_open_unsafe_download_url(qapp, monkeypatch):
+    pytest.importorskip("PySide6.QtWidgets", exc_type=ImportError)
+    from lyon.ui import update_dialog
+
+    opened: list[str] = []
+    monkeypatch.setattr(
+        update_dialog.QDesktopServices,
+        "openUrl",
+        lambda url: opened.append(url.toString()) or True,
+    )
+    dialog = update_dialog.UpdateAvailableDialog(
+        UpdateInfo(
+            version="1.0.1",
+            title="Version 1.0.1",
+            release_notes_html="",
+            release_url="",
+            download_url="file:///tmp/not-an-installer.exe",
+        )
+    )
+
+    dialog._on_download()
+
+    assert opened == []
+
+
+def test_update_dialog_rejects_cleartext_download_url(qapp, monkeypatch):
+    pytest.importorskip("PySide6.QtWidgets", exc_type=ImportError)
+    from lyon.ui import update_dialog
+
+    opened: list[str] = []
+    monkeypatch.setattr(
+        update_dialog.QDesktopServices,
+        "openUrl",
+        lambda url: opened.append(url.toString()) or True,
+    )
+    dialog = update_dialog.UpdateAvailableDialog(
+        UpdateInfo(
+            version="1.0.1",
+            title="Version 1.0.1",
+            release_notes_html="",
+            release_url="",
+            download_url="http://example.test/installer.exe",
+        )
+    )
+
+    dialog._on_download()
+
+    assert opened == []
+
+
+def test_update_dialog_filters_release_note_links(qapp, monkeypatch):
+    pytest.importorskip("PySide6.QtWidgets", exc_type=ImportError)
+    from lyon.ui import update_dialog
+    from PySide6.QtCore import QUrl
+    from PySide6.QtWidgets import QTextBrowser
+
+    opened: list[str] = []
+    monkeypatch.setattr(
+        update_dialog.QDesktopServices,
+        "openUrl",
+        lambda url: opened.append(url.toString()) or True,
+    )
+    dialog = update_dialog.UpdateAvailableDialog(
+        UpdateInfo(
+            version="1.0.1",
+            title="Version 1.0.1",
+            release_notes_html='<a href="file:///tmp/nope">bad</a>',
+            release_url="",
+            download_url="",
+        )
+    )
+    notes = dialog.findChild(QTextBrowser)
+    assert notes is not None
+    assert notes.openExternalLinks() is False
+
+    notes.anchorClicked.emit(QUrl("file:///tmp/nope"))
+    notes.anchorClicked.emit(QUrl("http://example.test/nope"))
+    notes.anchorClicked.emit(QUrl("https://example.test/release"))
+
+    assert opened == ["https://example.test/release"]

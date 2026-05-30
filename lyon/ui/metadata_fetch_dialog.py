@@ -1,24 +1,41 @@
 """MusicBrainz metadata fetch dialog for library albums (P7)."""
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
-    QCheckBox, QDialog, QDialogButtonBox, QFrame, QHBoxLayout, QLabel,
-    QListWidget, QListWidgetItem, QMessageBox, QScrollArea, QSizePolicy,
-    QStackedWidget, QVBoxLayout, QWidget,
+    QCheckBox,
+    QDialog,
+    QDialogButtonBox,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QListWidget,
+    QListWidgetItem,
+    QMessageBox,
+    QScrollArea,
+    QSizePolicy,
+    QStackedWidget,
+    QVBoxLayout,
+    QWidget,
 )
 
 from ..core.library import Library, Track
 from ..core.metadata import (
-    AlbumInfo, TrackInfo,
-    download_cover_art, fetch_musicbrainz_release,
-    lookup_musicbrainz_disc, search_musicbrainz_releases,
+    AlbumInfo,
+    TrackInfo,
+    download_cover_art,
+    fetch_musicbrainz_release,
+    lookup_musicbrainz_disc,
+    search_musicbrainz_releases,
 )
 from ..core.tagger import write_tags
+
+LOG = logging.getLogger(__name__)
 
 # Stacked page indices
 _PAGE_LOADING = 0
@@ -80,8 +97,8 @@ class _SearchWorker(QThread):
                 if info:
                     self.disc_found.emit(info)
                     return
-            except Exception:
-                pass
+            except Exception as exc:
+                LOG.debug("MusicBrainz disc lookup failed for %s: %s", self._disc_id, exc)
 
         if self.isInterruptionRequested():
             return
@@ -146,8 +163,8 @@ class _DetailWorker(QThread):
                     return
                 if art:
                     self.artwork_ready.emit(art)
-            except Exception:
-                pass
+            except Exception as exc:
+                LOG.debug("Cover art download failed for %s: %s", self._mbid, exc)
 
 
 class _PickerDialog(QDialog):
@@ -672,7 +689,8 @@ class MetadataFetchDialog(QDialog):
             )
             try:
                 tags_written = write_tags(Path(tr.path), album_info, tr_info, artwork_bytes)
-            except Exception:
+            except Exception as exc:
+                LOG.debug("Tag write failed for %s: %s", tr.path, exc)
                 tags_written = False
             if not tags_written:
                 failed_tags.append(tr.title or Path(tr.path).name)
@@ -680,7 +698,8 @@ class MetadataFetchDialog(QDialog):
             if db_fields:
                 try:
                     self._library.update_track(tr.id, db_fields)
-                except Exception:
+                except Exception as exc:
+                    LOG.debug("Library metadata update failed for track %s: %s", tr.id, exc)
                     failed_db_updates.append(tr.title or Path(tr.path).name)
 
         if failed_tags or failed_db_updates:

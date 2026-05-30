@@ -21,12 +21,25 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QTimer, Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
-    QApplication, QComboBox, QFileDialog, QFrame, QHBoxLayout, QInputDialog,
-    QLabel, QLineEdit, QMessageBox, QPushButton, QScrollArea, QSizePolicy,
-    QSlider, QStackedWidget, QVBoxLayout, QWidget,
+    QApplication,
+    QComboBox,
+    QFileDialog,
+    QFrame,
+    QHBoxLayout,
+    QInputDialog,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QPushButton,
+    QScrollArea,
+    QSizePolicy,
+    QSlider,
+    QStackedWidget,
+    QVBoxLayout,
+    QWidget,
 )
 
 from ..core.playback_backend import _configure_vlc_runtime_path
@@ -916,19 +929,22 @@ class VideoPlayerView(QWidget):
     def _safe_player_time(self) -> int:
         try:
             return max(0, int(self._player.get_time()))
-        except Exception:
+        except Exception as exc:
+            LOG.debug("Could not read video playback time: %s", exc)
             return 0
 
     def _safe_audio_track(self) -> int | None:
         try:
             return int(self._player.audio_get_track())
-        except Exception:
+        except Exception as exc:
+            LOG.debug("Could not read current audio track: %s", exc)
             return None
 
     def _safe_subtitle_track(self) -> int | None:
         try:
             return int(self._player.video_get_spu())
-        except Exception:
+        except Exception as exc:
+            LOG.debug("Could not read current subtitle track: %s", exc)
             return None
 
     def _restore_audio_output_state(self) -> None:
@@ -1026,8 +1042,8 @@ class VideoPlayerView(QWidget):
             if w and h:
                 base = self._info_lbl.text().split("  [")[0]
                 self._info_lbl.setText(f"{base}  [{w}×{h}]")
-        except Exception:
-            pass
+        except Exception as exc:
+            LOG.debug("Could not update video resolution info: %s", exc)
 
     # ---------------------------------------------------------------- file open
 

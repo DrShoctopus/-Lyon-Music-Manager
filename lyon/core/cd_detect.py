@@ -10,13 +10,13 @@ from __future__ import annotations
 
 import ctypes
 import ctypes.util
-from ctypes import wintypes
 import importlib
 import importlib.util
 import logging
 import os
 import string
 import sys
+from ctypes import wintypes
 from dataclasses import dataclass, field
 from typing import Any
 

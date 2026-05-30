@@ -10,7 +10,7 @@ import sys
 import threading
 from typing import Optional
 
-from PySide6.QtCore import QObject, Signal, QTimer
+from PySide6.QtCore import QObject, QTimer, Signal
 
 
 class OpticalDriveWatcher(QObject):
@@ -69,7 +69,7 @@ class OpticalDriveWatcher(QObject):
         drives = []
         audio: dict[str, bool] = {}
         try:
-            from .disc_macos import list_optical_drives, has_audio_disc
+            from .disc_macos import has_audio_disc, list_optical_drives
         except ImportError:
             self._poll_finished.emit(drives, audio)
             return

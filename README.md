@@ -6,15 +6,17 @@
 
 > Sea Lyon Media Manager is a desktop media manager for local music,
 > podcasts, internet radio, audio CD ripping, video playback, YouTube search
-> & download, and library organization. Runs on **Windows 10 / 11 (64-bit)**
-> and **macOS 11+ (Apple Silicon)**.
+> & download, and library organization. The v1.0 release ships on
+> **Windows 10 / 11 (64-bit)**; **macOS Apple Silicon** remains conditional
+> until the DMG and oldest-advertised-OS smoke gates pass.
 
 Sea Lyon is written in Python with PySide6 and uses SQLite, Mutagen,
 libVLC, ffmpeg, yt-dlp, CUETools DB, MusicBrainz, TheAudioDB, Cover Art
 Archive, LRCLIB, and libdiscid.
 
-**Current version:** `0.9.0-rc1` (LMM-DEV) — see [`lyon/__init__.py`](lyon/__init__.py).
-**Targeted public release:** `1.0.0`.
+**Current version:** `1.0.0` — see [`lyon/__init__.py`](lyon/__init__.py).
+**Release status:** Windows x64 is the mandatory 1.0 package; macOS
+Apple Silicon ships in 1.0 only after CI and physical smoke testing pass.
 
 ## Support
 
@@ -31,7 +33,7 @@ to Ko-fi itself; clicking the link opens your default browser.
 
 Public installer downloads will appear on the
 [GitHub Releases page](https://github.com/DrShoctopus/Sea-Lyon-Media-Manager/releases)
-when v1.0 ships.
+when v1.0 is published.
 
 ### Windows
 
@@ -47,12 +49,21 @@ proceed, and verify the SHA-256 of the installer matches the shipped
 
 ### macOS (Apple Silicon)
 
+macOS Apple Silicon support is planned for the 1.0 release only if the
+DMG is produced by CI and passes a physical smoke test on the oldest
+macOS version advertised for the release before the GitHub Release is
+published. If that gate fails, the 1.0 public release will be
+Windows-only and macOS will move to a post-1.0 milestone.
+
 - `SeaLyonMediaManager-{version}-arm64.dmg` — signed and notarized when
   Apple Developer ID secrets are configured; otherwise unsigned.
 - `SeaLyonMediaManager-{version}-macos-SHA256SUMS.txt` — SHA-256 manifest.
 
-Requires **macOS 11 Big Sur or later** on an Apple Silicon (M1 / M2 / M3 / M4)
-Mac. Drag **Sea Lyon Media Manager.app** from the DMG to `/Applications`.
+The planned support floor is **macOS 11 Big Sur or later** on an Apple
+Silicon (M1 / M2 / M3 / M4) Mac. If the 1.0 smoke pass only covers a
+newer macOS version, narrow the public release wording to the tested OS
+range before publishing. Drag **Sea Lyon Media Manager.app** from the DMG
+to `/Applications`.
 
 ### Auto-update
 
@@ -66,13 +77,16 @@ for Updates…**.
 ## Status
 
 `LMM-DEV` is the active development branch tracking the v1.0 release.
-The repository is feature-complete for v1.0; release-engineering work
-(installer polish, auto-update wiring, EULA + privacy + license
-attribution) is documented in [`docs/BUILD.md`](docs/BUILD.md) and
+The repository is feature-complete for v1.0; release engineering,
+smoke testing, and publish steps are documented in
+[`docs/BUILD.md`](docs/BUILD.md), [`docs/RELEASING.md`](docs/RELEASING.md),
+[`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md), and
 [`CHANGELOG.md`](CHANGELOG.md).
 
-**Packaged releases ship for Windows 10 / 11 (x64) and macOS 11+
-(Apple Silicon).** Linux source-only development is best-effort.
+**Packaged 1.0 release:** Windows 10 / 11 (x64) ships. macOS Apple
+Silicon ships only if the DMG passes the documented 1.0 gate on the
+oldest macOS version advertised for the release.
+Linux source-only development is best-effort.
 
 ## Feature Overview
 
@@ -396,7 +410,9 @@ lyon/core/vlc_equalizer.py           Shared libVLC equalizer controller
 lyon/core/yt_downloader.py           yt-dlp download worker
 lyon/ui/                             Main window, views, dialogs, widgets, theme
 docs/brand/                          Checked-in brand assets
-docs/BUILD.md                        Windows build guide
+docs/BUILD.md                        Windows/macOS build guide
+docs/RELEASING.md                    Release procedure
+docs/RELEASE_CHECKLIST.md            1.0 manual smoke-test checklist
 docs/reviews/                        Historical engineering review notes
 build/lyon.spec                      PyInstaller spec (Windows EXE + macOS .app)
 build/lyon.iss                       Inno Setup script (Windows)
@@ -413,7 +429,7 @@ scripts/generate-appcast.py          Generate/update multi-OS appcast.xml
 scripts/README.md                    Build-script notes
 .github/workflows/windows-build.yml Windows CI/release pipeline
 .github/workflows/macos-build.yml   macOS Apple Silicon CI/release pipeline
-tests/                               Pytest suite (790+ tests)
+tests/                               Pytest suite (830+ tests)
 requirements.txt                     Hashed Python runtime dependency lock
 requirements.in                      Runtime deps input for uv pip compile
 requirements-build.txt               Hashed build/test dependency lock

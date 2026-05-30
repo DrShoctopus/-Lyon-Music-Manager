@@ -7,7 +7,6 @@ from PySide6.QtCore import QThread, Signal
 
 from .ffmpeg import find_ffmpeg_binary
 
-
 _YT_QUALITY_HEIGHT = {"1080p": 1080, "2k": 1440, "4k": 2160}
 
 

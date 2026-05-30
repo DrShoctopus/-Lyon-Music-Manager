@@ -14,7 +14,6 @@ import sys
 from pathlib import Path
 
 import pytest
-
 from lyon import app as app_module
 from lyon.core import diagnostics, settings
 

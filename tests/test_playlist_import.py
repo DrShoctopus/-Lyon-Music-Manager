@@ -2,7 +2,6 @@
 from pathlib import Path
 
 import pytest
-
 from lyon.core.library import Library
 from lyon.core.playlist_import import ImportResult, import_playlist, parse_m3u, parse_pls
 
@@ -137,7 +136,7 @@ def test_import_names_playlist_after_file_stem(tmp_path):
     m3u = tmp_path / "Summer Vibes.m3u"
     m3u.write_text("#EXTM3U\n", encoding="utf-8")
 
-    result = import_playlist(library, m3u)
+    import_playlist(library, m3u)
     playlists = library.all_playlists()
     assert any(p.name == "Summer Vibes" for p in playlists)
 

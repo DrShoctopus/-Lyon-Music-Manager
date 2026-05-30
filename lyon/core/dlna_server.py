@@ -639,7 +639,6 @@ class DlnaServer:
         if file_info is None:
             return None
         path, stat = file_info
-        mime = _mime_type(path)
         parent = parent_id or ("video:all" if track.media_type == "video" else "audio:all")
         upnp_class = "object.item.videoItem" if track.media_type == "video" else "object.item.audioItem.musicTrack"
         url = f"{self.base_url}/media/{track.id}/{quote(path.name)}"

@@ -12,11 +12,11 @@ QtWidgets = pytest.importorskip("PySide6.QtWidgets", exc_type=ImportError)
 from lyon.core.library import Track
 from lyon.ui import library_view as library_view_module
 from lyon.ui.library_view import (
-    LibraryView,
     _ALL_ALBUMS_KEY,
     _COL_TITLE,
     _NUM_COLS,
     _PLAYING_GLYPH,
+    LibraryView,
 )
 
 

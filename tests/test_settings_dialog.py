@@ -13,8 +13,8 @@ if not hasattr(QtWidgets, "QCheckBox"):
     pytest.skip("PySide6 QtWidgets is incomplete in this environment", allow_module_level=True)
 
 from lyon.core.settings import Settings
-from lyon.ui.about import COPYRIGHT_NOTICE
 from lyon.ui import settings_dialog as settings_dialog_module
+from lyon.ui.about import COPYRIGHT_NOTICE
 from lyon.ui.settings_dialog import SettingsDialog
 from lyon.ui.styles import WMP_QSS
 
@@ -200,6 +200,38 @@ def test_settings_dialog_persists_dlna_options(app):
     assert dialog.result_settings.dlna_port == 0
     assert dialog.result_settings.dlna_friendly_name == "Living Room Library"
     assert dialog.result_settings.dlna_bind_address == "127.0.0.1"
+
+
+def test_settings_dialog_rejects_non_https_update_feed_url(app):
+    default_url = Settings().update_appcast_url
+    dialog = SettingsDialog(Settings(update_appcast_url=default_url), None)
+
+    dialog.update_appcast_url.setText("http://example.test/appcast.xml")
+    dialog._accept()
+
+    assert dialog.result_settings.update_appcast_url == default_url
+
+
+def test_settings_dialog_check_now_rejects_non_https_update_feed_url(app):
+    default_url = Settings().update_appcast_url
+
+    class Parent(QtWidgets.QWidget):
+        def __init__(self):
+            super().__init__()
+            self.settings = Settings(update_appcast_url=default_url)
+            self.checked = False
+
+        def check_for_updates_now(self):
+            self.checked = True
+
+    parent = Parent()
+    dialog = SettingsDialog(Settings(update_appcast_url=default_url), parent)
+
+    dialog.update_appcast_url.setText("http://example.test/appcast.xml")
+    dialog._on_check_for_updates_clicked()
+
+    assert parent.checked is True
+    assert parent.settings.update_appcast_url == default_url
 
 
 def test_settings_dialog_connect_lastfm_starts_auth(app):

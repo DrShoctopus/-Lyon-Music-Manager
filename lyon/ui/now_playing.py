@@ -2,20 +2,31 @@
 from __future__ import annotations
 
 import bisect
-from decimal import Decimal, InvalidOperation
 import json
+import logging
 import re
 import ssl
 import threading
 import urllib.parse
 import urllib.request
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
+
 from PySide6.QtCore import QEasingCurve, QPropertyAnimation, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPixmap
 from PySide6.QtWidgets import (
-    QAbstractItemView, QFrame, QHBoxLayout, QLabel, QListWidget,
-    QListWidgetItem, QPushButton, QScrollArea, QSizePolicy,
-    QStackedWidget, QVBoxLayout, QWidget,
+    QAbstractItemView,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QListWidget,
+    QListWidgetItem,
+    QPushButton,
+    QScrollArea,
+    QSizePolicy,
+    QStackedWidget,
+    QVBoxLayout,
+    QWidget,
 )
 
 from ..core import metadata
@@ -26,6 +37,7 @@ from .artist_panel import ArtistPanel
 from .widgets import StarRatingWidget, cover_pixmap, format_duration, format_ms
 
 _PAGE_MARGIN = 8
+LOG = logging.getLogger(__name__)
 
 # ---- LRC parsing -------------------------------------------------------
 
@@ -68,8 +80,8 @@ def _read_embedded_lyrics(path: str) -> str | None:
         for key in tags.keys():
             if key.startswith("USLT"):
                 return tags[key].text
-    except Exception:
-        pass
+    except Exception as exc:
+        LOG.debug("Could not read ID3 lyrics from %s: %s", path, exc)
     try:
         from mutagen import File as MutagenFile
         f = MutagenFile(path, easy=False)
@@ -80,8 +92,8 @@ def _read_embedded_lyrics(path: str) -> str | None:
             if v:
                 raw = v[0] if isinstance(v, list) else str(v)
                 return str(raw)
-    except Exception:
-        pass
+    except Exception as exc:
+        LOG.debug("Could not read container lyrics from %s: %s", path, exc)
     return None
 
 
@@ -122,7 +134,8 @@ def _fetch_lrclib(artist: str, title: str, album: str, duration_s: float) -> tup
                 return "", ""
             data = json.loads(resp.read().decode())
             return data.get("syncedLyrics") or "", data.get("plainLyrics") or ""
-    except Exception:
+    except Exception as exc:
+        LOG.debug("LRCLIB lookup failed for %s - %s: %s", artist, title, exc)
         return "", ""
 
 
@@ -194,7 +207,7 @@ class _LyricsPanel(QWidget):
         if synced:
             lines_text = [t for _, t in synced]
         elif plain:
-            lines_text = [l for l in plain.splitlines() if l.strip()] or [plain]
+            lines_text = [line for line in plain.splitlines() if line.strip()] or [plain]
         else:
             lines_text = []
 
@@ -328,8 +341,8 @@ class _InfoPanel(QWidget):
                     total_s = sum(int(t.duration) for t in album_tracks)
                     lines.append(f"Tracks: {len(album_tracks)}")
                     lines.append(f"Duration: {format_duration(total_s)}")
-            except Exception:
-                pass
+            except Exception as exc:
+                LOG.debug("Could not load album details for now playing: %s", exc)
         self._details.setText("\n".join(lines) if lines else "No info available.")
 
 
@@ -381,13 +394,16 @@ class NowPlayingView(QWidget):
 
         # ---- Track info + rating
         self.title = QLabel("Nothing playing")
-        f = self.title.font(); f.setPointSize(20); f.setBold(True)
+        f = self.title.font()
+        f.setPointSize(20)
+        f.setBold(True)
         self.title.setFont(f)
         self.title.setObjectName("nowPlayingHeroTitle")
         self.title.setWordWrap(True)
 
         self.artist = QLabel("")
-        f2 = self.artist.font(); f2.setPointSize(13)
+        f2 = self.artist.font()
+        f2.setPointSize(13)
         self.artist.setFont(f2)
         self.artist.setObjectName("nowPlayingHeroArtist")
 

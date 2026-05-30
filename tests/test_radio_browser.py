@@ -4,10 +4,7 @@ from __future__ import annotations
 import json
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from lyon.core.radio_browser import BrowseResult, RadioBrowserClient, _browse_result_from_json
-
 
 # ---------------------------------------------------------------------------
 # _browse_result_from_json

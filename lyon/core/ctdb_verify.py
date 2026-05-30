@@ -13,21 +13,20 @@ AccurateRip v1 CRC algorithm:
 """
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
-from collections import deque
 import queue
 import struct
 import subprocess
 import sys
 import threading
 import time
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Optional
 
 import defusedxml.ElementTree as ET
-from defusedxml.common import DefusedXmlException
-
 import requests
+from defusedxml.common import DefusedXmlException
 
 CTDB_LOOKUP_URL = "http://db.cuetools.net/lookup2.php"
 CTDB_TIMEOUT_SECONDS = 20

@@ -1,30 +1,41 @@
-# Building Sea Lyon Media Manager for Windows
+# Building Sea Lyon Media Manager
 
-**Supported platform:** Windows 10 and 11 (64-bit). The source runs on
-macOS / Linux for development, but only Windows is packaged.
+**1.0 release platforms:** Windows 10 and 11 (64-bit) is mandatory.
+macOS Apple Silicon is included only if the CI-built DMG and physical
+smoke test on the oldest advertised macOS version pass before
+publishing. Linux remains source-only and best-effort.
 
-**Toolchain:** Python 3.14 (64-bit) + PyInstaller + Inno Setup 6.
+**Toolchain:** Python 3.14, PyInstaller, Inno Setup 6 for Windows,
+create-dmg and optional Apple Developer ID signing/notarization for
+macOS.
 
-There are three ways to build:
+There are four ways to build:
 
-1. **CI** — push a tag (or trigger `workflow_dispatch` on
-   `.github/workflows/windows-build.yml`); GitHub Actions produces a
-   signed-ready installer, a portable zip, and a SHA-256 manifest as
-   release artifacts. This is the canonical path.
-2. **Local end-to-end** — run `scripts\build-windows.ps1` from the
+1. **CI** — trigger `workflow_dispatch` for the Windows and macOS
+   workflows, or push a `v*.*.*` tag. GitHub Actions produces release
+   artifacts and SHA-256 manifests. This is the canonical path.
+2. **Local Windows end-to-end** — run `scripts\build-windows.ps1` from the
    project root on a Windows machine with Python 3.14 and Inno Setup 6
    installed. Produces the same artifacts as CI.
-3. **Manual** — for incremental debugging only (no installer); covered
+3. **Local macOS helpers** — use the macOS scripts under `scripts/` to
+   stage vendor binaries, build the `.app`, and create a DMG while
+   debugging the CI flow.
+4. **Manual** — for incremental debugging only (no installer); covered
    under §4 below.
 
 ## 1. Prerequisites
 
-- **Python 3.14 (64-bit)** from python.org — tick "Add Python to PATH".
-- **Inno Setup 6** from <https://jrsoftware.org/isinfo.php> (only needed
-  for the installer step).
+- **Python 3.14** from python.org.
+  - Windows: 64-bit CPython; tick "Add Python to PATH".
+  - macOS: arm64-native CPython, not Rosetta.
+- **Inno Setup 6** from <https://jrsoftware.org/isinfo.php> for the
+  Windows installer step.
+- **Xcode command line tools** and Homebrew are used by the macOS
+  workflow helpers. The workflow installs `create-dmg` when building
+  the DMG.
 
 Binary runtimes (ffmpeg, libdiscid, fpcalc, VLC) are fetched
-automatically by the build script / workflow with SHA-256 verification.
+automatically by the build scripts / workflows with SHA-256 verification.
 For source runs you can drop pre-fetched copies into `bin/` to skip the
 download.
 
@@ -97,9 +108,11 @@ Flags:
 - `-Clean` — wipe `.venv`, `dist\`, and generated PyInstaller artefacts
   before starting.
 
-## 6. CI workflow
+## 6. CI workflows
 
-`.github/workflows/windows-build.yml` is the same flow, hosted on
+### Windows
+
+`.github/workflows/windows-build.yml` is the Windows release flow, hosted on
 `windows-latest`. Triggers:
 
 - `workflow_dispatch` — manual; useful for verifying CI before tagging.
@@ -136,6 +149,35 @@ The repository includes a conservative Ruff configuration in
 `pyproject.toml` for release-hardening checks. It intentionally focuses
 on syntax/import hazards first; broader formatting or typing rules should
 be tightened after the 1.0 release branch is stable.
+
+### macOS Apple Silicon
+
+`.github/workflows/macos-build.yml` is the conditional macOS release
+flow, hosted on an arm64 `macos-14` runner. Triggers:
+
+- `workflow_dispatch` — manual; required for the 1.0 artifact dry run.
+- `push: tags: ['v*.*.*']` — attaches the DMG and macOS SHA-256
+  manifest to the draft GitHub Release.
+
+The macOS pipeline:
+
+1. Confirms the host and Python are arm64-native.
+2. Installs Python deps from `requirements-build.txt`.
+3. Runs the pytest collection floor and full suite.
+4. Fetches arm64 ffmpeg, fpcalc, VLC, and libdiscid.
+5. Builds the `.icns` icon and PyInstaller `.app`.
+6. Injects libVLC, plugins, ffmpeg, fpcalc, and libdiscid into the app
+   bundle.
+7. Signs, notarizes, and staples when Apple Developer ID secrets are
+   configured; otherwise emits an unsigned DMG.
+8. Builds `SeaLyonMediaManager-{version}-arm64.dmg` and
+   `SeaLyonMediaManager-{version}-macos-SHA256SUMS.txt`.
+9. On tag builds, waits for the Windows installer asset before
+   generating a multi-OS `appcast.xml`.
+
+Do not advertise macOS support in README, release notes, or appcast
+metadata unless the CI-built DMG passes the manual smoke checklist on
+Apple Silicon.
 
 ## 7. Inno Setup details
 

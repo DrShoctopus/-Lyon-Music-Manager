@@ -8,6 +8,84 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _Nothing yet — staging area for post-1.0 work._
 
+## [1.0.0] — 2026-06-04
+
+Sea Lyon Media Manager 1.0.0 is the first public release. It ships a
+Windows 10 / 11 x64 installer and portable zip. macOS Apple Silicon is
+included only if the macOS workflow artifacts and physical smoke test on
+the oldest advertised macOS version pass before publication; otherwise
+macOS remains a clearly labeled post-1.0 milestone.
+
+### Added — Release packaging
+- Windows Inno Setup installer with EULA, third-party notices,
+  uninstall data-retention prompt, SmartScreen guidance, HKCU updater
+  registry entries, and branded installer artwork.
+- Windows portable zip for users who prefer extraction over install.
+- macOS Apple Silicon DMG workflow with arm64 PyInstaller bundle,
+  bundled libVLC / ffmpeg / fpcalc / libdiscid, Developer ID signing
+  and notarization when secrets are configured, and unsigned fallback
+  documentation when they are not.
+- Sparkle-style appcast generation for the browser-handoff updater,
+  including platform-specific enclosures so Windows builds do not offer
+  macOS DMGs and macOS builds do not offer Windows installers.
+- SHA-256 manifests for release artifacts.
+- `docs/RELEASING.md` with the tag, workflow, smoke-test, publish, and
+  appcast verification procedure.
+- `docs/RELEASE_CHECKLIST.md` with the manual 1.0 smoke-test checklist
+  for Windows 10, Windows 11, Windows upgrade install, and conditional
+  macOS Apple Silicon verification.
+
+### Added — User-facing app features
+- Local audio and video library management backed by SQLite.
+- libVLC audio playback with queue restore, shuffle/repeat,
+  crossfade, gapless playback, ReplayGain, equalizer, media keys,
+  Now Playing, album details, artwork, and lyrics.
+- CD detection, Audio CD playback, metadata lookup, ripping, optional
+  CUETools DB AccurateRip verification, and library import after rip.
+- Podcast subscriptions, OPML import, internet radio, YouTube search
+  and download via yt-dlp, and DLNA / UPnP cast and media serving.
+- Runtime diagnostics, rotating logs, About / Acknowledgements /
+  Licenses / System Info dialogs, privacy policy, EULA, and third-party
+  notices.
+- Browser-handoff update checks from a GitHub Pages appcast, with
+  release notes, skip/remind-later controls, HTTPS-only appcast
+  settings, and HTTPS-only update links.
+
+### Changed
+- Public documentation now treats Windows x64 as the mandatory 1.0
+  package and macOS Apple Silicon as conditional on successful CI and
+  physical smoke testing on the oldest macOS version advertised for the
+  release.
+- README, build docs, release checklist, changelog, app version, and
+  release workflow naming now agree on `1.0.0`.
+- The appcast URL setting is normalized to HTTPS and unsafe update
+  dialog links are ignored instead of being handed to the OS.
+- Smart playlist limits are bound as SQL parameters instead of being
+  interpolated into the query string.
+
+### Fixed
+- Gapless playback now cancels stale prebuffers on seek and pause.
+- Gapless promotion revalidates the prebuffered track before swapping
+  backends, including shuffle mode without re-rolling the random next
+  track at promotion time.
+- Removed temporary duplicate-tag-read diagnostics from the library scan
+  hot path.
+- Replaced representative silent exception handlers with debug or
+  warning logs so field failures leave a diagnostics trail.
+
+### Known issues
+- The Windows 1.0 installer is unsigned; Windows SmartScreen can warn
+  until Authenticode signing is available. Verify the SHA-256 manifest
+  before running the installer.
+- The bundled ffmpeg essentials build links GPL components, so the
+  combined installer is GPL-tainted with respect to ffmpeg. A
+  strict-LGPL ffmpeg option remains post-1.0 work.
+- macOS artifacts must not be advertised unless the DMG is built,
+  smoke-tested on the oldest advertised macOS version, and either
+  notarized or explicitly documented as unsigned.
+- The updater is intentionally notification-and-download only; it does
+  not perform in-place updates or verify artifact signatures.
+
 ## [0.9.0-rc1] — 2026-05-24
 
 Release candidate for the public v1.0.0 ship. **Windows 10 / 11 (64-bit)

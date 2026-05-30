@@ -2,9 +2,7 @@
 from pathlib import Path
 
 import pytest
-
-from lyon.core.cue_parser import CueSheet, CueTrack, parse_cue, _parse_sectors, _unquote
-
+from lyon.core.cue_parser import CueSheet, _parse_sectors, _unquote, parse_cue
 
 # ---------------------------------------------------------------------------
 # helpers

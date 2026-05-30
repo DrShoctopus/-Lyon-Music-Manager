@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, field
 
+LOG = logging.getLogger(__name__)
 
 # (display_label, db_column, value_type)
 FIELDS: list[tuple[str, str, str]] = [
@@ -98,7 +100,8 @@ def spec_to_json(spec: SmartPlaylistSpec) -> str:
 def spec_from_json(s: str) -> SmartPlaylistSpec:
     try:
         data = json.loads(s)
-    except Exception:
+    except Exception as exc:
+        LOG.warning("Invalid smart playlist JSON: %s", exc)
         return SmartPlaylistSpec()
     if not isinstance(data, dict):
         return SmartPlaylistSpec()
@@ -142,13 +145,15 @@ def spec_to_where(spec: SmartPlaylistSpec) -> tuple[str, list]:
     return joiner.join(f"({p})" for p in parts), params
 
 
-def spec_order_and_limit(spec: SmartPlaylistSpec) -> tuple[str, str]:
-    """Return (ORDER BY clause, LIMIT clause) strings (no leading spaces)."""
+def spec_order_and_limit(spec: SmartPlaylistSpec) -> tuple[str, str, list[int]]:
+    """Return ORDER BY, LIMIT clause, and LIMIT params for the tracks table."""
     col = spec.order_by if spec.order_by in _ORDER_BY_COLS else "title"
     direction = "DESC" if spec.order_desc else "ASC"
     order = f"{col} {direction}"
-    limit = f"LIMIT {spec.limit}" if spec.limit > 0 else ""
-    return order, limit
+    limit_value = _safe_nonnegative_int(spec.limit, 0)
+    limit = "LIMIT ?" if limit_value > 0 else ""
+    params = [limit_value] if limit_value > 0 else []
+    return order, limit, params
 
 
 def _rule_to_sql(

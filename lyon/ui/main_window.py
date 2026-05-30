@@ -1,25 +1,40 @@
 """Top-level window with native tab bar and stacked views."""
 from __future__ import annotations
 
-from collections.abc import Callable
 import os
 import sys
+from collections.abc import Callable
 
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QAction, QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
-    QAbstractSpinBox, QFileDialog, QHBoxLayout, QInputDialog, QLabel,
-    QLineEdit, QMainWindow, QMenu, QMessageBox, QPlainTextEdit, QProgressBar,
-    QStackedWidget, QStatusBar, QTabBar, QTextEdit, QToolButton,
-    QVBoxLayout, QWidget,
+    QAbstractSpinBox,
+    QFileDialog,
+    QHBoxLayout,
+    QInputDialog,
+    QLabel,
+    QLineEdit,
+    QMainWindow,
+    QMenu,
+    QMessageBox,
+    QPlainTextEdit,
+    QProgressBar,
+    QStackedWidget,
+    QStatusBar,
+    QTabBar,
+    QTextEdit,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
 )
 
 from .. import __app_name__, __version__
 from ..core import metadata
-from ..core.cd_detect import close_dll_handles as close_cd_dll_handles
 from ..core.cast_controller import CastController
+from ..core.cd_detect import close_dll_handles as close_cd_dll_handles
+from ..core.diagnostics import collect_diagnostics_bundle, logs_dir
 from ..core.dlna_server import DlnaServer
-from ..core.library import Library, SUPPORTED_EXTS, ScanSummary, Track
+from ..core.library import SUPPORTED_EXTS, Library, ScanSummary, Track
 from ..core.library_watcher import (
     LibraryFolderWatcher,
     LibraryIndexThread,
@@ -27,27 +42,26 @@ from ..core.library_watcher import (
     coalesce_batch,
 )
 from ..core.playback_backend import close_dll_handles
+from ..core.player import Player
 from ..core.podcast import podcast_user_agent
 from ..core.radio import radio_user_agent
-from ..core.player import Player
 from ..core.replaygain import ReplayGainScanner
-from ..core.scrobbler import ScrobblerService
 from ..core.ripper import find_ffmpeg
-from ..core.diagnostics import collect_diagnostics_bundle, logs_dir
+from ..core.scrobbler import ScrobblerService
 from ..core.settings import Settings
 from .about_dialog import AboutDialog
 from .branding import app_icon
-from .diagnostics_dialog import DiagnosticsDialog
-from .library_stats_dialog import LibraryStatsDialog
-from .duplicate_dialog import DuplicateDialog
 from .cast_dialog import CastDialog
+from .diagnostics_dialog import DiagnosticsDialog
+from .duplicate_dialog import DuplicateDialog
 from .equalizer_dialog import EqualizerDialog
 from .first_run_dialog import FirstRunDialog
+from .library_stats_dialog import LibraryStatsDialog
 from .library_view import LibraryView
-from .transport_bar import TransportBar
 from .queue_dialog import QueueDialog
 from .styles import apply_app_styles
 from .toast import Toast
+from .transport_bar import TransportBar
 from .yt_download_dialog import YtDownloadDialog
 
 
@@ -81,7 +95,9 @@ class _LibraryScanThread(QThread):
 
     def run(self) -> None:
         try:
-            should_cancel = lambda: self._cancel or self.isInterruptionRequested()
+            def should_cancel() -> bool:
+                return self._cancel or self.isInterruptionRequested()
+
             summary = ScanSummary()
             summary.removed = (
                 self.library.remove_missing_under_existing_roots(self.roots)

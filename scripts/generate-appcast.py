@@ -185,16 +185,21 @@ def _serialise_item(
     release_notes_html: str,
     macos_installer_url: str = "",
     macos_installer_size: int = 0,
+    macos_minimum_system_version: str = "11.0",
 ) -> str:
     enclosures: list[str] = []
     if macos_installer_url:
         # Emit tagged enclosures so the client can pick the right one per OS
         enclosures.append(_enclosure_xml(
-            installer_url, version, installer_size, os_tag="windows",
+            installer_url,
+            version,
+            installer_size,
+            os_tag="windows",
+            minimum_system_version=minimum_system_version,
         ))
         enclosures.append(_enclosure_xml(
             macos_installer_url, version, macos_installer_size,
-            os_tag="macos", minimum_system_version="11.0",
+            os_tag="macos", minimum_system_version=macos_minimum_system_version,
         ))
     else:
         # Legacy single-enclosure (Windows-only release)
@@ -247,6 +252,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Size in bytes of the macOS .dmg.",
     )
     parser.add_argument(
+        "--macos-minimum-system-version",
+        default="11.0",
+        help="Minimum macOS version for the DMG enclosure (default: 11.0).",
+    )
+    parser.add_argument(
         "--release-url",
         required=True,
         help="Public URL of the GitHub Release page for this version.",
@@ -291,6 +301,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    if args.installer_size <= 0:
+        parser.error("--installer-size must be greater than 0.")
+    if args.macos_installer_url and args.macos_installer_size <= 0:
+        parser.error("--macos-installer-size must be greater than 0 when --macos-installer-url is set.")
+    if args.macos_installer_size > 0 and not args.macos_installer_url:
+        parser.error("--macos-installer-url is required when --macos-installer-size is set.")
+
     pub_date = (
         datetime.fromisoformat(args.pubdate)
         if args.pubdate
@@ -308,6 +325,7 @@ def main(argv: list[str] | None = None) -> int:
         release_notes_html=release_notes,
         macos_installer_url=args.macos_installer_url,
         macos_installer_size=args.macos_installer_size,
+        macos_minimum_system_version=args.macos_minimum_system_version,
     )
 
     items_xml: list[str] = [new_item]

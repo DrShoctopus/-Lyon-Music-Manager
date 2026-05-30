@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import runpy
 import re
+import runpy
 import sys
 import types
 from pathlib import Path
@@ -78,6 +78,37 @@ def test_macos_build_gate_counts_pytest_collected_output():
 
     assert "tests? collected" in workflow
     assert "tests? selected" not in workflow
+
+
+def test_build_requirements_install_ruff():
+    repo = Path(__file__).resolve().parents[1]
+    requirements_in = (repo / "requirements-build.in").read_text(encoding="utf-8")
+    requirements_lock = (repo / "requirements-build.txt").read_text(encoding="utf-8")
+
+    assert re.search(r"^ruff==", requirements_in, flags=re.MULTILINE)
+    assert re.search(r"^ruff==", requirements_lock, flags=re.MULTILINE)
+
+
+@pytest.mark.parametrize("workflow_name", ["windows-build.yml", "macos-build.yml"])
+def test_release_workflows_run_ruff_before_pytest(workflow_name):
+    repo = Path(__file__).resolve().parents[1]
+    workflow = (repo / ".github" / "workflows" / workflow_name).read_text(encoding="utf-8")
+
+    install_index = workflow.index("Install Python dependencies")
+    ruff_index = workflow.index("Run Ruff gate")
+    pytest_index = workflow.index("Run pytest gate")
+
+    assert install_index < ruff_index < pytest_index
+    assert "python -m ruff check lyon tests scripts" in workflow
+
+
+def test_inno_setup_requires_explicit_app_version():
+    repo = Path(__file__).resolve().parents[1]
+    iss = (repo / "build" / "lyon.iss").read_text(encoding="utf-8")
+
+    assert "#ifndef AppVersion" in iss
+    assert "#error" in iss
+    assert '#define AppVersion "0.8.0"' not in iss
 
 
 def test_macos_workflow_skips_signing_when_credentials_are_missing():

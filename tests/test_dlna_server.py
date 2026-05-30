@@ -5,13 +5,12 @@ from io import BytesIO
 from pathlib import Path
 
 import pytest
-
 from lyon.core.dlna_server import (
     DlnaServer,
-    _SsdpResponder,
     _encode_object_value,
     _is_allowed_client,
     _server_header,
+    _SsdpResponder,
 )
 from lyon.core.library import Library
 from lyon.core.settings import Settings

@@ -1,7 +1,6 @@
-from mutagen.mp4 import MP4FreeForm
-
 from lyon.core.metadata import AlbumInfo, TrackInfo
 from lyon.core.tagger import write_tags
+from mutagen.mp4 import MP4FreeForm
 
 
 def test_write_tags_writes_m4a_disc_id_with_supported_freeform_format(tmp_path, monkeypatch):

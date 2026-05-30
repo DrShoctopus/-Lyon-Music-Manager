@@ -1,6 +1,7 @@
 """ReplayGain loudness normalization — measurement, tag I/O, and background scanning."""
 from __future__ import annotations
 
+import logging
 import re
 import subprocess
 import sys
@@ -10,6 +11,7 @@ from typing import Optional
 from PySide6.QtCore import QObject, QThread, Signal
 
 REPLAYGAIN_TARGET_LUFS = -18.0
+LOG = logging.getLogger(__name__)
 
 # ──────────────────────────────────────────────── LUFS measurement ──────────
 
@@ -89,17 +91,17 @@ def _read_rg_tag(path: str, kind: str) -> Optional[float]:
                 return int(raw) / 256.0
             except (ValueError, TypeError):
                 return None
-    except Exception:
-        pass
+    except Exception as exc:
+        LOG.debug("Could not read ReplayGain %s tag from %s: %s", kind, path, exc)
     return None
 
 
 def _extract_tag(f, key: str) -> Optional[str]:
     """Return the first string value for *key* (case-insensitive) from any tag format."""
     try:
+        from mutagen.asf import ASF
         from mutagen.mp3 import MP3
         from mutagen.mp4 import MP4
-        from mutagen.asf import ASF
     except ImportError:
         return None
 
@@ -164,9 +166,9 @@ def write_replaygain_tags(
     """Write ReplayGain tags to *path*. Returns True on success."""
     try:
         import mutagen
+        from mutagen.asf import ASF
         from mutagen.mp3 import MP3
         from mutagen.mp4 import MP4
-        from mutagen.asf import ASF
 
         f = mutagen.File(path, easy=False)
         if f is None:
@@ -182,7 +184,8 @@ def write_replaygain_tags(
         f.save()
         _read_rg_tag.cache_clear()
         return True
-    except Exception:
+    except Exception as exc:
+        LOG.debug("Could not write ReplayGain tags to %s: %s", path, exc)
         return False
 
 
@@ -203,7 +206,7 @@ def _write_id3_rg(f, track_gain_db, album_gain_db) -> None:
 
 
 def _write_mp4_rg(f, track_gain_db, album_gain_db) -> None:
-    from mutagen.mp4 import MP4FreeForm, AtomDataType
+    from mutagen.mp4 import AtomDataType, MP4FreeForm
     if f.tags is None:
         f.add_tags()
     for k in [k for k in f.tags.keys() if "replaygain" in k.lower()]:

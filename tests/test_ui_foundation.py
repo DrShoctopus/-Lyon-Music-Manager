@@ -32,9 +32,8 @@ def test_theme_constants_exported():
 
 
 def test_icons_returns_qicon_for_known_name(app):
-    from PySide6.QtGui import QIcon
-
     from lyon.ui.icons import icon
+    from PySide6.QtGui import QIcon
 
     assert isinstance(icon("play"), QIcon)
     assert isinstance(icon("does-not-exist"), QIcon)

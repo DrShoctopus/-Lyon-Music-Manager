@@ -6,7 +6,7 @@ import logging
 import os
 import sys
 import threading
-from dataclasses import dataclass, fields, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -40,6 +40,7 @@ _MAX_RADIO_STATIONS = 200
 _MAX_PODCAST_SUBSCRIPTIONS = 500
 
 DEFAULT_MUSICBRAINZ_CONTACT = "https://github.com/DrShoctopus/Sea-Lyon-Media-Manager"
+DEFAULT_UPDATE_APPCAST_URL = "https://drshoctopus.github.io/Sea-Lyon-Media-Manager/appcast.xml"
 _PLACEHOLDER_CONTACT_MARKERS = ("example.", "localhost", "your-email", "your.email")
 
 
@@ -49,6 +50,15 @@ def is_placeholder_contact(value: str) -> bool:
     if not text:
         return True
     return any(marker in text for marker in _PLACEHOLDER_CONTACT_MARKERS)
+
+
+def normalize_update_appcast_url(value: str) -> str:
+    """Return a usable HTTPS appcast URL, or the project default."""
+    url = str(value or "").strip()
+    parsed = urlparse(url)
+    if parsed.scheme.casefold() == "https" and parsed.netloc:
+        return url
+    return DEFAULT_UPDATE_APPCAST_URL
 
 
 def _default_music_root() -> Path:
@@ -318,9 +328,7 @@ class Settings:
     # Auto-update appcast polling (GitHub-Pages-hosted XML; in-app updater
     # surfaces an "Update Available" dialog and links to the installer).
     update_check_enabled: bool = True
-    update_appcast_url: str = (
-        "https://drshoctopus.github.io/Sea-Lyon-Media-Manager/appcast.xml"
-    )
+    update_appcast_url: str = DEFAULT_UPDATE_APPCAST_URL
     last_update_check_ts: int = 0       # POSIX timestamp; 0 = never
     last_update_failure_ts: int = 0     # POSIX timestamp; 0 = no recent failure
     skipped_update_version: str = ""    # user said "Skip This Version"
@@ -362,9 +370,7 @@ class Settings:
         self.youtube_acknowledged = _bool_value(self.youtube_acknowledged, False)
         self.smartscreen_advisory_shown = _bool_value(self.smartscreen_advisory_shown, False)
         self.update_check_enabled = _bool_value(self.update_check_enabled, True)
-        self.update_appcast_url = str(self.update_appcast_url or "").strip() or (
-            "https://drshoctopus.github.io/Sea-Lyon-Media-Manager/appcast.xml"
-        )
+        self.update_appcast_url = normalize_update_appcast_url(self.update_appcast_url)
         self.last_update_check_ts = _nonnegative_int(self.last_update_check_ts, 0)
         self.last_update_failure_ts = _nonnegative_int(self.last_update_failure_ts, 0)
         self.skipped_update_version = str(self.skipped_update_version or "").strip()

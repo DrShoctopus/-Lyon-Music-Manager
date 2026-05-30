@@ -19,7 +19,6 @@ QtWidgets = pytest.importorskip("PySide6.QtWidgets", exc_type=ImportError)
 from lyon.core.player import Player
 from lyon.core.settings import Settings
 
-
 _DIALOG_MODULES = (
     "lyon/ui/settings_dialog.py",
     "lyon/ui/equalizer_dialog.py",

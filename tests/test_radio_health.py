@@ -3,10 +3,9 @@ from __future__ import annotations
 
 import socket
 import urllib.error
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 from lyon.core.radio import check_station_health
-
 
 # ---------------------------------------------------------------------------
 # Helpers

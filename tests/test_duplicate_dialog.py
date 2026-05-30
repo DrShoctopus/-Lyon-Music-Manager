@@ -4,10 +4,9 @@ import pytest
 
 QtWidgets = pytest.importorskip("PySide6.QtWidgets", exc_type=ImportError)
 
+from lyon.ui.duplicate_dialog import DuplicateDialog
 from PySide6.QtCore import QThreadPool
 from PySide6.QtWidgets import QApplication
-
-from lyon.ui.duplicate_dialog import DuplicateDialog
 
 
 def test_fingerprint_summary_uses_count_helpers(qapp, monkeypatch):

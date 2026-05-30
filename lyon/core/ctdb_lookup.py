@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 from .metadata import (
-    sanitize_ctdb_layout,
     lookup_cuetools_db_layout,
+    sanitize_ctdb_layout,
 )
 
 # Expose the previously-private sanitizer under its old name so existing

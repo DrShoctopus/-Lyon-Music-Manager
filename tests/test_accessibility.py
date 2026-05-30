@@ -95,8 +95,8 @@ def test_settings_about_tab_shows_branding_pixmap(app):
     from lyon.ui.settings_dialog import SettingsDialog
     dlg = SettingsDialog(Settings.load())
     labels_with_pix = [
-        l for l in dlg.findChildren(QtWidgets.QLabel)
-        if l.pixmap() is not None and not l.pixmap().isNull()
+        label for label in dlg.findChildren(QtWidgets.QLabel)
+        if label.pixmap() is not None and not label.pixmap().isNull()
     ]
     # At least one QLabel should carry the app icon pixmap.
     assert len(labels_with_pix) >= 1

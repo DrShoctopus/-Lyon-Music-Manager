@@ -6,10 +6,10 @@ QtCore = pytest.importorskip("PySide6.QtCore", exc_type=ImportError)
 QObject = QtCore.QObject
 Signal = QtCore.Signal
 
-from lyon.core.library import Track
 from lyon.core import player as player_module
-from lyon.core.player import Player
+from lyon.core.library import Track
 from lyon.core.playback_backend import UnavailablePlaybackBackend
+from lyon.core.player import Player
 
 
 class FakeBackend(QObject):
@@ -421,6 +421,123 @@ def test_gapless_prebuffer_loads_next_track_without_starting_silent_backend():
         ("set_muted", True),
     ]
     assert ("set_muted", False) in backends[1].operations[play_at + 1:]
+
+
+def test_gapless_prebuffer_is_cancelled_on_seek():
+    backends: list[FakeBackend] = []
+
+    def factory(parent=None):
+        backend = FakeBackend()
+        backends.append(backend)
+        return backend
+
+    player = Player(backend_factory=factory)
+    player.set_gapless(True)
+    player.set_queue([
+        _track("C:/Music/one.flac"),
+        _track("C:/Music/two.flac"),
+    ])
+
+    backends[0].position_changed.emit(118_000, 120_000)
+    assert player._gapless_prebuffer_backend is backends[1]
+
+    player.seek(10_000)
+
+    assert player._gapless_prebuffer_backend is None
+    assert player._gapless_prebuffer_index == -1
+    assert ("stop", None) in backends[1].operations
+    assert backends[1].parent() is None
+    assert backends[0].operations[-1] == ("set_position", 10_000)
+
+
+def test_gapless_prebuffer_is_cancelled_on_pause():
+    backends: list[FakeBackend] = []
+
+    def factory(parent=None):
+        backend = FakeBackend()
+        backends.append(backend)
+        return backend
+
+    player = Player(backend_factory=factory)
+    player.set_gapless(True)
+    player.set_queue([
+        _track("C:/Music/one.flac"),
+        _track("C:/Music/two.flac"),
+    ])
+
+    backends[0].position_changed.emit(118_000, 120_000)
+    assert player._gapless_prebuffer_backend is backends[1]
+
+    player.pause()
+
+    assert player._gapless_prebuffer_backend is None
+    assert player._gapless_prebuffer_index == -1
+    assert ("stop", None) in backends[1].operations
+    assert backends[1].parent() is None
+    assert backends[0].operations[-1] == ("pause", None)
+
+
+def test_gapless_prebuffer_is_revalidated_before_promotion():
+    backends: list[FakeBackend] = []
+
+    def factory(parent=None):
+        backend = FakeBackend()
+        backends.append(backend)
+        return backend
+
+    player = Player(backend_factory=factory)
+    player.set_gapless(True)
+    player.set_queue([
+        _track("C:/Music/one.flac"),
+        _track("C:/Music/two.flac"),
+    ])
+
+    backends[0].position_changed.emit(118_000, 120_000)
+    assert player._gapless_prebuffer_backend is backends[1]
+    player.cycle_repeat()
+    player.cycle_repeat()
+
+    backends[0].end_reached.emit()
+
+    assert player.current_index() == 0
+    assert player.current().path == "C:/Music/one.flac"
+    assert backends[1].parent() is None
+    assert ("stop", None) in backends[1].operations
+    assert backends[0].sources[-1] == "C:/Music/one.flac"
+
+
+def test_gapless_shuffle_prebuffer_promotes_original_choice(monkeypatch):
+    backends: list[FakeBackend] = []
+    choices: list[int] = []
+
+    def factory(parent=None):
+        backend = FakeBackend()
+        backends.append(backend)
+        return backend
+
+    def choose(candidates):
+        result = candidates[-1] if not choices else candidates[0]
+        choices.append(result)
+        return result
+
+    monkeypatch.setattr(player_module.random, "choice", choose)
+    player = Player(backend_factory=factory)
+    player.set_gapless(True)
+    player.set_queue([
+        _track("C:/Music/one.flac"),
+        _track("C:/Music/two.flac"),
+        _track("C:/Music/three.flac"),
+    ])
+    player.set_shuffle(True)
+
+    backends[0].position_changed.emit(118_000, 120_000)
+    assert player._gapless_prebuffer_index == 2
+
+    backends[0].end_reached.emit()
+
+    assert player.current_index() == 2
+    assert player.current().path == "C:/Music/three.flac"
+    assert choices == [2]
 
 
 def test_gapless_vlc_options_use_supported_time_stretch_flag():

@@ -7,12 +7,20 @@ supports an optional action button (e.g. "Undo").
 from __future__ import annotations
 
 from PySide6.QtCore import (
-    QEasingCurve, QPropertyAnimation, QTimer, Qt, Signal,
+    QEasingCurve,
+    QPropertyAnimation,
+    Qt,
+    QTimer,
+    Signal,
 )
 from PySide6.QtWidgets import (
-    QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QToolButton, QWidget,
+    QFrame,
+    QGraphicsOpacityEffect,
+    QHBoxLayout,
+    QLabel,
+    QToolButton,
+    QWidget,
 )
-
 
 _VALID_LEVELS = ("info", "success", "warning", "error")
 

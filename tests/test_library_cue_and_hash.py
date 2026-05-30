@@ -4,10 +4,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from lyon.core import library as library_module
 from lyon.core.library import Library, _compute_file_hash
-
 
 # ---------------------------------------------------------------------------
 # helpers
@@ -26,7 +24,7 @@ def _add_audio_track(library: Library, path: str, bitrate: int = 320000) -> None
 
 def _write_cue(tmp_path: Path, tracks: list[str], image: str = "album.flac") -> Path:
     """Write a minimal CUE file referencing *image* with one track per entry in *tracks*."""
-    lines = [f'TITLE "Test Album"', f'PERFORMER "Test Artist"', f'FILE "{image}" WAVE']
+    lines = ['TITLE "Test Album"', 'PERFORMER "Test Artist"', f'FILE "{image}" WAVE']
     for i, title in enumerate(tracks, 1):
         mm = (i - 1) * 3
         lines.append(f"  TRACK {i:02d} AUDIO")
@@ -531,7 +529,8 @@ def test_index_cue_file_updates_on_cue_change(tmp_path):
     library._index_cue_file(str(cue))
 
     # Rewrite CUE with different content and bump mtime
-    import time, os
+    import os
+    import time
     time.sleep(0.01)
     cue.write_text(
         'TITLE "Changed"\nFILE "album.flac" WAVE\n'
@@ -551,7 +550,8 @@ def test_index_cue_file_removes_orphaned_tracks(tmp_path):
     library._index_cue_file(str(cue))
 
     # Rewrite with only 2 tracks
-    import time, os
+    import os
+    import time
     cue.write_text(
         'TITLE "A"\nFILE "album.flac" WAVE\n'
         '  TRACK 01 AUDIO\n    TITLE "T1"\n    INDEX 01 00:00:00\n'

@@ -10,11 +10,10 @@ from urllib.parse import unquote, urlparse
 
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, QTimer, Signal
 
-from .library import Library, Track
 from .equalizer import clamp_preamp, flat_equalizer_bands, normalize_equalizer_bands
+from .library import Library, Track
 from .playback_backend import PlaybackBackend, create_playback_backend
 from .radio import parse_stream_title
-
 
 _GAPLESS_PREBUFFER_MS = 2000
 _GAPLESS_VLC_OPTIONS: tuple[str, ...] = (
@@ -288,6 +287,7 @@ class Player(QObject):
 
     def pause(self) -> None:
         self._cancel_crossfade()
+        self._cancel_gapless_prebuffer()
         self._backend.pause()
 
     def toggle(self) -> None:
@@ -344,6 +344,7 @@ class Player(QObject):
 
     def seek(self, ms: int) -> None:
         self._cancel_crossfade()
+        self._cancel_gapless_prebuffer()
         self._backend.set_position(ms)
 
     # --------------------------------------------------------------- modes
@@ -862,9 +863,10 @@ class Player(QObject):
         idx = self._gapless_prebuffer_index
         self._gapless_prebuffer_backend = None
         self._gapless_prebuffer_index = -1
-        if backend is None or not (0 <= idx < len(self._queue)):
+        if backend is None or not self._gapless_prebuffer_is_valid(idx):
             if backend is not None:
-                self._cleanup_backend(backend)
+                backend.stop()
+                self._dispose_transient_backend(backend)
             self.next()
             return
         muted = self._backend.is_muted()
@@ -885,6 +887,28 @@ class Player(QObject):
         backend.set_muted(muted)
         self._commit_track_index(idx, previous_index)
 
+    def _gapless_prebuffer_is_valid(self, idx: int) -> bool:
+        if not (0 <= idx < len(self._queue)):
+            return False
+        if self._repeat == RepeatMode.ONE or idx == self._index:
+            return False
+        if not self._shuffle:
+            if self._index + 1 < len(self._queue):
+                return idx == self._index + 1
+            return self._repeat == RepeatMode.ALL and idx == 0
+
+        played = set(self._shuffle_played)
+        if 0 <= self._index < len(self._queue):
+            played.add(self._index)
+        if idx not in played:
+            return True
+        if self._repeat != RepeatMode.ALL:
+            return False
+        return not any(
+            candidate != self._index and candidate not in played
+            for candidate in range(len(self._queue))
+        )
+
     def _cancel_gapless_prebuffer(self) -> None:
         backend = self._gapless_prebuffer_backend
         self._gapless_prebuffer_backend = None
@@ -902,7 +926,7 @@ class Player(QObject):
             return 1.0
         if not path or not Path(path).is_file():
             return 1.0
-        from .replaygain import read_track_gain, read_album_gain, gain_multiplier
+        from .replaygain import gain_multiplier, read_album_gain, read_track_gain
         if self._rg_mode == "track":
             gain_db = read_track_gain(path)
         else:
@@ -930,7 +954,7 @@ class Player(QObject):
 
         class _WarmCache(QRunnable):
             def run(self):
-                from .replaygain import read_track_gain, read_album_gain
+                from .replaygain import read_album_gain, read_track_gain
                 for p in upcoming:
                     if mode == "track":
                         read_track_gain(p)

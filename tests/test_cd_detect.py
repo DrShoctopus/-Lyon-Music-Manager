@@ -1,15 +1,15 @@
 from pathlib import Path
 
+from lyon.core import cd_detect
 from lyon.core.cd_detect import (
-    _CtdbTocEntry,
     _DLL_DIRECTORY_HANDLES,
-    _ensure_bin_dir_on_path,
     _ctdb_entries_from_windows_toc,
     _ctdb_toc_from_track_data,
+    _CtdbTocEntry,
     _disc_toc_from_ctdb_entries,
+    _ensure_bin_dir_on_path,
     close_dll_handles,
 )
-from lyon.core import cd_detect
 
 
 def _track_data(track_number: int, control_adr: int, offset: int) -> bytes:

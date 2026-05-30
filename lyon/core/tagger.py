@@ -79,7 +79,7 @@ def _partial_vorbis(path: Path, fields: dict) -> bool:
 
 def _partial_id3(path: Path, fields: dict) -> bool:
     try:
-        from mutagen.id3 import TALB, TDRC, TIT1, TIT2, TCON, TRCK, TPOS, TPE1, TPE2
+        from mutagen.id3 import TALB, TCON, TDRC, TIT1, TIT2, TPE1, TPE2, TPOS, TRCK
         audio = mutagen.File(str(path))
         if audio is None:
             return False
@@ -232,7 +232,7 @@ def _write_id3_tags(
     ``ID3.save(path)`` directly would corrupt WAV/AIFF files.
     """
     try:
-        from mutagen.id3 import APIC, TALB, TDRC, TIT1, TIT2, TCON, TRCK, TPE1, TPE2, TXXX
+        from mutagen.id3 import APIC, TALB, TCON, TDRC, TIT1, TIT2, TPE1, TPE2, TRCK, TXXX
         audio = mutagen.File(str(path))
         if audio is None:
             return False

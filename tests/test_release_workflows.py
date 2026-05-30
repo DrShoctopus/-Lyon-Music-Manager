@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -30,5 +29,15 @@ def test_macos_tag_release_regenerates_multi_os_appcast():
     assert attach_pos < appcast_pos
     assert "--macos-installer-url" in workflow
     assert "--macos-installer-size" in workflow
+    assert "--macos-minimum-system-version" in workflow
+    assert "MACOS_MINIMUM_SYSTEM_VERSION" in workflow
     assert "SeaLyonMediaManager-${ver}-Setup.exe" in workflow
     assert "dist/appcast.xml" in workflow
+
+
+def test_macos_tag_release_reads_windows_asset_from_draft_aware_release_listing():
+    workflow = (REPO_ROOT / ".github" / "workflows" / "macos-build.yml").read_text(encoding="utf-8")
+
+    assert 'gh api "repos/${repo}/releases?per_page=100"' in workflow
+    assert "release.get(\"tag_name\") != tag" in workflow
+    assert "releases/tags/${tag}" not in workflow

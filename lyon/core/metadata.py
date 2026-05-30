@@ -9,7 +9,7 @@ from collections import OrderedDict
 from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 from urllib.parse import urljoin, urlparse
 
 import defusedxml.ElementTree as ET
@@ -18,6 +18,8 @@ from defusedxml.common import DefusedXmlException
 from . import settings as _settings
 from .user_agent import musicbrainz_user_agent
 
+if TYPE_CHECKING:
+    import requests
 
 CTDB_LOOKUP_URL = "http://db.cuetools.net/lookup2.php"
 CTDB_BASE_URL = "http://db.cuetools.net/"

@@ -8,7 +8,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, QThread, Signal
 
-from .library import Library, ScanSummary, SUPPORTED_EXTS
+from .library import SUPPORTED_EXTS, Library, ScanSummary
 
 try:  # pragma: no cover - dependency availability is environment-specific
     from watchdog.events import FileSystemEvent, FileSystemEventHandler

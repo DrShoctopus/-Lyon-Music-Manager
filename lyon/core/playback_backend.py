@@ -4,20 +4,18 @@ from __future__ import annotations
 import importlib
 import logging
 import os
+import sys
 from pathlib import Path
 from typing import Any, Optional
 
 from PySide6.QtCore import QObject, Signal
 
 from .equalizer import EQ_BAND_COUNT
-import sys
-
 from .settings import bundled_bin_dir, bundled_frameworks_dir
 from .vlc_equalizer import (
     EQ_FADE_INTERVAL_MS,
     VlcEqualizerController,
 )
-
 
 LOG = logging.getLogger(__name__)
 # Lyon now exposes libVLC's complete native ten-band equalizer, so the
@@ -275,7 +273,7 @@ class VlcPlaybackBackend(PlaybackBackend):
         vlc_instance_options: tuple[str, ...] = (),
     ):
         super().__init__(parent)
-        from PySide6.QtCore import QMetaObject, Qt, QTimer, Q_ARG
+        from PySide6.QtCore import Q_ARG, QMetaObject, Qt, QTimer
 
         self._vlc = vlc_module
         self._instance = vlc_module.Instance(*vlc_instance_options)

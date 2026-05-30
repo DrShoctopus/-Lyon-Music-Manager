@@ -4,12 +4,18 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
-    QDialog, QDialogButtonBox, QHBoxLayout, QLineEdit, QSplitter, QTextBrowser,
-    QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
+    QDialog,
+    QDialogButtonBox,
+    QLineEdit,
+    QSplitter,
+    QTextBrowser,
+    QTreeWidget,
+    QTreeWidgetItem,
+    QVBoxLayout,
+    QWidget,
 )
 
 from .. import __app_name__, __version__
-
 
 # ---------------------------------------------------------------------------
 # Content

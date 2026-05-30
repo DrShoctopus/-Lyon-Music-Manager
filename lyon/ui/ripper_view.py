@@ -4,15 +4,31 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QRectF, QThread, QTimer, Signal
+from PySide6.QtCore import QRectF, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import (
-    QColor, QFont, QLinearGradient, QPainter, QPainterPath,
-    QPixmap, QStandardItem, QStandardItemModel,
+    QColor,
+    QFont,
+    QLinearGradient,
+    QPainter,
+    QPainterPath,
+    QPixmap,
+    QStandardItem,
+    QStandardItemModel,
 )
 from PySide6.QtWidgets import (
-    QAbstractItemView, QComboBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
-    QMessageBox, QProgressBar, QPushButton,
-    QStyledItemDelegate, QTableView, QVBoxLayout, QWidget,
+    QAbstractItemView,
+    QComboBox,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QProgressBar,
+    QPushButton,
+    QStyledItemDelegate,
+    QTableView,
+    QVBoxLayout,
+    QWidget,
 )
 
 from ..core import cd_detect
@@ -26,8 +42,8 @@ from ..core.metadata import (
     search_album,
 )
 from ..core.ripper import (
-    RipRequest,
     Ripper,
+    RipRequest,
     format_extension,
     track_output_files,
     unique_target_folder,
@@ -325,7 +341,9 @@ class RipperView(QWidget):
         meta = QVBoxLayout()
         self.album_edit = QLineEdit()
         self.album_edit.setPlaceholderText("Album title")
-        f = self.album_edit.font(); f.setPointSize(14); f.setBold(True)
+        f = self.album_edit.font()
+        f.setPointSize(14)
+        f.setBold(True)
         self.album_edit.setFont(f)
         meta.addWidget(self.album_edit)
         self.artist_edit = QLineEdit()

@@ -12,7 +12,7 @@
 ;   - CHANGELOG.md                   repo root, shown after installation (truncated to current version)
 
 #ifndef AppVersion
-  #define AppVersion "0.8.0"
+  #error AppVersion must be passed to ISCC, for example /DAppVersion=1.0.0
 #endif
 
 #define AppName      "Sea Lyon Media Manager"

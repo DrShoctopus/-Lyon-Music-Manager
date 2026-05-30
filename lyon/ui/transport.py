@@ -12,7 +12,6 @@ from PySide6.QtWidgets import QToolButton
 
 from .theme import ACCENT_CYAN, TEXT_PRIMARY
 
-
 SIDE_BTN_SIZE = (40, 38)
 PRIMARY_BTN_SIZE = 54
 
@@ -115,7 +114,7 @@ def _draw_glyph(painter: QPainter, name: str, rect, color: QColor) -> None:
         painter.setBrush(color)
         painter.setPen(Qt.NoPen)
         head = size * 0.10
-        from math import cos, sin, radians
+        from math import cos, radians, sin
         ang = radians(30)
         tip_x = cx + r * cos(-ang)
         tip_y = cy - r * sin(-ang)

@@ -4,13 +4,24 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QAbstractItemView, QDialog, QDialogButtonBox, QHeaderView, QLabel, QTableWidget, QTableWidgetItem,
-    QVBoxLayout, QWidget,
+    QAbstractItemView,
+    QDialog,
+    QDialogButtonBox,
+    QHeaderView,
+    QLabel,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
 )
 
-from ..core.diagnostics import DependencyCheck, DiagnosticStatus, run_dependency_checks, summarize_dependency_checks
+from ..core.diagnostics import (
+    DependencyCheck,
+    DiagnosticStatus,
+    run_dependency_checks,
+    summarize_dependency_checks,
+)
 from .theme import STATUS_ERROR, STATUS_OK, STATUS_WARNING
-
 
 _STATUS_COLORS = {
     DiagnosticStatus.OK: QColor(STATUS_OK),

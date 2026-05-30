@@ -1,20 +1,65 @@
 """Library browser: artists -> albums -> tracks, plus search."""
 from __future__ import annotations
 
+import logging
 from collections import OrderedDict
+from collections.abc import Callable
 from pathlib import Path
 
-from PySide6.QtCore import QAbstractTableModel, QEvent, QMimeData, QModelIndex, QObject, QRunnable, QSize, QSortFilterProxyModel, Qt, QThreadPool, QTimer, QUrl, Signal
+from PySide6.QtCore import (
+    QAbstractTableModel,
+    QEvent,
+    QMimeData,
+    QModelIndex,
+    QObject,
+    QRunnable,
+    QSize,
+    QSortFilterProxyModel,
+    Qt,
+    QThreadPool,
+    QTimer,
+    QUrl,
+    Signal,
+)
 from PySide6.QtGui import (
-    QColor, QDesktopServices, QIcon, QImage, QKeySequence, QPainter, QPixmap, QShortcut,
-    QStandardItem, QStandardItemModel,
+    QAction,
+    QColor,
+    QDesktopServices,
+    QIcon,
+    QImage,
+    QKeySequence,
+    QPainter,
+    QPixmap,
+    QShortcut,
+    QStandardItem,
+    QStandardItemModel,
 )
 from PySide6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
-    QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QListView, QMenu,
-    QMessageBox, QPushButton, QSpinBox, QSplitter, QStackedWidget,
-    QStyledItemDelegate, QStyleOptionViewItem, QTableView, QTableWidget,
-    QTableWidgetItem, QVBoxLayout, QWidget,
+    QAbstractItemView,
+    QCheckBox,
+    QDialog,
+    QDialogButtonBox,
+    QFileDialog,
+    QFormLayout,
+    QHBoxLayout,
+    QHeaderView,
+    QInputDialog,
+    QLabel,
+    QLineEdit,
+    QListView,
+    QMenu,
+    QMessageBox,
+    QPushButton,
+    QSpinBox,
+    QSplitter,
+    QStackedWidget,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
+    QTableView,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
 )
 
 from ..core.library import Library, Track
@@ -23,6 +68,8 @@ from ..core.tagger import write_partial_tags
 from .metadata_fetch_dialog import MetadataFetchDialog
 from .smart_playlist_dialog import SmartPlaylistDialog
 from .widgets import format_duration
+
+LOG = logging.getLogger(__name__)
 
 
 # Sentinel stored in Qt.UserRole on the synthetic "All Albums" album row.
@@ -524,7 +571,8 @@ class _ArtLoader(QRunnable):
                     Qt.KeepAspectRatio, Qt.SmoothTransformation,
                 )
                 self._signals.loaded.emit(self._gen, self._art_path, scaled)
-        except Exception:
+        except Exception as exc:
+            LOG.debug("Could not load grid artwork %s: %s", self._art_path, exc)
             self._signals.loaded.emit(self._gen, self._art_path, None)
 
 
@@ -674,14 +722,18 @@ class LibraryView(QWidget):
         genres_box = QWidget()
         gb_vl = QVBoxLayout(genres_box)
         gb_vl.setContentsMargins(0, 0, 0, 0)
-        gb_lbl = QLabel("Genres"); gb_lbl.setObjectName("sectionHeading")
-        gb_vl.addWidget(gb_lbl); gb_vl.addWidget(self.genres)
+        gb_lbl = QLabel("Genres")
+        gb_lbl.setObjectName("sectionHeading")
+        gb_vl.addWidget(gb_lbl)
+        gb_vl.addWidget(self.genres)
 
         playlists_box = QWidget()
         pb_vl = QVBoxLayout(playlists_box)
         pb_vl.setContentsMargins(0, 0, 0, 0)
-        pb_lbl = QLabel("Playlists"); pb_lbl.setObjectName("sectionHeading")
-        pb_vl.addWidget(pb_lbl); pb_vl.addWidget(self.playlists_view)
+        pb_lbl = QLabel("Playlists")
+        pb_lbl.setObjectName("sectionHeading")
+        pb_vl.addWidget(pb_lbl)
+        pb_vl.addWidget(self.playlists_view)
 
         left_vsplit = QSplitter(Qt.Vertical)
         left_vsplit.addWidget(genres_box)
@@ -936,10 +988,13 @@ class LibraryView(QWidget):
         self.genres_model.clear()
         ag_item = QStandardItem("All Genres")
         ag_item.setData(_ALL_GENRES_KEY, Qt.UserRole)
-        f = ag_item.font(); f.setItalic(True); ag_item.setFont(f)
+        f = ag_item.font()
+        f.setItalic(True)
+        ag_item.setFont(f)
         self.genres_model.appendRow(ag_item)
         for g in self._library_all_genres(self._media_type_filter):
-            it = QStandardItem(g); it.setData(g, Qt.UserRole)
+            it = QStandardItem(g)
+            it.setData(g, Qt.UserRole)
             self.genres_model.appendRow(it)
 
         # Reset genre selection to "All Genres" without firing signal
@@ -984,11 +1039,14 @@ class LibraryView(QWidget):
         for key, label in virtual_collections:
             item = QStandardItem(label)
             item.setData(key, Qt.UserRole)
-            fnt = item.font(); fnt.setItalic(True); item.setFont(fnt)
+            fnt = item.font()
+            fnt.setItalic(True)
+            item.setFont(fnt)
             self.artists_model.appendRow(item)
         real_artists = self._library_all_artists(self._media_type_filter, genre=genre)
         for a in real_artists:
-            it = QStandardItem(a); it.setData(a, Qt.UserRole)
+            it = QStandardItem(a)
+            it.setData(a, Qt.UserRole)
             self.artists_model.appendRow(it)
 
         if real_artists:
@@ -1221,7 +1279,9 @@ class LibraryView(QWidget):
             if len(albums) >= 2:
                 all_item = QStandardItem("All Albums")
                 all_item.setData(_SV_ALL_ALBUMS, Qt.UserRole)
-                f = all_item.font(); f.setItalic(True); all_item.setFont(f)
+                f = all_item.font()
+                f.setItalic(True)
+                all_item.setFont(f)
                 self._sv_albums_model.appendRow(all_item)
             for album, _ in albums:
                 it = QStandardItem(album)
@@ -1367,7 +1427,7 @@ class LibraryView(QWidget):
             (_COL_FORMAT,   "Format"),
             (_COL_GROUPING, "Group"),
         ]
-        col_actions: list[tuple[int, "QAction"]] = []
+        col_actions: list[tuple[int, QAction]] = []
         for col, label in toggleable:
             act = menu.addAction(label)
             act.setCheckable(True)
@@ -1602,6 +1662,8 @@ class LibraryView(QWidget):
         if len(selected) == 1:
             from ..core.fingerprint import (
                 is_available as _fp_available,
+            )
+            from ..core.fingerprint import (
                 is_lookup_configured as _fp_configured,
             )
             identify_act = menu.addAction("Identify Track…")

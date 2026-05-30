@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 from lyon.core import podcast
-from lyon.core.podcast import fetch_feed, parse_feed_text, parse_opml_text, subscription_from_settings
+from lyon.core.podcast import (
+    fetch_feed,
+    parse_feed_text,
+    parse_opml_text,
+    subscription_from_settings,
+)
 from lyon.core.settings import Settings, normalize_podcast_subscriptions
 
 

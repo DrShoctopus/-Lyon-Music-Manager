@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from lyon.core import library as library_module
-from lyon.core.library import Library, SUPPORTED_AUDIO_EXTS
+from lyon.core.library import SUPPORTED_AUDIO_EXTS, Library
 
 
 def add_track(

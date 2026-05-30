@@ -1,5 +1,5 @@
-import io
 import importlib.util
+import io
 import sys
 import types
 
@@ -135,24 +135,24 @@ from lyon.core.cd_detect import DiscToc  # noqa: E402
 from lyon.core.metadata import AlbumInfo, TrackInfo  # noqa: E402
 from lyon.core.ripper import (  # noqa: E402
     CDDA_SECTOR_SIZE,
+    WINDOWS_CDDA_FALLBACK_READ_CHUNK_SECTORS,
+    WINDOWS_CDDA_INITIAL_READ_CHUNK_SECTORS,
     FfmpegAttemptFailure,
     RipFailure,
     RipRequest,
     RipWorker,
-    WINDOWS_CDDA_FALLBACK_READ_CHUNK_SECTORS,
-    WINDOWS_CDDA_INITIAL_READ_CHUNK_SECTORS,
-    _MacDarwinCddaReadError,
-    _MacDarwinCddaReader,
-    _WindowsCddaReadError,
-    _WindowsCddaReader,
     _build_libcdio_track_command,
     _build_raw_cdda_ffmpeg_command,
     _ffmpeg_format_listing_has_demuxer,
+    _MacDarwinCddaReader,
+    _MacDarwinCddaReadError,
     _parse_progress,
     _summarize_ffmpeg_failure,
     _track_sector_span,
     _unique_track_output,
     _windows_cdda_drive_path,
+    _WindowsCddaReader,
+    _WindowsCddaReadError,
     _write_failure_log,
     format_extension,
     safe_path_component,
@@ -163,7 +163,11 @@ from lyon.core.ripper import (  # noqa: E402
 )
 from lyon.core.settings import Settings  # noqa: E402
 from lyon.ui import ripper_view as ripper_view_module  # noqa: E402
-from lyon.ui.ripper_view import RipperView, _existing_target_files, _rip_request_from_toc  # noqa: E402
+from lyon.ui.ripper_view import (  # noqa: E402
+    RipperView,
+    _existing_target_files,
+    _rip_request_from_toc,
+)
 
 if _PYSIDE_STUBBED:
     for _module_name in ("PySide6.QtWidgets", "PySide6.QtGui", "PySide6.QtCore", "PySide6"):

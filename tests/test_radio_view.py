@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-import pytest
 from unittest.mock import patch
+
+import pytest
 
 QtWidgets = pytest.importorskip("PySide6.QtWidgets", exc_type=ImportError)
 
 from lyon.core.radio import RadioStation
 from lyon.core.settings import Settings
 from lyon.ui import radio_view as radio_view_module
-from lyon.ui import radio_station_dialog as radio_station_dialog_module
 from lyon.ui.radio_view import _COL_STATUS, RadioView
 
 

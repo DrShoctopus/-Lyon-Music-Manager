@@ -3,13 +3,29 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFrame, QHBoxLayout, QLabel,
-    QLineEdit, QPushButton, QScrollArea, QSpinBox, QVBoxLayout, QWidget,
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QScrollArea,
+    QSpinBox,
+    QVBoxLayout,
+    QWidget,
 )
 
 from ..core.smart_playlist import (
-    FIELDS, FIELD_MAP, OPS_FOR_TYPE, ORDER_BY_OPTIONS,
-    Rule, SmartPlaylistSpec, spec_from_json,
+    FIELD_MAP,
+    FIELDS,
+    OPS_FOR_TYPE,
+    ORDER_BY_OPTIONS,
+    Rule,
+    SmartPlaylistSpec,
+    spec_from_json,
 )
 
 

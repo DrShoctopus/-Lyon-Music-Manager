@@ -1,17 +1,16 @@
 from __future__ import annotations
 
-import os
 import base64
+import os
 
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 QtWidgets = pytest.importorskip("PySide6.QtWidgets", exc_type=ImportError)
 
-from lyon.core.metadata import AlbumInfo
 from lyon.core.library import Track
+from lyon.core.metadata import AlbumInfo
 from lyon.ui import metadata_fetch_dialog as metadata_fetch_dialog_module
-
 
 PNG_1X1 = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAA7EAAAOxAGVKw4b"

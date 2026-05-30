@@ -1,7 +1,6 @@
 """Tests for the Now Playing lyrics pipeline: LRCLIB fetch, cache, race-guard, settings toggle."""
 from __future__ import annotations
 
-import io
 import json
 import os
 from unittest.mock import patch
@@ -17,7 +16,7 @@ from lyon.core.library import Track
 from lyon.core.metadata import ArtistInfo
 from lyon.core.player import Player
 from lyon.core.settings import Settings
-from lyon.ui.now_playing import NowPlayingView, _InfoPanel, _fetch_lrclib, _parse_lrc
+from lyon.ui.now_playing import NowPlayingView, _fetch_lrclib, _InfoPanel, _parse_lrc
 
 
 class _FakeBackend(QtCore.QObject):

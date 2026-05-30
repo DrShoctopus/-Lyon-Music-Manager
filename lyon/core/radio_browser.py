@@ -5,7 +5,7 @@ import json
 import logging
 import ssl
 from collections import OrderedDict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 

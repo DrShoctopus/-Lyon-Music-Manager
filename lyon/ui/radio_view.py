@@ -9,15 +9,34 @@ from pathlib import Path
 from PySide6.QtCore import QEvent, QObject, QRunnable, QStringListModel, Qt, QThreadPool, Signal
 from PySide6.QtGui import QAction, QBrush, QColor
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QCompleter, QDialog, QFileDialog,
-    QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMenu, QMessageBox,
-    QPushButton, QTabWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QAbstractItemView,
+    QApplication,
+    QCompleter,
+    QDialog,
+    QFileDialog,
+    QFrame,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLineEdit,
+    QMenu,
+    QMessageBox,
+    QPushButton,
+    QTableWidget,
+    QTableWidgetItem,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
 )
 
 from ..core.radio import (
-    RadioStation, check_station_health, parse_playlist_file,
-    station_from_settings, station_from_url,
-    stations_to_m3u, stations_to_pls,
+    RadioStation,
+    check_station_health,
+    parse_playlist_file,
+    station_from_settings,
+    station_from_url,
+    stations_to_m3u,
+    stations_to_pls,
 )
 from ..core.settings import Settings, normalize_radio_stations
 from .radio_browser_panel import RadioBrowserPanel

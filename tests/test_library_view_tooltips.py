@@ -1,5 +1,4 @@
 import pytest
-
 from lyon.core.library import Track
 
 pytest.importorskip("PySide6.QtGui", exc_type=ImportError)

@@ -13,8 +13,8 @@ import platform
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QUrl, Qt
-from PySide6.QtGui import QClipboard, QDesktopServices, QGuiApplication, QPixmap
+from PySide6.QtCore import Qt, QUrl
+from PySide6.QtGui import QClipboard, QDesktopServices, QGuiApplication
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,

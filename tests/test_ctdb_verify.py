@@ -1,7 +1,7 @@
 """Tests for lyon.core.ctdb_verify — CRC computation and CTDB lookup parsing."""
-import io
 import importlib.machinery
 import importlib.util
+import io
 import struct
 import sys
 import threading
@@ -26,16 +26,13 @@ def _install_dependency_stubs() -> None:
 
 _install_dependency_stubs()
 
+import defusedxml.ElementTree as ET
 from lyon.core.ctdb_verify import (  # noqa: E402
-    TrackVerifyResult,
     _iter_tag,
     compute_accuraterip_v1_crc,
     fetch_ctdb_crcs,
     verify_rips,
 )
-
-import defusedxml.ElementTree as ET
-
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -6,14 +6,12 @@ import time
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 from lyon.core.scrobbler import (
+    _SCROBBLE_CAP_S,
     ScrobblerService,
     _lastfm_post,
     _lastfm_sign,
     _lbz_post,
-    _MIN_TRACK_DURATION_S,
-    _SCROBBLE_CAP_S,
     _scrobbler_user_agent,
 )
 from lyon.core.settings import Settings

@@ -3,16 +3,12 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from lyon.core.dlna_renderer_discovery import (
-    RendererDevice,
     _el_text,
     _fetch_device,
     _header_value,
     _scan,
 )
-
 
 # ---------------------------------------------------------------------------
 # _header_value
@@ -166,7 +162,7 @@ def test_scan_discovers_renderer():
     ssdp_response = (
         "HTTP/1.1 200 OK\r\n"
         "LOCATION: http://192.168.1.5:49152/description.xml\r\n"
-        f"ST: urn:schemas-upnp-org:device:MediaRenderer:1\r\n"
+        "ST: urn:schemas-upnp-org:device:MediaRenderer:1\r\n"
         "\r\n"
     ).encode("utf-8")
 

@@ -3,17 +3,32 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
-
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFileDialog,
-    QFormLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QMessageBox,
-    QPushButton, QScrollArea, QSizePolicy, QSpinBox, QTabWidget, QVBoxLayout, QWidget,
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QDoubleSpinBox,
+    QFileDialog,
+    QFormLayout,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QMessageBox,
+    QPushButton,
+    QScrollArea,
+    QSizePolicy,
+    QSpinBox,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
 )
 
-from ..core.settings import Settings, normalize_library_paths
+from ..core.settings import Settings, normalize_library_paths, normalize_update_appcast_url
 from .about_dialog import build_about_widget
 
 if TYPE_CHECKING:
@@ -140,7 +155,8 @@ class SettingsDialog(QDialog):
         browse.clicked.connect(self._browse_root)
         root_row.addWidget(self.root_edit, 1)
         root_row.addWidget(browse)
-        root_w = QWidget(); root_w.setLayout(root_row)
+        root_w = QWidget()
+        root_w.setLayout(root_row)
         self._expand_field(root_w, _PATH_FIELD_MIN_WIDTH)
         form.addRow("Music folder:", root_w)
 
@@ -166,7 +182,8 @@ class SettingsDialog(QDialog):
         folder_buttons.addStretch(1)
         folders_box.addWidget(self.library_paths)
         folders_box.addLayout(folder_buttons)
-        folders_w = QWidget(); folders_w.setLayout(folders_box)
+        folders_w = QWidget()
+        folders_w.setLayout(folders_box)
         self._expand_field(folders_w, _PATH_FIELD_MIN_WIDTH)
         form.addRow("Library folders:", folders_w)
 
@@ -449,7 +466,8 @@ class SettingsDialog(QDialog):
         browse_save.clicked.connect(lambda: self._browse_yt_dir(self.yt_save_dir))
         save_dir_row.addWidget(self.yt_save_dir, 1)
         save_dir_row.addWidget(browse_save)
-        save_dir_w = QWidget(); save_dir_w.setLayout(save_dir_row)
+        save_dir_w = QWidget()
+        save_dir_w.setLayout(save_dir_row)
         self._expand_field(save_dir_w, _PATH_FIELD_MIN_WIDTH)
         form.addRow("Save folder:", save_dir_w)
 
@@ -626,7 +644,9 @@ class SettingsDialog(QDialog):
         # Persist the URL toggle from the form first, then ask the parent
         # window to run a manual check. The parent owns the worker lifecycle.
         self.result_settings.update_check_enabled = self.update_check_enabled.isChecked()
-        self.result_settings.update_appcast_url = self.update_appcast_url.text().strip()
+        self.result_settings.update_appcast_url = normalize_update_appcast_url(
+            self.update_appcast_url.text().strip()
+        )
         parent = self.parent()
         check = getattr(parent, "check_for_updates_now", None)
         if callable(check):
@@ -837,8 +857,7 @@ class SettingsDialog(QDialog):
         )
         self.result_settings.update_check_enabled = self.update_check_enabled.isChecked()
         url = self.update_appcast_url.text().strip()
-        if url:
-            self.result_settings.update_appcast_url = url
+        self.result_settings.update_appcast_url = normalize_update_appcast_url(url)
         # lastfm_session_key and lastfm_username are updated live by the auth flow;
         # preserve whatever's there.
         self.accept()

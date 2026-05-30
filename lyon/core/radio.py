@@ -1,8 +1,7 @@
 """Internet radio station and playlist parsing helpers."""
 from __future__ import annotations
 
-import dataclasses
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 

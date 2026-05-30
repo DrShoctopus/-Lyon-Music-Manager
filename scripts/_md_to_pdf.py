@@ -9,7 +9,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QMarginsF, QSizeF, Qt
+from PySide6.QtCore import QMarginsF, QSizeF
 from PySide6.QtGui import QPageLayout, QPageSize, QPdfWriter, QTextDocument
 from PySide6.QtWidgets import QApplication
 

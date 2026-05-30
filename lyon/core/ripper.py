@@ -30,7 +30,6 @@ from .ffmpeg import find_ffmpeg_binary
 from .metadata import AlbumInfo, TrackInfo, fetch_artwork
 from .settings import Settings
 
-
 SAFE_CHARS_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 # Windows refuses to create files whose basename (with or without extension)
 # matches one of these reserved device names, even on NTFS via Win32.

@@ -5,14 +5,13 @@ import threading
 import time
 
 import pytest
-
 from lyon.core.cd_detect import DiscToc
 from lyon.core.disc_playback import (
     DiscKind,
     cdda_track_options,
     cdda_uri,
-    dvd_uri,
     drive_root,
+    dvd_uri,
     probe_video_disc,
     tracks_from_audio_cd,
     vcd_uri,

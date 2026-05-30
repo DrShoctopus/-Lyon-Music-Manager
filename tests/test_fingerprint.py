@@ -5,16 +5,13 @@ import os
 from unittest.mock import patch
 
 import pytest
-
 from lyon.core.fingerprint import (
     api_key,
     fingerprint_file,
     is_available,
     is_lookup_configured,
     lookup_candidates,
-    _fpcalc_path,
 )
-
 
 # ------------------------------------------------------------------ is_available
 
@@ -31,7 +28,7 @@ class TestIsAvailable:
 
     def test_true_when_acoustid_and_fpcalc_present(self, monkeypatch, tmp_path):
         # Fake a fpcalc binary in tmp_path/bin/
-        import sys, shutil
+        import sys
         binary = "fpcalc.exe" if sys.platform == "win32" else "fpcalc"
         (tmp_path / "bin").mkdir()
         fake_bin = tmp_path / "bin" / binary
@@ -78,19 +75,13 @@ class TestFingerprintFile:
         assert result is None
 
     def test_returns_none_on_exception(self, monkeypatch):
-        try:
-            import acoustid
-        except ImportError:
-            pytest.skip("pyacoustid not installed")
+        pytest.importorskip("acoustid")
         monkeypatch.setattr("acoustid.fingerprint_file", lambda *a, **kw: (_ for _ in ()).throw(Exception("fail")))
         result = fingerprint_file("/nonexistent/path.flac")
         assert result is None
 
     def test_returns_tuple_on_success(self, monkeypatch):
-        try:
-            import acoustid
-        except ImportError:
-            pytest.skip("pyacoustid not installed")
+        pytest.importorskip("acoustid")
         monkeypatch.setattr("acoustid.fingerprint_file", lambda path: (180, "AQADtM..."))
         result = fingerprint_file("/fake/file.flac")
         assert result is not None
@@ -116,10 +107,7 @@ class TestLookupCandidates:
         assert result == []
 
     def test_returns_candidates_on_success(self, monkeypatch):
-        try:
-            import acoustid
-        except ImportError:
-            pytest.skip("pyacoustid not installed")
+        pytest.importorskip("acoustid")
 
         monkeypatch.setattr("lyon.core.fingerprint.ACOUSTID_API_KEY", "testkey")
         monkeypatch.delenv("ACOUSTID_API_KEY", raising=False)
@@ -155,10 +143,7 @@ class TestLookupCandidates:
         assert result[0]["score"] == pytest.approx(0.99)
 
     def test_sorted_by_score_descending(self, monkeypatch):
-        try:
-            import acoustid
-        except ImportError:
-            pytest.skip("pyacoustid not installed")
+        pytest.importorskip("acoustid")
 
         monkeypatch.setattr("lyon.core.fingerprint.ACOUSTID_API_KEY", "testkey")
         monkeypatch.delenv("ACOUSTID_API_KEY", raising=False)
@@ -176,10 +161,7 @@ class TestLookupCandidates:
         assert result[0]["score"] > result[1]["score"]
 
     def test_empty_on_acoustid_exception(self, monkeypatch):
-        try:
-            import acoustid
-        except ImportError:
-            pytest.skip("pyacoustid not installed")
+        pytest.importorskip("acoustid")
 
         monkeypatch.setattr("lyon.core.fingerprint.ACOUSTID_API_KEY", "testkey")
         monkeypatch.delenv("ACOUSTID_API_KEY", raising=False)

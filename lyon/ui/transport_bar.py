@@ -3,14 +3,26 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QSizePolicy, QSlider, QVBoxLayout, QWidget,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QSizePolicy,
+    QSlider,
+    QVBoxLayout,
+    QWidget,
 )
 
 from ..core.library import Library, Track
 from ..core.player import Player, RepeatMode
 from .transport import (
-    HeartButton, NextButton, PlayPauseButton, PrevButton, RepeatButton,
-    ShuffleButton, StopButton, VolumeButton,
+    HeartButton,
+    NextButton,
+    PlayPauseButton,
+    PrevButton,
+    RepeatButton,
+    ShuffleButton,
+    StopButton,
+    VolumeButton,
 )
 from .widgets import ElidedLabel, cover_pixmap, format_ms
 

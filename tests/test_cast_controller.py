@@ -6,12 +6,10 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-
-from lyon.core.cast_controller import CastController, _SoapJob, _didl, _media_url, _soap
+from lyon.core.cast_controller import CastController, _didl, _media_url, _soap, _SoapJob
 from lyon.core.dlna_renderer_discovery import RendererDevice
 from lyon.core.library import Track
 from lyon.core.player import RepeatMode
-
 
 # ---------------------------------------------------------------------------
 # Helpers / fixtures

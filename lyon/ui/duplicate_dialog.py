@@ -1,18 +1,31 @@
 """Dialog for finding and removing duplicate tracks."""
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QRunnable, QThreadPool, Signal, QObject
+from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
-    QAbstractItemView, QComboBox, QDialog, QDialogButtonBox, QHBoxLayout,
-    QHeaderView, QLabel, QMessageBox, QProgressBar, QPushButton, QTreeWidget,
-    QTreeWidgetItem, QVBoxLayout, QWidget,
+    QAbstractItemView,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QMessageBox,
+    QProgressBar,
+    QPushButton,
+    QTreeWidget,
+    QTreeWidgetItem,
+    QVBoxLayout,
+    QWidget,
 )
-from PySide6.QtCore import QUrl
 
 from ..core.library import Library, Track
+
+LOG = logging.getLogger(__name__)
 
 
 class DuplicateDialog(QDialog):
@@ -379,8 +392,8 @@ class _FingerprintScanDialog(QDialog):
                         candidates = lookup_candidates(track.path)
                         if candidates and candidates[0].get("acoustid"):
                             library.update_acoustid(track.id, candidates[0]["acoustid"])
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        LOG.debug("AcoustID lookup failed for %s: %s", track.path, exc)
                 signals.finished.emit()
 
         QThreadPool.globalInstance().start(_ScanTask(self))
