@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..core.settings import Settings, normalize_library_paths, normalize_update_appcast_url
+from ..core.youtube_options import YT_BROWSER_COOKIE_BROWSERS
 from .about_dialog import build_about_widget
 
 if TYPE_CHECKING:
@@ -53,19 +54,6 @@ _FORM_FIELD_MIN_WIDTH = 280
 _PATH_FIELD_MIN_WIDTH = 420
 _COMBO_FIELD_MIN_WIDTH = 220
 _SPIN_FIELD_MIN_WIDTH = 160
-
-_YT_COOKIE_BROWSERS = [
-    ("Firefox", "firefox"),
-    ("Chrome", "chrome"),
-    ("Edge", "edge"),
-    ("Safari", "safari"),
-    ("Chromium", "chromium"),
-    ("Brave", "brave"),
-    ("Opera", "opera"),
-    ("Vivaldi", "vivaldi"),
-    ("Whale", "whale"),
-]
-
 
 class SettingsDialog(QDialog):
     def __init__(
@@ -499,7 +487,7 @@ class SettingsDialog(QDialog):
 
         self.yt_browser_cookies_browser = QComboBox()
         self._prepare_combo(self.yt_browser_cookies_browser)
-        for label, key in _YT_COOKIE_BROWSERS:
+        for label, key in YT_BROWSER_COOKIE_BROWSERS:
             self.yt_browser_cookies_browser.addItem(label, key)
         for i in range(self.yt_browser_cookies_browser.count()):
             if self.yt_browser_cookies_browser.itemData(i) == settings.yt_browser_cookies_browser:

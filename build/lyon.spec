@@ -63,7 +63,7 @@ def package_data_files(package_name: str, suffixes: tuple[str, ...]) -> list[tup
     dest_root = Path(*package_name.split("."))
     return [
         (str(path), str(dest_root / path.relative_to(package_dir).parent))
-        for path in package_dir.rglob("*")
+        for path in sorted(package_dir.rglob("*"), key=lambda item: item.relative_to(package_dir).as_posix())
         if path.is_file() and path.suffix in suffixes
     ]
 
