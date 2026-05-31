@@ -117,8 +117,8 @@ def test_settings_about_tab_matches_about_dialog_layout(app):
 
 def test_yt_download_dialog_uses_status_bar_instead_of_log(app, tmp_path):
     from lyon.core.library import Library
-    from lyon.ui.yt_download_dialog import YtDownloadDialog
     from lyon.ui.widgets import AppProgressBar
+    from lyon.ui.yt_download_dialog import YtDownloadDialog
 
     library = Library(tmp_path / "library.db")
     dlg = YtDownloadDialog(
