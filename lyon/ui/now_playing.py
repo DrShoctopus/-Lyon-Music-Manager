@@ -352,7 +352,7 @@ class NowPlayingView(QWidget):
     """Now Playing screen with cinematic background, panel switcher, and interactive queue."""
 
     # Emitted from the lyrics-fetch worker thread; always delivered on the main thread.
-    _lyrics_ready = Signal(int, str, str)   # task_id, synced_lrc, plain_text
+    _lyrics_ready = Signal(object, str, str)   # lyrics cache key, synced_lrc, plain_text
     _artist_ready = Signal(str, object, object)  # cache key, ArtistInfo | None, image bytes | None
     request_edit_metadata = Signal(object)  # Track
 
@@ -379,9 +379,9 @@ class NowPlayingView(QWidget):
         self._blur_timer.setInterval(80)
         self._blur_timer.timeout.connect(self._rebuild_blur)
         self._current_track: Track | None = None
-        self._lyrics_task_id: int = 0   # track.id of the in-flight LRCLIB request; 0 = none
-        # track.id → (synced_lrc, plain_text); empty strings mean "we asked LRCLIB and got nothing".
-        self._lyrics_cache: dict[int, tuple[str, str]] = {}
+        self._lyrics_task_key: tuple[object, ...] | None = None
+        # (track id + lyric lookup metadata) → (synced_lrc, plain_text).
+        self._lyrics_cache: dict[tuple[object, ...], tuple[str, str]] = {}
         self._artist_task_key = ""
         self._artist_cache: dict[str, tuple[object, bytes | None]] = {}
 
@@ -624,7 +624,7 @@ class NowPlayingView(QWidget):
     # ---- Lyrics loading ------------------------------------------------
 
     def _load_lyrics(self, track: Track) -> None:
-        self._lyrics_task_id = 0  # cancel any in-flight LRCLIB request
+        self._lyrics_task_key = None  # cancel any in-flight LRCLIB request
         path = track.path
         # 1. Try .lrc sidecar file for synced lyrics
         lrc_path = Path(path).with_suffix(".lrc")
@@ -651,7 +651,8 @@ class NowPlayingView(QWidget):
             self._lyrics_panel.set_lyrics([], None)
             return
         # 3a. Serve from in-memory cache when we've already asked LRCLIB this session.
-        cached = self._lyrics_cache.get(track.id)
+        cache_key = self._lyrics_cache_key(track)
+        cached = self._lyrics_cache.get(cache_key)
         if cached is not None:
             self._apply_lyrics_result(*cached)
             return
@@ -660,8 +661,8 @@ class NowPlayingView(QWidget):
         self._fetch_lyrics_online(track)
 
     def _fetch_lyrics_online(self, track: Track) -> None:
-        task_id = track.id
-        self._lyrics_task_id = task_id
+        task_key = self._lyrics_cache_key(track)
+        self._lyrics_task_key = task_key
 
         def _worker() -> None:
             synced, plain = _fetch_lrclib(
@@ -670,20 +671,31 @@ class NowPlayingView(QWidget):
                 track.album or "",
                 track.duration,
             )
-            self._lyrics_ready.emit(task_id, synced, plain)
+            self._lyrics_ready.emit(task_key, synced, plain)
 
         threading.Thread(target=_worker, daemon=True).start()
 
-    def _on_lyrics_ready(self, task_id: int, synced_lrc: str, plain: str) -> None:
+    @staticmethod
+    def _lyrics_cache_key(track: Track) -> tuple[object, ...]:
+        return (
+            int(track.id or 0),
+            (track.display_artist or "").strip().casefold(),
+            (track.title or "").strip().casefold(),
+            (track.album or "").strip().casefold(),
+            int(track.duration or 0),
+        )
+
+    def _on_lyrics_ready(self, task_key: object, synced_lrc: str, plain: str) -> None:
         # Keep successful hits only. Empty results can also mean a transient
         # network/certificate failure, so caching them makes known-good tracks
         # look lyric-less until the app restarts.
-        if synced_lrc or plain:
-            self._lyrics_cache[task_id] = (synced_lrc, plain)
+        cache_key = task_key if isinstance(task_key, tuple) else None
+        if cache_key is not None and (synced_lrc or plain):
+            self._lyrics_cache[cache_key] = (synced_lrc, plain)
             if len(self._lyrics_cache) > self._PANEL_CACHE_MAX:
                 for key in list(self._lyrics_cache.keys())[:-self._PANEL_CACHE_MAX]:
                     del self._lyrics_cache[key]
-        if task_id != self._lyrics_task_id:
+        if cache_key != self._lyrics_task_key:
             return  # stale result — track changed while fetch was in flight
         self._apply_lyrics_result(synced_lrc, plain)
 
