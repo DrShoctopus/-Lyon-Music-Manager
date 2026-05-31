@@ -97,8 +97,11 @@ verify_arm64_only "$VENDOR/fpcalc"
 
 # --- libVLC DMG -------------------------------------------------------
 VLC_DMG_URL="https://download.videolan.org/pub/videolan/vlc/${VLC_VERSION}/macosx/vlc-${VLC_VERSION}-arm64.dmg"
-if [ ! -f "$VENDOR/vlc.dmg" ]; then
+VLC_DMG_VERSION_FILE="$VENDOR/vlc.dmg.version"
+
+fetch_vlc_dmg() {
     echo "Fetching libVLC ${VLC_VERSION} (arm64 DMG)..."
+    rm -f "$VENDOR/vlc.dmg" "$VENDOR/vlc.dmg.sha256.txt" "$VLC_DMG_VERSION_FILE"
     curl -fsSL "${VLC_DMG_URL}" -o "$VENDOR/vlc.dmg"
     # Verify SHA-256 if a sidecar checksum is available
     SHA_URL="${VLC_DMG_URL}.sha256"
@@ -110,6 +113,14 @@ if [ ! -f "$VENDOR/vlc.dmg" ]; then
             exit 1
         fi
     fi
+    printf '%s\n' "$VLC_VERSION" > "$VLC_DMG_VERSION_FILE"
+}
+
+if [ ! -f "$VENDOR/vlc.dmg" ]; then
+    fetch_vlc_dmg
+elif [ ! -f "$VLC_DMG_VERSION_FILE" ] || [ "$(cat "$VLC_DMG_VERSION_FILE")" != "$VLC_VERSION" ]; then
+    echo "Cached libVLC DMG is not ${VLC_VERSION}; refetching..."
+    fetch_vlc_dmg
 fi
 
 # --- libdiscid (build from source on arm64 runner) --------------------

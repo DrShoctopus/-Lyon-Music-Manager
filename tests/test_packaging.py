@@ -170,6 +170,30 @@ def test_macos_vendor_script_verifies_and_replaces_vendor_archives():
     assert "musicbrainz.org/static/libdiscid" not in script
 
 
+def test_windows_build_script_uses_current_vlc_version_for_local_builds():
+    repo = Path(__file__).resolve().parents[1]
+    script = (repo / "scripts" / "build-windows.ps1").read_text(encoding="utf-8")
+
+    assert "$VlcVersion = '3.0.23'" in script
+    assert "$vlcArchive = \"vlc-$VlcVersion-win64.zip\"" in script
+    assert "/vlc/$VlcVersion/win64/" in script
+    assert "$vlcVersion = '3.0.21'" not in script
+
+
+def test_vendor_scripts_refetch_cached_vlc_when_version_changes():
+    repo = Path(__file__).resolve().parents[1]
+    mac_script = (repo / "scripts" / "fetch-macos-vendor-binaries.sh").read_text(encoding="utf-8")
+    windows_script = (repo / "scripts" / "build-windows.ps1").read_text(encoding="utf-8")
+
+    assert "VLC_DMG_VERSION_FILE=\"$VENDOR/vlc.dmg.version\"" in mac_script
+    assert "Cached libVLC DMG is not ${VLC_VERSION}; refetching" in mac_script
+    assert "printf '%s\\n' \"$VLC_VERSION\" > \"$VLC_DMG_VERSION_FILE\"" in mac_script
+
+    assert "$vlcVersionMarker = Join-Path $vlcDir 'lyon-vlc-version.txt'" in windows_script
+    assert "bin\\vlc runtime is missing or not version $VlcVersion; refreshing" in windows_script
+    assert "Set-Content -Path $vlcVersionMarker -Value $VlcVersion" in windows_script
+
+
 def test_macos_bundle_script_cleans_up_vlc_mount():
     repo = Path(__file__).resolve().parents[1]
     script = (repo / "scripts" / "build-macos-bundle.sh").read_text(encoding="utf-8")

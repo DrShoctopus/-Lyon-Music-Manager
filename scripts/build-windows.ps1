@@ -44,6 +44,7 @@ Write-Host "    Project root: $Root"
 $ChromaprintVersion = '1.5.1'
 $FpcalcArchive = 'chromaprint-fpcalc-1.5.1-windows-x86_64.zip'
 $FpcalcUrl = 'https://github.com/acoustid/chromaprint/releases/download/v1.5.1/chromaprint-fpcalc-1.5.1-windows-x86_64.zip'
+$VlcVersion = '3.0.23'
 
 function Get-ExpectedSha256FromText {
     param(
@@ -211,9 +212,13 @@ $fpcalcRelease = [pscustomobject]@{
 $needFpcalc = -not (Test-Path $fpcalcPath)
 $needDiscid = -not (Test-Path (Join-Path $bin 'discid.dll'))
 $vlcDir = Join-Path $bin 'vlc'
+$vlcVersionMarker = Join-Path $vlcDir 'lyon-vlc-version.txt'
+$vlcVersionMatches = (Test-Path $vlcVersionMarker) -and
+                     ((Get-Content -Path $vlcVersionMarker -Raw).Trim() -eq $VlcVersion)
 $needVlc = -not (Test-Path (Join-Path $vlcDir 'libvlc.dll')) -or
            -not (Test-Path (Join-Path $vlcDir 'libvlccore.dll')) -or
-           -not (Test-Path (Join-Path $vlcDir 'plugins'))
+           -not (Test-Path (Join-Path $vlcDir 'plugins')) -or
+           -not $vlcVersionMatches
 
 if (-not $SkipBinaries) {
     if (Test-Path $fpcalcPath) {
@@ -318,13 +323,13 @@ if ($SkipBinaries) {
     }
 
     if ($needVlc) {
+        Write-Host "    bin\vlc runtime is missing or not version $VlcVersion; refreshing"
         Write-Host "==> Downloading VLC runtime (Windows x64)" -ForegroundColor Cyan
-        $vlcVersion = '3.0.21'
         $tmp = Join-Path $env:TEMP "lyon-vlc.zip"
         $extract = Join-Path $env:TEMP 'lyon-vlc-extract'
         if (Test-Path $extract) { Remove-Item $extract -Recurse -Force }
-        $vlcArchive = "vlc-$vlcVersion-win64.zip"
-        $vlcUrl = "https://download.videolan.org/pub/videolan/vlc/$vlcVersion/win64/$vlcArchive"
+        $vlcArchive = "vlc-$VlcVersion-win64.zip"
+        $vlcUrl = "https://download.videolan.org/pub/videolan/vlc/$VlcVersion/win64/$vlcArchive"
         Invoke-VerifiedDownload `
             -Uri $vlcUrl `
             -OutFile $tmp `
@@ -341,6 +346,7 @@ if ($SkipBinaries) {
         if (-not (Test-Path (Join-Path $vlcDir 'libvlc.dll'))) { throw "libvlc.dll was not copied to bin\vlc." }
         if (-not (Test-Path (Join-Path $vlcDir 'libvlccore.dll'))) { throw "libvlccore.dll was not copied to bin\vlc." }
         if (-not (Test-Path (Join-Path $vlcDir 'plugins'))) { throw "VLC plugins directory was not copied to bin\vlc." }
+        Set-Content -Path $vlcVersionMarker -Value $VlcVersion
         Remove-Item $tmp; Remove-Item $extract -Recurse -Force
     } else {
         Write-Host "    bin\vlc runtime already present; skipping"
