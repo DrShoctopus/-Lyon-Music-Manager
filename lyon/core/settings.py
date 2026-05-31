@@ -19,23 +19,13 @@ from .equalizer import (
     flat_equalizer_bands,
     normalize_equalizer_bands,
 )
+from .youtube_options import normalize_yt_browser_cookie_browser
 
 LOG = logging.getLogger(__name__)
 _RIP_FORMATS = {"flac", "mp3", "aac", "opus", "ogg", "alac", "wav", "aiff", "wma"}
 _YT_AUDIO_FORMATS = {"flac", "mp3"}
 _YT_VIDEO_FORMATS = {"mp4", "mkv", "webm"}
 _YT_VIDEO_QUALITIES = {"best", "1080p", "2k", "4k"}
-_YT_BROWSER_COOKIE_BROWSERS = {
-    "brave",
-    "chrome",
-    "chromium",
-    "edge",
-    "firefox",
-    "opera",
-    "safari",
-    "vivaldi",
-    "whale",
-}
 _STREAM_URL_SCHEMES = {
     "http",
     "https",
@@ -403,9 +393,9 @@ class Settings:
         if self.yt_video_quality not in _YT_VIDEO_QUALITIES:
             self.yt_video_quality = "best"
         self.yt_use_browser_cookies = _bool_value(self.yt_use_browser_cookies, False)
-        self.yt_browser_cookies_browser = str(self.yt_browser_cookies_browser or "firefox").lower()
-        if self.yt_browser_cookies_browser not in _YT_BROWSER_COOKIE_BROWSERS:
-            self.yt_browser_cookies_browser = "firefox"
+        self.yt_browser_cookies_browser = normalize_yt_browser_cookie_browser(
+            self.yt_browser_cookies_browser
+        )
         self.library_paths = normalize_library_paths(self.library_paths)
         self.watch_library_folders = _bool_value(self.watch_library_folders, True)
         self.equalizer_preamp = clamp_preamp(self.equalizer_preamp)

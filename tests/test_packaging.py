@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import runpy
 import sys
@@ -269,13 +270,15 @@ def test_macos_bundle_script_cleans_up_vlc_mount():
 def test_macos_vendor_script_fetches_and_verifies_deno_runtime():
     repo = Path(__file__).resolve().parents[1]
     script = (repo / "scripts" / "fetch-macos-vendor-binaries.sh").read_text(encoding="utf-8")
+    manifest = json.loads((repo / "build" / "vendor-runtimes.json").read_text(encoding="utf-8"))
 
-    assert "DENO_URL" in script
-    assert "DENO_SHA256" in script
-    assert "deno-aarch64-apple-darwin.zip" in script
+    assert manifest["deno"]["macos_arm64"]["archive"] == "deno-aarch64-apple-darwin.zip"
+    assert "load_deno_manifest_value url" in script
+    assert "load_deno_manifest_value sha256" in script
+    assert 'download_with_retries "${DENO_URL}" "$VENDOR/deno.zip"' in script
     assert "Fetching deno (arm64)" in script
-    assert "verify_checksum \"$VENDOR/deno.zip\" \"$DENO_SHA256\"" in script
-    assert "verify_arm64_only \"$VENDOR/deno\"" in script
+    assert 'verify_checksum "$VENDOR/deno.zip" "$DENO_SHA256"' in script
+    assert 'verify_arm64_only "$VENDOR/deno"' in script
     assert "Cached deno is not arm64; refetching" in script
 
 
@@ -291,10 +294,14 @@ def test_macos_bundle_script_injects_and_verifies_deno_runtime():
 def test_windows_build_script_fetches_and_verifies_deno_runtime():
     repo = Path(__file__).resolve().parents[1]
     script = (repo / "scripts" / "build-windows.ps1").read_text(encoding="utf-8")
+    manifest = json.loads((repo / "build" / "vendor-runtimes.json").read_text(encoding="utf-8"))
 
-    assert "$DenoVersion = '2.8.1'" in script
-    assert "$DenoArchive = 'deno-x86_64-pc-windows-msvc.zip'" in script
-    assert "$DenoSha256 = '5fb5bac71f609fb91ec8960fb290885aadc27eeb22f07a8eca0c3db6be38b11a'" in script
+    assert manifest["deno"]["windows"]["archive"] == "deno-x86_64-pc-windows-msvc.zip"
+    assert "$VendorRuntimeManifest = Get-Content" in script
+    assert "$DenoVersion = [string]$VendorRuntimeManifest.deno.version" in script
+    assert "$DenoArchive = [string]$VendorRuntimeManifest.deno.windows.archive" in script
+    assert "$DenoSha256 = [string]$VendorRuntimeManifest.deno.windows.sha256" in script
+    assert "Invoke-WebRequestWithRetry -Uri $denoRelease.Url -OutFile $tmp" in script
     assert "Test-DenoVersion" in script
     assert "Assert-DenoVersion" in script
     assert "bin\\deno.exe is missing or not version $DenoVersion; refreshing" in script

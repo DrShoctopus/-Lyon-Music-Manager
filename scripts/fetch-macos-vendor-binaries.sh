@@ -6,6 +6,44 @@ set -euo pipefail
 VENDOR="vendor-mac"
 mkdir -p "$VENDOR"
 
+load_deno_manifest_value() {
+    local key="$1"
+    local python_bin
+    python_bin=$(command -v python3 || command -v python)
+    "$python_bin" - "$key" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+key = sys.argv[1]
+manifest = json.loads(Path("build/vendor-runtimes.json").read_text(encoding="utf-8"))
+deno = manifest["deno"]
+platform = deno["macos_arm64"]
+values = {
+    "version": deno["version"],
+    "url": platform["url"],
+    "sha256": platform["sha256"],
+}
+print(values[key])
+PY
+}
+
+download_with_retries() {
+    local url="$1"
+    local output="$2"
+    local attempts="${3:-3}"
+    local attempt
+    for attempt in $(seq 1 "$attempts"); do
+        if curl -fsSL "$url" -o "$output"; then
+            return 0
+        fi
+        if [ "$attempt" -ge "$attempts" ]; then
+            return 1
+        fi
+        sleep $((attempt * 2))
+    done
+}
+
 VLC_VERSION="${VLC_VERSION:-3.0.23}"
 LIBDISCID_VERSION="${LIBDISCID_VERSION:-0.6.4}"
 FPCALC_URL="${FPCALC_URL:-https://github.com/acoustid/chromaprint/releases/download/v1.5.1/chromaprint-fpcalc-1.5.1-macos-arm64.tar.gz}"
@@ -14,8 +52,8 @@ FFMPEG_URL="${FFMPEG_URL:-https://github.com/eugeneware/ffmpeg-static/releases/d
 FFMPEG_SHA256="${FFMPEG_SHA256:-8923876afa8db5585022d7860ec7e589af192f441c56793971276d450ed3bbfa}"
 LIBDISCID_URL="${LIBDISCID_URL:-https://github.com/metabrainz/libdiscid/releases/download/v${LIBDISCID_VERSION}/libdiscid-${LIBDISCID_VERSION}.tar.gz}"
 LIBDISCID_SHA256="${LIBDISCID_SHA256:-dd5e8f1c9aead442e23b749a9cc9336372e62e88ad7079a2b62895b0390cb282}"
-DENO_URL="${DENO_URL:-https://github.com/denoland/deno/releases/download/v2.8.1/deno-aarch64-apple-darwin.zip}"
-DENO_SHA256="${DENO_SHA256:-8154e2de0ee8c1cae31fa88e078724aaef0295fab9fd2ad6f8520389cee908f6}"
+DENO_URL="${DENO_URL:-$(load_deno_manifest_value url)}"
+DENO_SHA256="${DENO_SHA256:-$(load_deno_manifest_value sha256)}"
 
 verify_checksum() {
     local f="$1"
@@ -78,7 +116,7 @@ fetch_ffmpeg() {
 
 fetch_deno() {
     rm -f "$VENDOR/deno"
-    curl -fsSL "${DENO_URL}" -o "$VENDOR/deno.zip"
+    download_with_retries "${DENO_URL}" "$VENDOR/deno.zip"
     verify_checksum "$VENDOR/deno.zip" "$DENO_SHA256"
     unzip -o -j "$VENDOR/deno.zip" "deno" -d "$VENDOR/"
     rm "$VENDOR/deno.zip"

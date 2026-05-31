@@ -6,25 +6,16 @@ import re
 import shutil
 import sys
 from pathlib import Path
+from typing import Callable
 
 from PySide6.QtCore import QThread, Signal
 
 from .ffmpeg import find_ffmpeg_binary
 from .settings import bundled_bin_dir
+from .youtube_options import is_youtube_url, yt_browser_cookies_option
 
 LOG = logging.getLogger(__name__)
 _YT_QUALITY_HEIGHT = {"1080p": 1080, "2k": 1440, "4k": 2160}
-_YT_BROWSER_COOKIE_BROWSERS = {
-    "brave",
-    "chrome",
-    "chromium",
-    "edge",
-    "firefox",
-    "opera",
-    "safari",
-    "vivaldi",
-    "whale",
-}
 _JS_RUNTIMES = ("deno", "node")
 _MACOS_RUNTIME_DIRS = (Path("/opt/homebrew/bin"), Path("/usr/local/bin"))
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
@@ -102,10 +93,18 @@ def _video_postprocessors(fmt: str) -> list[dict]:
 
 
 def _browser_cookies_option(browser: str) -> tuple[str] | None:
-    browser_name = str(browser or "").strip().lower()
-    if browser_name not in _YT_BROWSER_COOKIE_BROWSERS:
-        return None
-    return (browser_name,)
+    return yt_browser_cookies_option(browser)
+
+
+def _youtube_extractor_args_for_browser(_browser_name: str) -> dict[str, dict[str, list[str]]]:
+    """Avoid YouTube's fragile Safari web client whenever browser cookies are used.
+
+    yt-dlp may otherwise try the `web_safari` client when authenticated cookies
+    are available. That client is prone to YouTube player/JS challenge failures,
+    regardless of which local browser supplied the cookies, so keep this policy
+    centralized and explicit.
+    """
+    return {"youtube": {"player_client": ["default", "-web_safari"]}}
 
 
 def _clean_error_message(message: object) -> str:
@@ -113,33 +112,49 @@ def _clean_error_message(message: object) -> str:
     return " ".join(text.split())
 
 
+def _has_all_markers(text: str, markers: tuple[str, ...]) -> bool:
+    return all(marker in text for marker in markers)
+
+
+def _is_youtube_age_confirmation_error(text: str) -> bool:
+    # yt-dlp uses this wording when YouTube requires authenticated cookies.
+    return "Sign in to confirm your age" in text and (
+        "--cookies-from-browser" in text
+        or "--cookies" in text
+        or "cookies" in text.lower()
+    )
+
+
+def _is_macos_safari_cookie_permission_error(text: str) -> bool:
+    # macOS Full Disk Access errors include Safari's cookie container path.
+    return _has_all_markers(
+        text,
+        ("Operation not permitted", "com.apple.Safari", "Cookies.binarycookies"),
+    )
+
+
+_YOUTUBE_ERROR_CLASSIFIERS: tuple[tuple[Callable[[str], bool], str], ...] = (
+    (_is_youtube_age_confirmation_error, _YOUTUBE_BROWSER_SESSION_SETTINGS_MESSAGE),
+    (_is_macos_safari_cookie_permission_error, _SAFARI_COOKIE_PERMISSION_MESSAGE),
+)
+_YOUTUBE_JS_CHALLENGE_MARKERS = (
+    "Signature solving failed",
+    "n challenge solving failed",
+    "No supported JavaScript runtime could be found",
+)
+
+
 def _user_facing_error_message(exc: BaseException) -> str:
     text = _clean_error_message(exc)
-    if (
-        "Sign in to confirm your age" in text
-        and (
-            "--cookies-from-browser" in text
-            or "--cookies" in text
-            or "cookies" in text.lower()
-        )
-    ):
-        return _YOUTUBE_BROWSER_SESSION_SETTINGS_MESSAGE
-    if (
-        "Operation not permitted" in text
-        and "com.apple.Safari" in text
-        and "Cookies.binarycookies" in text
-    ):
-        return _SAFARI_COOKIE_PERMISSION_MESSAGE
+    for predicate, message in _YOUTUBE_ERROR_CLASSIFIERS:
+        if predicate(text):
+            return message
     return text
 
 
 def _is_youtube_js_challenge_warning(message: object) -> bool:
     text = _clean_error_message(message)
-    return (
-        "Signature solving failed" in text
-        or "n challenge solving failed" in text
-        or "No supported JavaScript runtime could be found" in text
-    )
+    return any(marker in text for marker in _YOUTUBE_JS_CHALLENGE_MARKERS)
 
 
 def _find_js_runtime_binary(name: str) -> Path | None:
@@ -316,11 +331,11 @@ class YtDownloadWorker(QThread):
         if ffmpeg_path:
             ydl_opts["ffmpeg_location"] = str(ffmpeg_path.parent)
         browser_cookies = _browser_cookies_option(self.browser_cookies_browser)
-        if browser_cookies:
+        if browser_cookies and is_youtube_url(self.url):
             ydl_opts["cookiesfrombrowser"] = browser_cookies
-            ydl_opts["extractor_args"] = {
-                "youtube": {"player_client": ["default", "-web_safari"]}
-            }
+            ydl_opts["extractor_args"] = _youtube_extractor_args_for_browser(
+                self.browser_cookies_browser
+            )
 
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:

@@ -45,10 +45,11 @@ $ChromaprintVersion = '1.5.1'
 $FpcalcArchive = 'chromaprint-fpcalc-1.5.1-windows-x86_64.zip'
 $FpcalcUrl = 'https://github.com/acoustid/chromaprint/releases/download/v1.5.1/chromaprint-fpcalc-1.5.1-windows-x86_64.zip'
 $VlcVersion = '3.0.23'
-$DenoVersion = '2.8.1'
-$DenoArchive = 'deno-x86_64-pc-windows-msvc.zip'
-$DenoUrl = "https://github.com/denoland/deno/releases/download/v$DenoVersion/$DenoArchive"
-$DenoSha256 = '5fb5bac71f609fb91ec8960fb290885aadc27eeb22f07a8eca0c3db6be38b11a'
+$VendorRuntimeManifest = Get-Content (Join-Path $Root 'build/vendor-runtimes.json') -Raw | ConvertFrom-Json
+$DenoVersion = [string]$VendorRuntimeManifest.deno.version
+$DenoArchive = [string]$VendorRuntimeManifest.deno.windows.archive
+$DenoUrl = [string]$VendorRuntimeManifest.deno.windows.url
+$DenoSha256 = [string]$VendorRuntimeManifest.deno.windows.sha256
 
 function Get-ExpectedSha256FromText {
     param(
@@ -106,6 +107,26 @@ function Assert-FileSha256 {
     Write-Host "    Verified $Label SHA-256: $actual"
 }
 
+function Invoke-WebRequestWithRetry {
+    param(
+        [Parameter(Mandatory = $true)][string]$Uri,
+        [Parameter(Mandatory = $true)][string]$OutFile,
+        [int]$Attempts = 3
+    )
+
+    for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
+        try {
+            Invoke-WebRequest -Uri $Uri -OutFile $OutFile -UseBasicParsing -ErrorAction Stop
+            return
+        } catch {
+            if ($attempt -ge $Attempts) { throw }
+            $delay = 2 * $attempt
+            Write-Host "    Download failed (attempt $attempt/$Attempts): $($_.Exception.Message). Retrying in $delay seconds..."
+            Start-Sleep -Seconds $delay
+        }
+    }
+}
+
 function Invoke-VerifiedDownload {
     param(
         [Parameter(Mandatory = $true)][string]$Uri,
@@ -114,7 +135,7 @@ function Invoke-VerifiedDownload {
         [string]$ChecksumFileName
     )
 
-    Invoke-WebRequest -Uri $Uri -OutFile $OutFile -UseBasicParsing -ErrorAction Stop
+    Invoke-WebRequestWithRetry -Uri $Uri -OutFile $OutFile
     $expected = Get-ExpectedSha256 -Uri $ChecksumUri -FileName $ChecksumFileName
     Assert-FileSha256 -Path $OutFile -Expected $expected -Label ([System.IO.Path]::GetFileName($OutFile))
 }
@@ -335,7 +356,7 @@ if ($SkipBinaries) {
         $extract = Join-Path $env:TEMP 'lyon-deno-extract'
         if (Test-Path $tmp) { Remove-Item $tmp -Force }
         if (Test-Path $extract) { Remove-Item $extract -Recurse -Force }
-        Invoke-WebRequest -Uri $denoRelease.Url -OutFile $tmp -UseBasicParsing -ErrorAction Stop
+        Invoke-WebRequestWithRetry -Uri $denoRelease.Url -OutFile $tmp
         Assert-FileSha256 -Path $tmp -Expected $DenoSha256 -Label $DenoArchive
         Expand-Archive $tmp -DestinationPath $extract -Force
         $exe = Get-ChildItem -Path $extract -Recurse -Filter deno.exe | Select-Object -First 1

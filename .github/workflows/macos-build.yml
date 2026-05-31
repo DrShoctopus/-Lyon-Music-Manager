@@ -17,9 +17,6 @@ env:
   LIBDISCID_VERSION: "0.6.4"
   LIBDISCID_URL: "https://github.com/metabrainz/libdiscid/releases/download/v0.6.4/libdiscid-0.6.4.tar.gz"
   LIBDISCID_SHA256: "dd5e8f1c9aead442e23b749a9cc9336372e62e88ad7079a2b62895b0390cb282"
-  DENO_VERSION: "2.8.1"
-  DENO_URL: "https://github.com/denoland/deno/releases/download/v2.8.1/deno-aarch64-apple-darwin.zip"
-  DENO_SHA256: "8154e2de0ee8c1cae31fa88e078724aaef0295fab9fd2ad6f8520389cee908f6"
   MACOS_MINIMUM_SYSTEM_VERSION: "11.0"
   PYTEST_FLOOR: "680"
 
@@ -38,6 +35,30 @@ jobs:
           architecture: "arm64"
           cache: "pip"
           cache-dependency-path: requirements-build.txt
+
+      - name: Load Deno vendor metadata
+        id: deno
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          manifest = json.loads(Path("build/vendor-runtimes.json").read_text(encoding="utf-8"))
+          deno = manifest["deno"]["macos_arm64"]
+          outputs = {
+              "version": manifest["deno"]["version"],
+              "archive": deno["archive"],
+              "url": deno["url"],
+              "sha256": deno["sha256"],
+          }
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              for key, value in outputs.items():
+                  fh.write(f"{key}={value}\n")
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as fh:
+              for key, value in outputs.items():
+                  fh.write(f"DENO_{key.upper()}={value}\n")
+          PY
 
       - name: Confirm arm64 host and Python
         run: |
@@ -71,7 +92,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: vendor-mac
-          key: mac-vendor-ffmpeg${{ env.FFMPEG_VERSION }}-fpcalc${{ env.FPCALC_VERSION }}-vlc${{ env.VLC_VERSION }}-discid${{ env.LIBDISCID_VERSION }}-deno${{ env.DENO_VERSION }}-v1
+          key: mac-vendor-ffmpeg${{ env.FFMPEG_VERSION }}-fpcalc${{ env.FPCALC_VERSION }}-vlc${{ env.VLC_VERSION }}-discid${{ env.LIBDISCID_VERSION }}-deno${{ steps.deno.outputs.version }}-v1
 
       - name: Fetch and verify vendor binaries
         run: scripts/fetch-macos-vendor-binaries.sh

@@ -164,7 +164,7 @@ def test_browser_cookies_option_is_passed_to_ytdlp(monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, "yt_dlp", types.SimpleNamespace(YoutubeDL=FakeYoutubeDL))
     monkeypatch.setattr("lyon.core.yt_downloader.find_ffmpeg_binary", lambda: None)
     worker = YtDownloadWorker(
-        "https://example.invalid/video",
+        "https://www.youtube.com/watch?v=example",
         "video",
         "mp4",
         str(tmp_path),
@@ -174,6 +174,38 @@ def test_browser_cookies_option_is_passed_to_ytdlp(monkeypatch, tmp_path):
     worker.run()
 
     assert captured_opts[0]["cookiesfrombrowser"] == ("firefox",)
+
+
+def test_browser_cookies_are_not_sent_to_non_youtube_urls(monkeypatch, tmp_path):
+    captured_opts: list[dict] = []
+
+    class FakeYoutubeDL:
+        def __init__(self, opts):
+            captured_opts.append(opts)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def download(self, _urls):
+            return None
+
+    monkeypatch.setitem(sys.modules, "yt_dlp", types.SimpleNamespace(YoutubeDL=FakeYoutubeDL))
+    monkeypatch.setattr("lyon.core.yt_downloader.find_ffmpeg_binary", lambda: None)
+    worker = YtDownloadWorker(
+        "https://example.invalid/video",
+        "video",
+        "mp4",
+        str(tmp_path),
+        browser_cookies_browser="firefox",
+    )
+
+    worker.run()
+
+    assert "cookiesfrombrowser" not in captured_opts[0]
+    assert "extractor_args" not in captured_opts[0]
 
 
 def test_browser_cookies_exclude_fragile_youtube_web_safari_client(monkeypatch, tmp_path):
@@ -195,7 +227,7 @@ def test_browser_cookies_exclude_fragile_youtube_web_safari_client(monkeypatch, 
     monkeypatch.setitem(sys.modules, "yt_dlp", types.SimpleNamespace(YoutubeDL=FakeYoutubeDL))
     monkeypatch.setattr("lyon.core.yt_downloader.find_ffmpeg_binary", lambda: None)
     worker = YtDownloadWorker(
-        "https://example.invalid/video",
+        "https://music.youtube.com/watch?v=example",
         "video",
         "mp4",
         str(tmp_path),
