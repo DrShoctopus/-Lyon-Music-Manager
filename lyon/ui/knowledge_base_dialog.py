@@ -93,7 +93,7 @@ WELCOME = _wrap(
 
     <p style="margin-top:18px; padding-top:12px; border-top:1px solid #25323f;
     color:#9ad9ff; font-style:italic;">{__app_name__} is inspired by and
-    dedicated to my grandfather, Chuck Lyon — it bears his name, and the love
+    dedicated to my Grandfather, Chuck Lyon — it bears his name, and the love
     of music he shares runs through everything it does.</p>
     """,
 )
