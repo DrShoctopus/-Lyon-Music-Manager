@@ -839,6 +839,9 @@ class SettingsDialog(QDialog):
         self.result_settings.ctdb_verify_rips = self.ctdb_verify.isChecked()
         self.result_settings.musicbrainz_contact = self.contact.text().strip() or self.result_settings.musicbrainz_contact
         self.result_settings.theaudiodb_api_key = self.audiodb_key.text().strip()
+        self.result_settings.theaudiodb_api_key_opt_out = not bool(
+            self.result_settings.theaudiodb_api_key
+        )
         self.result_settings.yt_audio_format = self.yt_audio_fmt.currentText()
         self.result_settings.yt_video_format = self.yt_video_fmt.currentText()
         self.result_settings.yt_video_quality = self.yt_video_quality.currentData() or "best"

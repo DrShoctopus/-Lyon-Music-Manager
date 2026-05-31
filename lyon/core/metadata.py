@@ -25,7 +25,6 @@ CTDB_LOOKUP_URL = "http://db.cuetools.net/lookup2.php"
 CTDB_BASE_URL = "http://db.cuetools.net/"
 CTDB_TIMEOUT_SECONDS = 20
 THEAUDIODB_API_BASE = "https://www.theaudiodb.com/api/v1/json"
-THEAUDIODB_DEFAULT_API_KEY = ""   # empty → TheAudioDB lookups are skipped
 HTTP_TIMEOUT_SECONDS = 15
 MAX_ARTWORK_BYTES = 5 * 1024 * 1024
 DISC_METADATA_PROVIDER_ORDER = ("cuetools_db", "musicbrainz")

@@ -124,6 +124,35 @@ def test_default_musicbrainz_contact_is_real_url():
     assert s.musicbrainz_contact.startswith("https://")
 
 
+def test_default_theaudiodb_key_uses_free_tier():
+    s = settings.Settings()
+    assert s.theaudiodb_api_key == settings.DEFAULT_THEAUDIODB_API_KEY
+
+
+def test_legacy_blank_theaudiodb_key_migrates_to_default(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "app_data_dir", lambda: tmp_path)
+    (tmp_path / "settings.json").write_text(
+        '{"music_root": "/music", "theaudiodb_api_key": ""}',
+        encoding="utf-8",
+    )
+
+    loaded = settings.Settings.load()
+
+    assert loaded.theaudiodb_api_key == settings.DEFAULT_THEAUDIODB_API_KEY
+    assert loaded.theaudiodb_api_key_opt_out is False
+
+
+def test_explicit_blank_theaudiodb_key_opt_out_roundtrips(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "app_data_dir", lambda: tmp_path)
+    s = settings.Settings(theaudiodb_api_key="", theaudiodb_api_key_opt_out=True)
+    s.save()
+
+    loaded = settings.Settings.load()
+
+    assert loaded.theaudiodb_api_key == ""
+    assert loaded.theaudiodb_api_key_opt_out is True
+
+
 def test_is_placeholder_contact_detects_invalid_values():
     assert settings.is_placeholder_contact("")
     assert settings.is_placeholder_contact("   ")

@@ -43,7 +43,7 @@ action that requires them**. Every outbound endpoint is listed below.
 | `coverartarchive.org` | Album cover art download | A MusicBrainz lookup returns a release. | Release MBID. |
 | `db.cuetools.net` | Rip verification (CTDB) | You enable CTDB verification while ripping. | Disc CTDB ID. |
 | `acoustid.org` (indirect via `pyacoustid`) | Audio fingerprint lookup | You explicitly fingerprint a track. | Chromaprint hash + track duration. |
-| `theaudiodb.com` | Supplemental metadata (artist images, descriptions) | You have entered an API key and metadata lookup is enabled. | Artist / album name. |
+| `theaudiodb.com` | Supplemental metadata (artist images, descriptions) | Metadata lookup is enabled and the TheAudioDB API key field is not blank. | Artist / album name. |
 | `lrclib.net` | Lyric lookup | "Fetch lyrics online" is enabled in Settings. | Track title + artist (optionally album + duration). |
 | `ws.audioscrobbler.com` (Last.fm) | Scrobble + Now Playing | You signed in to Last.fm and enabled scrobbling. | Track title, artist, album, timestamp, session key. |
 | `api.listenbrainz.org` | Scrobble + Now Playing | You entered a ListenBrainz token and enabled scrobbling. | Track title, artist, album, timestamp, token. |

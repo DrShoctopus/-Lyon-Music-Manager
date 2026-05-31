@@ -1364,9 +1364,9 @@ SETTINGS_METADATA = _wrap(
       policy. Use your real email/website; replace the
       <code>example.invalid</code> placeholder before distributing
       builds.</li>
-      <li><b>TheAudioDB API key</b> — optional key for TheAudioDB lookups; the
-      free tier works with the default, so leave it blank unless you have your
-      own key.</li>
+      <li><b>TheAudioDB API key</b> — used for TheAudioDB lookups. The free
+      tier works with the default key; clear the field to disable TheAudioDB
+      or replace it with your own key.</li>
     </ul>
     """,
 )

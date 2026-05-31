@@ -66,6 +66,17 @@ def test_settings_dialog_toggles_metadata_diagnostics(app, monkeypatch):
     assert dialog.result_settings.metadata_diagnostics_enabled is True
 
 
+def test_settings_dialog_marks_blank_theaudiodb_key_as_opt_out(app, monkeypatch):
+    dialog = SettingsDialog(Settings(theaudiodb_api_key="123"), None)
+    monkeypatch.setattr(settings_dialog_module, "QMessageBox", _NoMissingPathPrompt)
+
+    dialog.audiodb_key.clear()
+    dialog._accept()
+
+    assert dialog.result_settings.theaudiodb_api_key == ""
+    assert dialog.result_settings.theaudiodb_api_key_opt_out is True
+
+
 def test_settings_dialog_opens_wide_enough_for_top_tabs(app):
     previous_stylesheet = app.styleSheet()
     app.setStyleSheet(WMP_QSS)

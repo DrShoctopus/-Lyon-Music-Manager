@@ -41,6 +41,7 @@ _MAX_PODCAST_SUBSCRIPTIONS = 500
 
 DEFAULT_MUSICBRAINZ_CONTACT = "https://github.com/DrShoctopus/Sea-Lyon-Media-Manager"
 DEFAULT_UPDATE_APPCAST_URL = "https://drshoctopus.github.io/Sea-Lyon-Media-Manager/appcast.xml"
+DEFAULT_THEAUDIODB_API_KEY = "123"
 _PLACEHOLDER_CONTACT_MARKERS = ("example.", "localhost", "your-email", "your.email")
 
 
@@ -278,7 +279,8 @@ class Settings:
     musicbrainz_app: str = "LyonMusicManager"
     musicbrainz_version: str = field(default_factory=_app_version)
     musicbrainz_contact: str = DEFAULT_MUSICBRAINZ_CONTACT
-    theaudiodb_api_key: str = ""    # blank → TheAudioDB disabled; enter "123" for free tier
+    theaudiodb_api_key: str = DEFAULT_THEAUDIODB_API_KEY  # blank → TheAudioDB disabled
+    theaudiodb_api_key_opt_out: bool = False
     eject_after_rip: bool = True
     auto_lookup_metadata: bool = True
     cuetools_db_metadata_enabled: bool = True
@@ -359,6 +361,10 @@ class Settings:
         self.lastfm_session_key = str(self.lastfm_session_key or "").strip()
         self.lastfm_username = str(self.lastfm_username or "").strip()
         self.listenbrainz_token = str(self.listenbrainz_token or "").strip()
+        self.theaudiodb_api_key = str(self.theaudiodb_api_key or "").strip()
+        self.theaudiodb_api_key_opt_out = _bool_value(self.theaudiodb_api_key_opt_out, False)
+        if self.theaudiodb_api_key:
+            self.theaudiodb_api_key_opt_out = False
         self.recent_stream_urls = normalize_stream_urls(self.recent_stream_urls)
         self.dlna_enabled = _bool_value(self.dlna_enabled, False)
         self.dlna_port = _clamp_int(self.dlna_port, 8200, 0, 65535)
@@ -470,6 +476,12 @@ class Settings:
                     if field_info.init
                 }
                 data = {k: v for k, v in data.items() if k in known}
+                if (
+                    "theaudiodb_api_key" in data
+                    and not str(data.get("theaudiodb_api_key") or "").strip()
+                    and not _bool_value(data.get("theaudiodb_api_key_opt_out"), False)
+                ):
+                    data["theaudiodb_api_key"] = DEFAULT_THEAUDIODB_API_KEY
                 return cls(**data)
             except OSError as exc:
                 LOG.warning("Could not read settings.json; using defaults: %s", exc)
