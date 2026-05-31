@@ -16,6 +16,10 @@ env:
   CHROMAPRINT_VERSION: "1.5.1"
   FPCALC_ARCHIVE: "chromaprint-fpcalc-1.5.1-windows-x86_64.zip"
   FPCALC_URL: "https://github.com/acoustid/chromaprint/releases/download/v1.5.1/chromaprint-fpcalc-1.5.1-windows-x86_64.zip"
+  DENO_VERSION: "2.8.1"
+  DENO_ARCHIVE: "deno-x86_64-pc-windows-msvc.zip"
+  DENO_URL: "https://github.com/denoland/deno/releases/download/v2.8.1/deno-x86_64-pc-windows-msvc.zip"
+  DENO_SHA256: "5fb5bac71f609fb91ec8960fb290885aadc27eeb22f07a8eca0c3db6be38b11a"
   # Test-collection floor. Bump when adding tests; never silently drop.
   PYTEST_FLOOR: "680"
 
@@ -74,7 +78,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: bin
-          key: windows-bins-ffmpeg-${{ env.FFMPEG_VERSION }}-discid-${{ env.LIBDISCID_VERSION }}-vlc-${{ env.VLC_VERSION }}-chromaprint-${{ env.CHROMAPRINT_VERSION }}
+          key: windows-bins-ffmpeg-${{ env.FFMPEG_VERSION }}-discid-${{ env.LIBDISCID_VERSION }}-vlc-${{ env.VLC_VERSION }}-chromaprint-${{ env.CHROMAPRINT_VERSION }}-deno-${{ env.DENO_VERSION }}
 
       - name: Fetch ffmpeg.exe (hash-verified)
         if: steps.cache-bins.outputs.cache-hit != 'true'
@@ -177,6 +181,28 @@ jobs:
           Remove-Item fpcalc.zip
           Remove-Item -Recurse -Force fpcalc-extract
 
+      - name: Fetch Deno runtime (hash-verified)
+        if: steps.cache-bins.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path bin | Out-Null
+          Invoke-WebRequest -Uri "${{ env.DENO_URL }}" -OutFile deno.zip -UseBasicParsing
+          $actual = (Get-FileHash -Algorithm SHA256 deno.zip).Hash.ToLowerInvariant()
+          $expected = "${{ env.DENO_SHA256 }}"
+          if ($actual -ne $expected) { throw "deno.zip SHA-256 mismatch: expected $expected, got $actual" }
+          Write-Host "Verified ${{ env.DENO_ARCHIVE }} SHA-256: $actual"
+          Expand-Archive deno.zip -DestinationPath deno-extract -Force
+          $exe = Get-ChildItem -Path deno-extract -Recurse -Filter deno.exe | Select-Object -First 1
+          if (-not $exe) { throw "deno.exe was not found in ${{ env.DENO_ARCHIVE }}." }
+          Copy-Item $exe.FullName -Destination bin\deno.exe -Force
+          $versionOutput = & bin\deno.exe --version 2>&1
+          if ($LASTEXITCODE -ne 0) { throw "deno.exe --version failed: $versionOutput" }
+          if ($versionOutput -notmatch [regex]::Escape("deno ${{ env.DENO_VERSION }}")) {
+            throw "Expected deno ${{ env.DENO_VERSION }}, got: $versionOutput"
+          }
+          Remove-Item deno.zip
+          Remove-Item -Recurse -Force deno-extract
+
       - name: Fetch libVLC runtime (hash-verified)
         if: steps.cache-bins.outputs.cache-hit != 'true'
         shell: pwsh
@@ -222,11 +248,12 @@ jobs:
           python -c "from lyon.app import main; print('imports OK')"
           python -c "from PySide6.QtCore import QCoreApplication; app = QCoreApplication([]); from lyon.core.playback_backend import create_playback_backend; backend = create_playback_backend(); print(type(backend).__name__); assert type(backend).__name__ == 'VlcPlaybackBackend'"
           python -c "from lyon.core.fingerprint import is_available; assert is_available(); print('fpcalc OK')"
+          bin\deno.exe --version
 
       - name: Validate PyInstaller inputs
         shell: pwsh
         run: |
-          foreach ($required in @('main.py', 'docs\brand\lyon-app-icon.png', 'bin\ffmpeg.exe', 'bin\fpcalc.exe')) {
+          foreach ($required in @('main.py', 'docs\brand\lyon-app-icon.png', 'bin\ffmpeg.exe', 'bin\fpcalc.exe', 'bin\deno.exe')) {
             if (-not (Test-Path $required)) {
               throw "Required build input missing: $required"
             }
@@ -262,6 +289,7 @@ jobs:
             $bundleBin = "dist\LyonMusicManager\bin"
           }
           if (-not (Test-Path (Join-Path $bundleBin 'fpcalc.exe'))) { throw "Packaged app is missing fpcalc.exe." }
+          if (-not (Test-Path (Join-Path $bundleBin 'deno.exe'))) { throw "Packaged app is missing deno.exe." }
 
       - name: Read app version
         id: appver

@@ -1,14 +1,45 @@
 """yt-dlp download worker thread."""
 from __future__ import annotations
 
+import logging
 import re
+import shutil
+import sys
 from pathlib import Path
 
 from PySide6.QtCore import QThread, Signal
 
 from .ffmpeg import find_ffmpeg_binary
+from .settings import bundled_bin_dir
 
+LOG = logging.getLogger(__name__)
 _YT_QUALITY_HEIGHT = {"1080p": 1080, "2k": 1440, "4k": 2160}
+_YT_BROWSER_COOKIE_BROWSERS = {
+    "brave",
+    "chrome",
+    "chromium",
+    "edge",
+    "firefox",
+    "opera",
+    "safari",
+    "vivaldi",
+    "whale",
+}
+_JS_RUNTIMES = ("deno", "node")
+_MACOS_RUNTIME_DIRS = (Path("/opt/homebrew/bin"), Path("/usr/local/bin"))
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+_SAFARI_COOKIE_PERMISSION_MESSAGE = (
+    "macOS blocked access to Safari cookies. Grant Full Disk Access to Sea Lyon "
+    "or choose another signed-in browser in Settings -> YouTube."
+)
+_YOUTUBE_BROWSER_SESSION_SETTINGS_MESSAGE = (
+    "Enable browser in Settings > YouTube."
+)
+_YOUTUBE_JS_CHALLENGE_MESSAGE = (
+    "Sea Lyon could not solve YouTube's player JavaScript challenge. "
+    "Install Deno or Node, or use a build that bundles a JavaScript runtime "
+    "and yt-dlp-ejs, then retry."
+)
 
 
 def _format_eta(seconds) -> str:
@@ -70,6 +101,73 @@ def _video_postprocessors(fmt: str) -> list[dict]:
     return postprocessors
 
 
+def _browser_cookies_option(browser: str) -> tuple[str] | None:
+    browser_name = str(browser or "").strip().lower()
+    if browser_name not in _YT_BROWSER_COOKIE_BROWSERS:
+        return None
+    return (browser_name,)
+
+
+def _clean_error_message(message: object) -> str:
+    text = _ANSI_ESCAPE_RE.sub("", str(message or ""))
+    return " ".join(text.split())
+
+
+def _user_facing_error_message(exc: BaseException) -> str:
+    text = _clean_error_message(exc)
+    if (
+        "Sign in to confirm your age" in text
+        and (
+            "--cookies-from-browser" in text
+            or "--cookies" in text
+            or "cookies" in text.lower()
+        )
+    ):
+        return _YOUTUBE_BROWSER_SESSION_SETTINGS_MESSAGE
+    if (
+        "Operation not permitted" in text
+        and "com.apple.Safari" in text
+        and "Cookies.binarycookies" in text
+    ):
+        return _SAFARI_COOKIE_PERMISSION_MESSAGE
+    return text
+
+
+def _is_youtube_js_challenge_warning(message: object) -> bool:
+    text = _clean_error_message(message)
+    return (
+        "Signature solving failed" in text
+        or "n challenge solving failed" in text
+        or "No supported JavaScript runtime could be found" in text
+    )
+
+
+def _find_js_runtime_binary(name: str) -> Path | None:
+    executable_names = (f"{name}.exe", name) if sys.platform == "win32" else (name,)
+    bin_dir = bundled_bin_dir()
+    for executable in executable_names:
+        candidate = bin_dir / executable
+        if candidate.exists():
+            return candidate
+    found = shutil.which(f"{name}.exe") if sys.platform == "win32" else shutil.which(name)
+    if found:
+        return Path(found)
+    if sys.platform == "darwin":
+        for runtime_dir in _MACOS_RUNTIME_DIRS:
+            candidate = runtime_dir / name
+            if candidate.exists():
+                return candidate
+    return None
+
+
+def _js_runtime_options() -> dict[str, dict]:
+    runtimes = {name: {} for name in _JS_RUNTIMES}
+    for name in _JS_RUNTIMES:
+        if path := _find_js_runtime_binary(name):
+            runtimes[name]["path"] = str(path)
+    return runtimes
+
+
 class _YtLogger:
     """Forwards yt-dlp log messages to the worker's progress signal."""
 
@@ -85,9 +183,12 @@ class _YtLogger:
         self._worker.progress.emit(msg)
 
     def warning(self, msg: str) -> None:
+        LOG.warning("yt-dlp warning: %s", msg)
+        self._worker._record_yt_dlp_warning(msg)
         self._worker.progress.emit(f"WARNING: {msg}")
 
     def error(self, msg: str) -> None:
+        LOG.warning("yt-dlp error: %s", msg)
         self._worker.progress.emit(f"ERROR: {msg}")
 
 
@@ -118,6 +219,8 @@ class YtDownloadWorker(QThread):
         playlist: bool = False,
         quality: str = "best",   # 'best' | '1080p' | '2k' | '4k'
         parent=None,
+        *,
+        browser_cookies_browser: str = "",
     ) -> None:
         super().__init__(parent)
         self.url = url
@@ -126,13 +229,19 @@ class YtDownloadWorker(QThread):
         self.output_dir = output_dir
         self.playlist = playlist
         self.quality = quality
+        self.browser_cookies_browser = browser_cookies_browser
         self._cancelled = False
         self._succeeded = 0
         self._failed = 0
         self._emitted_paths: set[str] = set()
+        self._youtube_js_challenge_failed = False
 
     def cancel(self) -> None:
         self._cancelled = True
+
+    def _record_yt_dlp_warning(self, message: object) -> None:
+        if _is_youtube_js_challenge_warning(message):
+            self._youtube_js_challenge_failed = True
 
     def run(self) -> None:
         try:
@@ -192,6 +301,10 @@ class YtDownloadWorker(QThread):
             "post_hooks": [self._on_post_hook],
             "noplaylist": not self.playlist,
             "writethumbnail": True,
+            # Deno is yt-dlp's default/recommended JS runtime. Node is also
+            # supported but must be explicitly enabled; it gives source runs
+            # and packaged builds another way to solve YouTube JS challenges.
+            "js_runtimes": _js_runtime_options(),
             # Video downloads need a persistent, Qt-friendly sidecar thumbnail
             # for the catalog card.  EmbedThumbnail deletes it unless the
             # postprocessor is told the thumbnail is intentionally kept.
@@ -202,6 +315,12 @@ class YtDownloadWorker(QThread):
             ydl_opts["merge_output_format"] = merge_fmt
         if ffmpeg_path:
             ydl_opts["ffmpeg_location"] = str(ffmpeg_path.parent)
+        browser_cookies = _browser_cookies_option(self.browser_cookies_browser)
+        if browser_cookies:
+            ydl_opts["cookiesfrombrowser"] = browser_cookies
+            ydl_opts["extractor_args"] = {
+                "youtube": {"player_client": ["default", "-web_safari"]}
+            }
 
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -210,7 +329,14 @@ class YtDownloadWorker(QThread):
             if not self._cancelled:
                 if self._succeeded == 0 and self._failed == 0:
                     self._failed = 1
-                self.error.emit(str(exc))
+                LOG.warning("yt-dlp download failed: %s", _clean_error_message(exc))
+                message = _user_facing_error_message(exc)
+                if (
+                    self._youtube_js_challenge_failed
+                    and "Requested format is not available" in _clean_error_message(exc)
+                ):
+                    message = _YOUTUBE_JS_CHALLENGE_MESSAGE
+                self.error.emit(message)
         finally:
             self.download_finished.emit(self._succeeded, self._failed)
 

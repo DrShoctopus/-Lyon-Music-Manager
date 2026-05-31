@@ -83,6 +83,31 @@ def test_youtube_acknowledged_defaults_false():
     assert s.youtube_acknowledged is False
 
 
+def test_youtube_browser_cookies_defaults_to_disabled_firefox():
+    s = settings.Settings()
+    assert s.yt_use_browser_cookies is False
+    assert s.yt_browser_cookies_browser == "firefox"
+
+
+def test_youtube_browser_cookies_roundtrips_through_save_load(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "app_data_dir", lambda: tmp_path)
+    s = settings.Settings(
+        yt_use_browser_cookies=True,
+        yt_browser_cookies_browser="chrome",
+    )
+    s.save()
+
+    loaded = settings.Settings.load()
+
+    assert loaded.yt_use_browser_cookies is True
+    assert loaded.yt_browser_cookies_browser == "chrome"
+
+
+def test_youtube_browser_cookies_browser_is_normalized():
+    s = settings.Settings(yt_use_browser_cookies=True, yt_browser_cookies_browser="not-a-browser")
+    assert s.yt_browser_cookies_browser == "firefox"
+
+
 def test_smartscreen_advisory_shown_defaults_false():
     s = settings.Settings()
     assert s.smartscreen_advisory_shown is False

@@ -370,6 +370,16 @@ LIBRARY_ADD = _wrap(
     <p>If <i>Automatically add downloads to library</i> is enabled
     (<b>Settings → YouTube</b>), every completed yt-dlp download is
     imported automatically.</p>
+    <p>For age-restricted videos you are authorized to access, sign in and
+    age-verify in a supported browser, then enable <i>Use browser session
+    for restricted videos</i> in <b>Settings → YouTube</b>. Sea Lyon stores
+    only the selected browser name, not your cookies. During that download,
+    yt-dlp reads the selected browser's local cookie store and sends
+    applicable YouTube cookies to YouTube.</p>
+    <p>YouTube may also require a JavaScript runtime for player signature
+    challenges. Sea Lyon enables yt-dlp-ejs with Deno/Node support and
+    packaged builds stage pinned Deno; from-source macOS runs can use
+    <code>brew install deno</code>.</p>
 
     <h2>Re-scan manually</h2>
     <p>If you've added files outside of folder-watching, choose <b>File →
@@ -1177,6 +1187,21 @@ YOUTUBE = _wrap(
     show up under Artists; video downloads under the Video tab's catalog
     if the destination is inside a watched library root.</p>
 
+    <h2>Restricted or account-gated videos</h2>
+    <p>If you are authorized to access a video that requires sign-in or
+    age verification, first sign in and age-verify in a supported browser.
+    Then enable <b>Use browser session for restricted videos</b> in
+    <b>Settings → YouTube</b> and choose that browser. Sea Lyon stores only
+    the selected browser name. yt-dlp reads the browser cookie store during
+    the download and sends applicable YouTube cookies to YouTube.</p>
+
+    <h2>JavaScript challenge runtime</h2>
+    <p>Some YouTube formats are hidden until yt-dlp solves a player
+    JavaScript signature challenge. Sea Lyon includes the yt-dlp-ejs solver
+    package and enables Deno and Node. Source runs can install Deno
+    (<code>brew install deno</code> on macOS); packaged builds stage pinned
+    Deno in the app <code>bin/</code> folder.</p>
+
     <p class="warn">YouTube's terms of service govern what you may download.
     The app is provided as a tool; usage compliance is your
     responsibility.</p>
@@ -1384,6 +1409,12 @@ SETTINGS_YOUTUBE = _wrap(
       <code>&lt;music root&gt;/YouTube</code>.</li>
       <li><b>Automatically add downloads to library</b> — index completed
       files immediately.</li>
+      <li><b>Use browser session for restricted videos</b> — allow yt-dlp
+      to read applicable YouTube cookies from the selected signed-in
+      browser during a download. Sea Lyon stores only the selected browser
+      name.</li>
+      <li><b>Browser session</b> — choose which supported browser yt-dlp
+      should read when browser-session mode is enabled.</li>
     </ul>
     """,
 )
@@ -1425,7 +1456,8 @@ SETTINGS_ABOUT = _wrap(
       <li>The copyright notice and license (MIT).</li>
       <li><b>Third-Party Acknowledgements</b> — a list of bundled or
       linked components (Python, Qt / PySide6, libVLC, ffmpeg, libdiscid,
-      Chromaprint, etc.) with their respective licence identifiers.</li>
+      Chromaprint, Deno, yt-dlp, yt-dlp-ejs, etc.) with their respective
+      licence identifiers.</li>
     </ul>
     """,
 )
@@ -1440,7 +1472,7 @@ DIAGNOSTICS = _wrap(
     <table>
       <tr><th>Component</th><th>What it checks</th></tr>
       <tr><td>Python packages</td><td>PySide6, mutagen, requests,
-      python-vlc, discid, yt-dlp, watchdog and friends.</td></tr>
+      python-vlc, discid, yt-dlp, yt-dlp-ejs, watchdog and friends.</td></tr>
       <tr><td>VLC / libVLC</td><td>Whether <code>libvlc.dll</code> (or the
       platform equivalent) can be loaded. Required for audio and video
       playback.</td></tr>
@@ -1603,7 +1635,15 @@ TROUBLESHOOT = _wrap(
     <h2>YouTube search or download fails</h2>
     <p>Confirm <code>yt-dlp</code> is installed in the active environment.
     ffmpeg is also needed for high-quality video merging and audio
-    conversion.</p>
+    conversion. If the log mentions signature solving, n challenge solving
+    or "Only images are available", install a JavaScript runtime such as
+    Deno (<code>brew install deno</code> on macOS). Packaged builds already
+    stage pinned Deno in the app <code>bin/</code> folder.</p>
+    <p>For restricted videos you are authorized to access, sign in and
+    age-verify in the selected browser, enable <b>Use browser session for
+    restricted videos</b>, and grant the app any OS-level permission needed
+    to read that browser's cookie store. Sea Lyon stores only the selected
+    browser name, not browser cookies.</p>
 
     <h2>Built ZIP fails on another machine</h2>
     <p>Distribute the complete generated folder or zip, not just

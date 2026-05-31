@@ -17,6 +17,9 @@ env:
   LIBDISCID_VERSION: "0.6.4"
   LIBDISCID_URL: "https://github.com/metabrainz/libdiscid/releases/download/v0.6.4/libdiscid-0.6.4.tar.gz"
   LIBDISCID_SHA256: "dd5e8f1c9aead442e23b749a9cc9336372e62e88ad7079a2b62895b0390cb282"
+  DENO_VERSION: "2.8.1"
+  DENO_URL: "https://github.com/denoland/deno/releases/download/v2.8.1/deno-aarch64-apple-darwin.zip"
+  DENO_SHA256: "8154e2de0ee8c1cae31fa88e078724aaef0295fab9fd2ad6f8520389cee908f6"
   MACOS_MINIMUM_SYSTEM_VERSION: "11.0"
   PYTEST_FLOOR: "680"
 
@@ -68,7 +71,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: vendor-mac
-          key: mac-vendor-ffmpeg${{ env.FFMPEG_VERSION }}-fpcalc${{ env.FPCALC_VERSION }}-vlc${{ env.VLC_VERSION }}-discid${{ env.LIBDISCID_VERSION }}-v1
+          key: mac-vendor-ffmpeg${{ env.FFMPEG_VERSION }}-fpcalc${{ env.FPCALC_VERSION }}-vlc${{ env.VLC_VERSION }}-discid${{ env.LIBDISCID_VERSION }}-deno${{ env.DENO_VERSION }}-v1
 
       - name: Fetch and verify vendor binaries
         run: scripts/fetch-macos-vendor-binaries.sh
@@ -87,12 +90,13 @@ jobs:
       - name: PyInstaller (arm64-only)
         run: python -m PyInstaller --noconfirm build/lyon.spec
 
-      - name: Inject libVLC, plugins, ffmpeg, fpcalc, libdiscid
+      - name: Inject libVLC, plugins, ffmpeg, fpcalc, deno, libdiscid
         env:
           STAGED_VLC_DMG: vendor-mac/vlc.dmg
           STAGED_LIBDISCID_DYLIB: vendor-mac/libdiscid.0.dylib
           STAGED_FFMPEG: vendor-mac/ffmpeg
           STAGED_FPCALC: vendor-mac/fpcalc
+          STAGED_DENO: vendor-mac/deno
         run: scripts/build-macos-bundle.sh
 
       - name: Detect macOS signing credentials

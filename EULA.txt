@@ -45,9 +45,10 @@ below in full:
 The Software bundles or links against third-party libraries and binaries
 that are licensed separately from the Software itself, including (but not
 limited to) libVLC, Qt / PySide6, ffmpeg, libdiscid, Chromaprint / fpcalc,
-mutagen, musicbrainzngs, yt-dlp, and others. Their license texts are
-reproduced in the THIRD_PARTY_NOTICES.txt file installed alongside this
-Agreement and viewable from the application's About → Licenses screen.
+Deno, mutagen, musicbrainzngs, yt-dlp, yt-dlp-ejs, and others. Their
+license texts are reproduced in the THIRD_PARTY_NOTICES.txt file installed
+alongside this Agreement and viewable from the application's About →
+Licenses screen.
 
 Some bundled components are distributed under copyleft licenses (LGPL,
 GPL). Your use of the Software is also subject to those licenses with
@@ -74,14 +75,16 @@ ripping features.
 
 The Software integrates with third-party streaming services and content
 platforms, including YouTube (via the bundled yt-dlp tool), and may
-download media files at your request. Downloading content from such
-services may be restricted or prohibited by the service's terms of use,
-by the copyright in the underlying content, or by law in your
-jurisdiction. You are solely responsible for ensuring that any download
-or stream you initiate is permitted by the platform's terms and by
-applicable copyright and other law. The Software provides a technical
-capability; it does not grant any right to content that you do not
-independently have permission to obtain.
+download media files at your request. For videos you are authorized to
+access that require sign-in or age verification, the Software can ask
+yt-dlp to read applicable cookies from a browser session you select.
+Downloading content from such services may be restricted or prohibited
+by the service's terms of use, by the copyright in the underlying
+content, or by law in your jurisdiction. You are solely responsible for
+ensuring that any download or stream you initiate is permitted by the
+platform's terms and by applicable copyright and other law. The Software
+provides a technical capability; it does not grant any right to content
+that you do not independently have permission to obtain.
 
 
 5. USER RESPONSIBILITY — NETWORK SHARING AND SCROBBLING

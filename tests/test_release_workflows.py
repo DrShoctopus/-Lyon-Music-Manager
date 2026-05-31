@@ -49,3 +49,39 @@ def test_macos_artifact_name_does_not_use_branch_ref_name():
     assert "SeaLyonMediaManager-${{ github.ref_name }}-macos" not in workflow
     assert "SeaLyonMediaManager-${{ steps.appver.outputs.version }}-macos" in workflow
     assert "version=$ver" in workflow
+
+
+def test_windows_workflow_bundles_pinned_deno_runtime_for_youtube_solver():
+    workflow = (REPO_ROOT / ".github" / "workflows" / "windows-build.yml").read_text(encoding="utf-8")
+
+    assert 'DENO_VERSION: "2.8.1"' in workflow
+    assert (
+        'DENO_URL: "https://github.com/denoland/deno/releases/download/v2.8.1/'
+        'deno-x86_64-pc-windows-msvc.zip"'
+    ) in workflow
+    assert (
+        'DENO_SHA256: "5fb5bac71f609fb91ec8960fb290885aadc27eeb22f07a8eca0c3db6be38b11a"'
+        in workflow
+    )
+    assert "deno-${{ env.DENO_VERSION }}" in workflow
+    assert "Fetch Deno runtime (hash-verified)" in workflow
+    assert "bin\\deno.exe --version" in workflow
+    assert "'bin\\deno.exe'" in workflow
+    assert "Packaged app is missing deno.exe" in workflow
+
+
+def test_macos_workflow_bundles_pinned_deno_runtime_for_youtube_solver():
+    workflow = (REPO_ROOT / ".github" / "workflows" / "macos-build.yml").read_text(encoding="utf-8")
+
+    assert 'DENO_VERSION: "2.8.1"' in workflow
+    assert (
+        'DENO_URL: "https://github.com/denoland/deno/releases/download/v2.8.1/'
+        'deno-aarch64-apple-darwin.zip"'
+    ) in workflow
+    assert (
+        'DENO_SHA256: "8154e2de0ee8c1cae31fa88e078724aaef0295fab9fd2ad6f8520389cee908f6"'
+        in workflow
+    )
+    assert "deno${{ env.DENO_VERSION }}" in workflow
+    assert "STAGED_DENO: vendor-mac/deno" in workflow
+    assert "Inject libVLC, plugins, ffmpeg, fpcalc, deno, libdiscid" in workflow

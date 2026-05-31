@@ -27,6 +27,16 @@ from .widgets import AppProgressBar
 
 _AUDIO_FORMATS = ["flac", "mp3"]
 _VIDEO_FORMATS = ["mp4", "mkv", "webm"]
+_ERROR_STATUS_MAX_CHARS = 180
+
+
+def _compact_error_message(message: str) -> str:
+    text = " ".join(str(message or "").split())
+    if text.startswith("ERROR: "):
+        text = text[7:].strip()
+    if len(text) <= _ERROR_STATUS_MAX_CHARS:
+        return text
+    return f"{text[: _ERROR_STATUS_MAX_CHARS - 1].rstrip()}…"
 
 
 class YtDownloadDialog(QDialog):
@@ -50,6 +60,7 @@ class YtDownloadDialog(QDialog):
         self._active_mode: str | None = None
         self._canceling = False
         self._current_toast: Toast | None = None
+        self._last_error_message = ""
 
         self.setWindowTitle("Download from YouTube")
         self.setMinimumWidth(560)
@@ -182,6 +193,7 @@ class YtDownloadDialog(QDialog):
         self._active_mode = mode
 
         self.status_bar.reset_status("0% - calculating")
+        self._last_error_message = ""
 
         self._start_btn.setEnabled(False)
         self._cancel_btn.setEnabled(True)
@@ -189,7 +201,21 @@ class YtDownloadDialog(QDialog):
         self._canceling = False
 
         quality = self.settings.yt_video_quality if mode == "video" else "best"
-        worker = YtDownloadWorker(url, mode, fmt, output_dir, playlist, quality, self)
+        browser_cookies_browser = (
+            self.settings.yt_browser_cookies_browser
+            if self.settings.yt_use_browser_cookies
+            else ""
+        )
+        worker = YtDownloadWorker(
+            url,
+            mode,
+            fmt,
+            output_dir,
+            playlist,
+            quality,
+            self,
+            browser_cookies_browser=browser_cookies_browser,
+        )
         self._worker = worker
         worker.download_progress.connect(self._on_download_progress)
         worker.track_ready.connect(self._on_track_ready)
@@ -226,12 +252,15 @@ class YtDownloadDialog(QDialog):
                 self.library.commit()
                 self.library_updated.emit()
 
-    def _on_error(self, _msg: str) -> None:
-        self._set_status("Failed", failed=True, value=100)
+    def _on_error(self, msg: str) -> None:
+        self._last_error_message = _compact_error_message(msg)
+        status = f"Failed: {self._last_error_message}" if self._last_error_message else "Failed"
+        self._set_status(status, failed=True, value=100)
 
     def _on_finished(self, succeeded: int, failed: int) -> None:
         if failed > 0:
-            self._set_status("Failed", failed=True, value=100)
+            status = f"Failed: {self._last_error_message}" if self._last_error_message else "Failed"
+            self._set_status(status, failed=True, value=100)
         elif succeeded > 0:
             self._set_status("100% - 0:00 left", value=100)
         elif self._canceling:

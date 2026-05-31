@@ -4,11 +4,14 @@
 # Drop these into a `bin/` folder at the project root before building:
 #   bin/ffmpeg.exe         (static Windows build, e.g. from gyan.dev)
 #   bin/fpcalc.exe         (Chromaprint fpcalc Windows release)
+#   bin/deno.exe           (Deno runtime for yt-dlp JS challenge solving)
 #   bin/discid.dll         (libdiscid Windows release)
 #   optional: a VLC runtime directory if you choose to bundle libVLC
 #
 # They are bundled next to the .exe so the app works offline.
 # -*- mode: python ; coding: utf-8 -*-
+# ruff: noqa: F821
+import importlib.util
 import sys
 from pathlib import Path
 
@@ -51,6 +54,19 @@ def windows_icon_from_png(icon_png: Path) -> str:
     )
     return str(GENERATED_ICON)
 
+
+def package_data_files(package_name: str, suffixes: tuple[str, ...]) -> list[tuple[str, str]]:
+    spec = importlib.util.find_spec(package_name)
+    if not spec or not spec.submodule_search_locations:
+        return []
+    package_dir = Path(next(iter(spec.submodule_search_locations)))
+    dest_root = Path(*package_name.split("."))
+    return [
+        (str(path), str(dest_root / path.relative_to(package_dir).parent))
+        for path in package_dir.rglob("*")
+        if path.is_file() and path.suffix in suffixes
+    ]
+
 if BIN.exists():
     for entry in BIN.iterdir():
         if entry.is_file():
@@ -63,6 +79,8 @@ if BIN.exists():
 
 if UI_ASSETS.exists():
     datas.append((str(UI_ASSETS), str(Path("lyon") / "ui" / "assets")))
+
+datas.extend(package_data_files("yt_dlp_ejs", (".js",)))
 
 for brand_dir in BRAND_DIRS:
     if brand_dir.exists():
@@ -89,6 +107,8 @@ a = Analysis(
         "urllib3",
         "certifi",
         "yt_dlp",
+        "yt_dlp_ejs",
+        "yt_dlp_ejs.yt.solver",
         "acoustid",
     ],
     hookspath=[],

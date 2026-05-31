@@ -14,6 +14,8 @@ FFMPEG_URL="${FFMPEG_URL:-https://github.com/eugeneware/ffmpeg-static/releases/d
 FFMPEG_SHA256="${FFMPEG_SHA256:-8923876afa8db5585022d7860ec7e589af192f441c56793971276d450ed3bbfa}"
 LIBDISCID_URL="${LIBDISCID_URL:-https://github.com/metabrainz/libdiscid/releases/download/v${LIBDISCID_VERSION}/libdiscid-${LIBDISCID_VERSION}.tar.gz}"
 LIBDISCID_SHA256="${LIBDISCID_SHA256:-dd5e8f1c9aead442e23b749a9cc9336372e62e88ad7079a2b62895b0390cb282}"
+DENO_URL="${DENO_URL:-https://github.com/denoland/deno/releases/download/v2.8.1/deno-aarch64-apple-darwin.zip}"
+DENO_SHA256="${DENO_SHA256:-8154e2de0ee8c1cae31fa88e078724aaef0295fab9fd2ad6f8520389cee908f6}"
 
 verify_checksum() {
     local f="$1"
@@ -74,6 +76,15 @@ fetch_ffmpeg() {
     chmod +x "$VENDOR/ffmpeg"
 }
 
+fetch_deno() {
+    rm -f "$VENDOR/deno"
+    curl -fsSL "${DENO_URL}" -o "$VENDOR/deno.zip"
+    verify_checksum "$VENDOR/deno.zip" "$DENO_SHA256"
+    unzip -o -j "$VENDOR/deno.zip" "deno" -d "$VENDOR/"
+    rm "$VENDOR/deno.zip"
+    chmod +x "$VENDOR/deno"
+}
+
 # --- ffmpeg -----------------------------------------------------------
 if [ ! -f "$VENDOR/ffmpeg" ]; then
     echo "Fetching ffmpeg (arm64)..."
@@ -94,6 +105,16 @@ if [ ! -f "$VENDOR/fpcalc" ]; then
     chmod +x "$VENDOR/fpcalc"
 fi
 verify_arm64_only "$VENDOR/fpcalc"
+
+# --- deno -------------------------------------------------------------
+if [ ! -f "$VENDOR/deno" ]; then
+    echo "Fetching deno (arm64)..."
+    fetch_deno
+elif ! is_arm64_only "$VENDOR/deno"; then
+    echo "Cached deno is not arm64; refetching..."
+    fetch_deno
+fi
+verify_arm64_only "$VENDOR/deno"
 
 # --- libVLC DMG -------------------------------------------------------
 VLC_DMG_URL="https://download.videolan.org/pub/videolan/vlc/${VLC_VERSION}/macosx/vlc-${VLC_VERSION}-arm64.dmg"

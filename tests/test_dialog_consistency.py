@@ -117,8 +117,8 @@ def test_settings_about_tab_matches_about_dialog_layout(app):
 
 def test_yt_download_dialog_uses_status_bar_instead_of_log(app, tmp_path):
     from lyon.core.library import Library
-    from lyon.ui.yt_download_dialog import YtDownloadDialog
     from lyon.ui.widgets import AppProgressBar
+    from lyon.ui.yt_download_dialog import YtDownloadDialog
 
     library = Library(tmp_path / "library.db")
     dlg = YtDownloadDialog(
@@ -154,6 +154,102 @@ def test_yt_download_dialog_failed_download_marks_status_bar_failed(app, tmp_pat
         assert dlg.status_bar.value() == 100
         assert dlg.status_bar.label() == "Failed"
         assert dlg.status_bar.is_failed()
+    finally:
+        library.close()
+        dlg.deleteLater()
+
+
+def test_yt_download_dialog_preserves_download_error_message(app, tmp_path):
+    from lyon.core.library import Library
+    from lyon.ui.yt_download_dialog import YtDownloadDialog
+
+    library = Library(tmp_path / "library.db")
+    dlg = YtDownloadDialog(
+        "https://www.youtube.com/watch?v=example",
+        Settings(music_root=str(tmp_path / "Music")),
+        library,
+    )
+
+    try:
+        dlg._on_error("Sign in to confirm your age.")
+        dlg._on_finished(0, 1)
+
+        assert dlg.status_bar.value() == 100
+        assert dlg.status_bar.is_failed()
+        assert "Sign in to confirm your age" in dlg.status_bar.label()
+    finally:
+        library.close()
+        dlg.deleteLater()
+
+
+def test_yt_download_dialog_age_gate_message_fits_status_bar(app, tmp_path):
+    from lyon.core.library import Library
+    from lyon.ui.yt_download_dialog import YtDownloadDialog
+
+    library = Library(tmp_path / "library.db")
+    dlg = YtDownloadDialog(
+        "https://www.youtube.com/watch?v=example",
+        Settings(music_root=str(tmp_path / "Music")),
+        library,
+    )
+
+    try:
+        dlg._on_error("Enable browser in Settings > YouTube.")
+        dlg._on_finished(0, 1)
+
+        assert dlg.status_bar.label() == "Failed: Enable browser in Settings > YouTube."
+        assert len(dlg.status_bar.label()) <= 48
+        assert dlg.status_bar.is_failed()
+    finally:
+        library.close()
+        dlg.deleteLater()
+
+
+def test_yt_download_dialog_passes_browser_cookie_setting(app, tmp_path, monkeypatch):
+    from lyon.core.library import Library
+    from lyon.ui import yt_download_dialog as yt_download_dialog_module
+    from lyon.ui.yt_download_dialog import YtDownloadDialog
+
+    class FakeSignal:
+        def connect(self, _slot):
+            pass
+
+    captured_kwargs = {}
+
+    class FakeWorker:
+        def __init__(self, *_args, **kwargs):
+            captured_kwargs.update(kwargs)
+            self.download_progress = FakeSignal()
+            self.track_ready = FakeSignal()
+            self.error = FakeSignal()
+            self.download_finished = FakeSignal()
+            self.finished = FakeSignal()
+
+        def start(self):
+            pass
+
+        def isRunning(self):
+            return False
+
+        def deleteLater(self):
+            pass
+
+    monkeypatch.setattr(yt_download_dialog_module, "YtDownloadWorker", FakeWorker)
+    library = Library(tmp_path / "library.db")
+    dlg = YtDownloadDialog(
+        "https://www.youtube.com/watch?v=example",
+        Settings(
+            music_root=str(tmp_path / "Music"),
+            yt_use_browser_cookies=True,
+            yt_browser_cookies_browser="chrome",
+        ),
+        library,
+    )
+
+    try:
+        dlg._start()
+
+        assert captured_kwargs["browser_cookies_browser"] == "chrome"
     finally:
         library.close()
         dlg.deleteLater()
