@@ -31,6 +31,7 @@ class RepeatMode(Enum):
 
 class Player(QObject):
     track_changed = Signal(object)           # Track or None
+    track_metadata_changed = Signal(object)  # Current Track metadata refreshed; playback unchanged
     stream_metadata_changed = Signal(object) # ICY/HLS in-stream title updates only
     state_changed = Signal(str)              # "playing"/"paused"/"stopped"
     position_changed = Signal(int, int)      # (ms, total_ms)
@@ -123,6 +124,42 @@ class Player(QObject):
 
     def queue(self) -> list[Track]:
         return list(self._queue)
+
+    def update_library_tracks(self, tracks: list[Track]) -> bool:
+        """Replace queued library tracks with freshly loaded metadata rows.
+
+        This is intentionally event-driven: callers invoke it after a known
+        library edit rather than polling files or the database. Playback keeps
+        running because tag/artwork changes do not affect the active media
+        source.
+        """
+        by_id = {
+            track.id: track
+            for track in tracks
+            if track is not None and track.id
+        }
+        if not by_id:
+            return False
+
+        changed = False
+        current_changed = False
+        for idx, queued in enumerate(self._queue):
+            if not queued.is_library_item:
+                continue
+            replacement = by_id.get(queued.id)
+            if replacement is None:
+                continue
+            self._queue[idx] = replacement
+            changed = True
+            current_changed = current_changed or idx == self._index
+
+        if not changed:
+            return False
+
+        self.queue_changed.emit()
+        if current_changed and 0 <= self._index < len(self._queue):
+            self.track_metadata_changed.emit(self._queue[self._index])
+        return True
 
     def current_index(self) -> int:
         return self._index

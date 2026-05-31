@@ -586,6 +586,7 @@ class LibraryView(QWidget):
     request_open_settings = Signal()
     request_diagnostics = Signal()
     request_scan_replaygain = Signal(list)  # list[Track]
+    tracks_metadata_changed = Signal(list)  # track ids changed by a known library edit
 
     def __init__(self, library: Library, parent: QWidget | None = None):
         super().__init__(parent)
@@ -1598,6 +1599,7 @@ class LibraryView(QWidget):
         if result == QDialog.Accepted:
             self.status_message.emit(f"Metadata updated for \"{album}\".")
             self.refresh()
+            self.tracks_metadata_changed.emit([track.id for track in tracks])
 
     # ------------------------------------------------------------------ context menu
     def _show_track_context_menu(self, pos) -> None:
@@ -1768,6 +1770,8 @@ class LibraryView(QWidget):
                 self.library.update_acoustid(track.id, c["acoustid"])
             self.status_message.emit(f"Applied: {c.get('artist', '')} — {c.get('title', '')}")
             self.refresh()
+            if fields:
+                self.tracks_metadata_changed.emit([track.id])
 
     def _open_containing_folder(self, track: Track) -> None:
         folder = Path(track.path).expanduser().parent
@@ -1864,6 +1868,7 @@ class LibraryView(QWidget):
             msg += " (file tags could not be written to disk.)"
         self.status_message.emit(msg)
         self.refresh()
+        self.tracks_metadata_changed.emit([track.id])
 
     def edit_track_metadata(self, track: Track) -> None:
         self._show_edit_metadata_dialog(track)
@@ -2130,6 +2135,7 @@ class LibraryView(QWidget):
             msg += f" ({failed} file{'s' if failed != 1 else ''} could not be written to disk.)"
         self.status_message.emit(msg)
         self.refresh()
+        self.tracks_metadata_changed.emit([track.id for track in tracks])
 
     # ------------------------------------------------------------------ playlists
     def refresh_playlists(self) -> None:

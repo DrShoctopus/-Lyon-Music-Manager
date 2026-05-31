@@ -152,6 +152,34 @@ def test_backend_metadata_ignored_for_library_tracks(qapp):
     assert current.album == "Existing Album"
 
 
+def test_library_metadata_refresh_updates_current_track_without_playback_change(qapp):
+    backend = FakeStreamBackend()
+    player = Player(backend=backend)
+    old_track = _library_track()
+    old_track.artwork_path = "old-cover.jpg"
+    refreshed_track = _library_track()
+    refreshed_track.title = "Retagged Title"
+    refreshed_track.artwork_path = "new-cover.jpg"
+
+    track_changes = []
+    metadata_changes = []
+    queue_changes = []
+    player.track_changed.connect(track_changes.append)
+    player.track_metadata_changed.connect(metadata_changes.append)
+    player.queue_changed.connect(lambda: queue_changes.append(True))
+
+    player.set_queue([old_track], 0)
+    track_changes.clear()
+    queue_changes.clear()
+
+    assert player.update_library_tracks([refreshed_track]) is True
+
+    assert player.current() is refreshed_track
+    assert track_changes == []
+    assert metadata_changes == [refreshed_track]
+    assert queue_changes == [True]
+
+
 def test_backend_metadata_with_only_now_playing_no_separator_sets_title_only(qapp):
     backend = FakeStreamBackend()
     player = Player(backend=backend)
