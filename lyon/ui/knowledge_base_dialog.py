@@ -90,6 +90,11 @@ WELCOME = _wrap(
       greyed out or missing — it tells you exactly which native component
       (ffmpeg, VLC, libdiscid) needs attention.</li>
     </ol>
+
+    <p style="margin-top:18px; padding-top:12px; border-top:1px solid #25323f;
+    color:#9ad9ff; font-style:italic;">{__app_name__} is inspired by and
+    dedicated to my grandfather, Chuck Lyon — it bears his name, and the love
+    of music he shares runs through everything it does.</p>
     """,
 )
 
@@ -97,33 +102,38 @@ WELCOME = _wrap(
 FLOW_RIP_CD = _wrap(
     "From Opening the App to Ripping a CD",
     """
-    <p>This is the complete process flow for a brand-new install on Windows.
-    Follow the steps in order. Each step lists exactly what to click and what
-    to expect on screen.</p>
+    <p>This is the complete process flow for a brand-new install. Follow the
+    steps in order. Each step lists exactly what to click and what to expect
+    on screen.</p>
 
     <h2>Step 1 — Launch the app</h2>
     <div class="step">
-      <p>Double-click <code>LyonMusicManager.exe</code> (or run
-      <code>py main.py</code> from a source checkout).</p>
+      <p>Launch <b>Sea Lyon Media Manager</b> from the Start menu (Windows) or
+      the Applications folder (macOS). From the portable Windows build you can
+      double-click <code>LyonMusicManager.exe</code>; from a source checkout
+      run <code>py main.py</code>.</p>
       <p>A splash screen appears for a moment, then the main window opens
       with the <b>Library</b> tab in front.</p>
     </div>
 
     <h2>Step 2 — First-run setup</h2>
     <div class="step">
-      <p>On the very first launch the <b>First-Run Setup</b> dialog appears.
-      You will see:</p>
+      <p>On the very first launch a setup dialog
+      (<i>"Let's finish setting up Sea Lyon Media Manager"</i>) appears. You
+      will see:</p>
       <ul>
-        <li><b>Music Root</b> — the folder where ripped CDs and YouTube
-        downloads will be saved by default. The suggested path is
-        <code>%USERPROFILE%\\Music\\Lyon</code>. Accept it or click
-        <i>Browse…</i> to choose a different location.</li>
-        <li><b>Library Folders</b> — one or more folders that already contain
-        music or video files. Click <i>Add…</i> to include each one. You can
-        skip this if you only want to rip CDs to start with.</li>
+        <li><b>Music folder for new rips</b> — the folder where ripped CDs and
+        YouTube downloads will be saved by default. The suggested path is
+        <code>%USERPROFILE%\\Music\\Lyon</code> on Windows or
+        <code>~/Music/Lyon</code> on macOS. Accept it or click <i>Browse…</i>
+        to choose a different location.</li>
+        <li><b>Library folders to scan</b> — one or more folders that already
+        contain music or video files. Click <i>Add Folder…</i> to include each
+        one. You can skip this if you only want to rip CDs to start with.</li>
       </ul>
-      <p>Click <b>Finish</b>. The app scans the listed folders in the
-      background and populates the library.</p>
+      <p>Click <b>Save Setup</b>. The app scans the listed folders in the
+      background and populates the library. (Choose <b>Skip Setup</b> to take
+      care of this later from the File and Settings menus.)</p>
     </div>
 
     <h2>Step 3 — Verify your runtime is healthy</h2>
@@ -133,8 +143,9 @@ FLOW_RIP_CD = _wrap(
       status of OK, WARNING or MISSING.</p>
       <p>For CD ripping you need <b>ffmpeg</b> and <b>libdiscid</b> to be OK.
       For audio playback you need <b>VLC/libVLC</b>. The <i>How to fix</i>
-      column tells you exactly which file to drop into
-      <code>bin\\</code>.</p>
+      column tells you exactly what to do — the installed macOS app bundles
+      these already, while on Windows (and source checkouts) it names the file
+      to drop into <code>bin\\</code>.</p>
     </div>
 
     <h2>Step 4 — Configure ripping preferences (one time only)</h2>
@@ -168,7 +179,7 @@ FLOW_RIP_CD = _wrap(
       <p>Click the <b>Rip</b> tab (or press <kbd>Ctrl+6</kbd>). The Rip view
       contains:</p>
       <ul>
-        <li>A <b>CD Drive</b> dropdown listing every optical drive Windows
+        <li>A <b>CD Drive</b> dropdown listing every optical drive the system
         reports.</li>
         <li>Buttons: <b>Refresh Drives</b>, <b>Read Disc</b>, <b>Rip CD</b>,
         <b>Cancel</b>.</li>
@@ -184,7 +195,7 @@ FLOW_RIP_CD = _wrap(
       <ol>
         <li>Pick your drive from the dropdown if it is not selected.</li>
         <li>Click <b>Read Disc</b>. The status line shows
-        <i>"Reading disc in D:…"</i>.</li>
+        <i>"Reading disc…"</i> (naming the drive on Windows).</li>
         <li>The app reads the Table-of-Contents, computes the MusicBrainz
         disc ID, and queries CUETools DB, MusicBrainz and TheAudioDB in
         sequence.</li>
@@ -913,26 +924,57 @@ PODCASTS = _wrap(
 RADIO = _wrap(
     "Internet Radio",
     """
-    <p>The <b>Radio</b> tab (<kbd>Ctrl+3</kbd>) is for saved live audio
-    streams.</p>
+    <p>The <b>Radio</b> tab (<kbd>Ctrl+3</kbd>) plays live audio streams. It
+    has a quick-play bar at the top and two sub-tabs below it: <b>My
+    Stations</b> (your saved list) and <b>Browse</b> (an online directory).</p>
 
-    <h2>Add a station</h2>
+    <h2>Quick-play a stream URL</h2>
     <ol>
-      <li>Click <b>Add Station…</b>.</li>
-      <li>Type a name and the direct stream URL (MP3 or AAC over HTTP, or a
-      playlist URL like <code>.pls</code> / <code>.m3u</code>).</li>
-      <li>Click OK; the station appears in the list.</li>
+      <li>Paste a direct stream URL into the <b>Stream URL</b> box at the top
+      and click <b>Play Stream</b> (or press Enter).</li>
+      <li>Playback starts immediately. Recently played URLs are remembered and
+      offered as autocomplete suggestions next time.</li>
+      <li>Once a stream starts, an <b>Add to My Stations</b> prompt appears so
+      you can save it permanently with one click.</li>
     </ol>
 
-    <h2>Import a playlist file</h2>
-    <p>Click <b>Import…</b> and pick an <code>.m3u</code> or <code>.pls</code>
-    file. Every URL inside it becomes a saved station.</p>
+    <h2>My Stations</h2>
+    <p>Your saved stations live on the <b>My Stations</b> sub-tab. The toolbar
+    buttons are:</p>
+    <ul>
+      <li><b>Play</b> — play the selected station (or just double-click it).</li>
+      <li><b>Add…</b> — add a station by hand: a name plus the direct stream
+      URL (MP3 or AAC over HTTP, or a playlist URL such as <code>.pls</code> /
+      <code>.m3u</code>).</li>
+      <li><b>Edit…</b> — change the name or URL of the selected station.</li>
+      <li><b>Import Playlist…</b> — pick an <code>.m3u</code> or
+      <code>.pls</code> file; every URL inside it becomes a saved station.</li>
+      <li><b>Export…</b> — write your stations out to an <code>.m3u</code> or
+      <code>.pls</code> playlist for backup or sharing.</li>
+      <li><b>Remove</b> — delete the selected station from the list.</li>
+    </ul>
+    <p>The star in the first column toggles a station as a <b>favorite</b>
+    (favorites sort to the top). The table also shows Genre, Bitrate, the URL,
+    and a <b>Status</b> column reporting each station's last reachability check
+    (for example <code>HTTP 200</code> or <code>Connection failed</code>).</p>
 
-    <h2>Play</h2>
-    <p>Double-click a station to start streaming. Live streams cannot be
-    seeked; the transport bar's seek slider is hidden while a radio source
-    is active. The station name shows up in the transport bar and Now
-    Playing view.</p>
+    <h2>Browse the online directory</h2>
+    <p>The <b>Browse</b> sub-tab searches the free
+    <a href="https://www.radio-browser.info/">radio-browser.info</a> directory
+    of public stations.</p>
+    <ol>
+      <li>Type part of a station name, and/or pick a <b>tag/genre</b> and a
+      <b>country</b> from the dropdowns.</li>
+      <li>Click <b>Search</b>. Matches appear with their Tags, Country,
+      Bitrate and listener Votes.</li>
+      <li>Select a result and click <b>Play</b> (or double-click) to listen,
+      or <b>Add to My Stations</b> to save it.</li>
+    </ol>
+
+    <h2>Playback notes</h2>
+    <p>Live streams cannot be seeked, so the transport bar's seek slider is
+    hidden while a radio source is active. The station name shows up in the
+    transport bar and the Now Playing view.</p>
     """,
 )
 
@@ -973,8 +1015,9 @@ VIDEO = _wrap(
 DISC = _wrap(
     "Disc tab — Audio CD, DVD, VCD",
     """
-    <p>The <b>Disc</b> tab (<kbd>Ctrl+5</kbd>) is a Windows-first launcher
-    for optical media.</p>
+    <p>The <b>Disc</b> tab (<kbd>Ctrl+5</kbd>) is a launcher for optical media
+    on Windows and macOS. On macOS the <b>Disc</b> and <b>Rip</b> tabs appear
+    only while an optical drive is attached.</p>
 
     <h2>Audio CD</h2>
     <ol>
@@ -993,9 +1036,9 @@ DISC = _wrap(
     own keyboard shortcuts.</p>
 
     <h2>Eject</h2>
-    <p>The <b>Eject</b> button issues a Win32 eject request to the selected
-    drive. If a rip is in progress, eject waits until ripping has fully
-    stopped to avoid corrupting the output file.</p>
+    <p>The <b>Eject</b> button sends an eject request to the selected drive.
+    If a rip is in progress, eject waits until ripping has fully stopped to
+    avoid corrupting the output file.</p>
     """,
 )
 
@@ -1011,7 +1054,7 @@ RIP = _wrap(
     <table>
       <tr><th>Control</th><th>Purpose</th></tr>
       <tr><td>CD Drive dropdown</td><td>Select which optical drive to use.
-      Refresh Drives rescans Windows for newly-attached drives.</td></tr>
+      Refresh Drives rescans the system for newly-attached drives.</td></tr>
       <tr><td>Read Disc</td><td>Read TOC, compute disc ID, fetch metadata
       and artwork.</td></tr>
       <tr><td>Rip CD</td><td>Start the rip with the current settings and
@@ -1179,10 +1222,9 @@ SCROBBLING = _wrap(
     <b>Settings → Scrobbling</b>.</p>
 
     <h2>Last.fm</h2>
+    <p>Sea Lyon ships with its own Last.fm application key, so you don't need
+    to create one or paste any API credentials.</p>
     <ol>
-      <li>Create a Last.fm API account at
-      <a href="https://www.last.fm/api/account/create">last.fm/api/account/create</a>,
-      then paste your API key and shared secret into the Settings fields.</li>
       <li>Tick <b>Enable Last.fm scrobbling</b>.</li>
       <li>Click <b>Connect Last.fm…</b>. The app gets a token, opens your
       browser, and waits for you to click <i>"Allow"</i> on the Last.fm
@@ -1221,6 +1263,16 @@ DLNA = _wrap(
       <li>UPnP control points (BubbleUPnP, Kodi, VLC)</li>
     </ul>
 
+    <h2>Settings</h2>
+    <ul>
+      <li><b>Server name</b> — the friendly name shown to other devices
+      (defaults to "Sea Lyon Media Manager").</li>
+      <li><b>Port</b> — leave on <i>Auto</i> (0) to let the operating system
+      pick a free port, or pin a specific port.</li>
+      <li><b>Bind address</b> — <code>0.0.0.0</code> to serve the whole LAN,
+      or <code>127.0.0.1</code> to restrict sharing to this computer.</li>
+    </ul>
+
     <h2>Behaviour</h2>
     <ul>
       <li>The browse tree mirrors Artists / Albums / Genres / Playlists from
@@ -1243,9 +1295,9 @@ SETTINGS_LIBRARY = _wrap(
     "Settings → Library",
     """
     <ul>
-      <li><b>Music Root</b> — default destination for rips and YouTube
+      <li><b>Music folder</b> — default destination for rips and YouTube
       downloads. Browse to a folder.</li>
-      <li><b>Library Folders</b> — the list of indexed roots. Use Add… and
+      <li><b>Library folders</b> — the list of indexed roots. Use Add… and
       Remove to manage them.</li>
       <li><b>Watch library folders for changes</b> — enables the recursive
       filesystem watcher so new files are picked up
@@ -1259,13 +1311,15 @@ SETTINGS_PLAYBACK = _wrap(
     "Settings → Playback",
     """
     <ul>
-      <li><b>Audio Output</b> — pick a libVLC audio module (e.g. WASAPI on
-      Windows, CoreAudio on macOS).</li>
-      <li><b>Audio Device</b> — once an output is chosen, you can pick a
+      <li><b>Output module</b> — pick a libVLC audio output (e.g. WASAPI on
+      Windows, CoreAudio on macOS). Changes take effect on the next track.</li>
+      <li><b>Output device</b> — once an output is chosen, you can pick a
       specific endpoint (e.g. a particular DAC).</li>
-      <li><b>ReplayGain</b> — Off / Track / Album, with
-      <b>Prevent clipping</b>.</li>
-      <li><b>Crossfade</b> — 0 to 12 seconds.</li>
+      <li><b>ReplayGain</b> — a <b>Normalization mode</b> of Off / Track Gain /
+      Album Gain, a <b>Pre-amp</b> offset (−6 to +6 dB; use a negative value to
+      add headroom), and <b>Prevent clipping</b> (never boost above the
+      original volume).</li>
+      <li><b>Crossfade</b> — 0 to 60 seconds (0 = off).</li>
       <li><b>Gapless playback</b> — requires crossfade = 0.</li>
     </ul>
     """,
@@ -1276,12 +1330,15 @@ SETTINGS_RIPPING = _wrap(
     "Settings → CD Ripping",
     """
     <ul>
+      <li><b>CD drive</b> — the drive to rip from (e.g. <code>D:</code>);
+      leave blank to auto-detect.</li>
       <li><b>Output format</b> — FLAC, MP3, AAC/M4A, Opus, OGG, ALAC, WAV,
       AIFF, WMA.</li>
-      <li><b>FLAC compression</b> — 0–8, default 5. Higher is smaller and
-      slower; output is bit-identical at every level.</li>
-      <li><b>Bitrate</b> — for lossy formats (e.g. 320 kbps MP3, 256 kbps
-      M4A, 192 kbps Opus).</li>
+      <li><b>FLAC compression</b> — 0–8, default 4. Higher is smaller and
+      slower; output is bit-identical at every level. (Shown only for
+      FLAC.)</li>
+      <li><b>Bitrate (kbps)</b> — for lossy formats: 128, 192, 256, 320 or
+      512. (Shown only for lossy formats.)</li>
       <li><b>Eject disc after rip</b> — opens the tray on completion.</li>
       <li><b>Verify rip accuracy against CUETools DB</b> — FLAC only.</li>
     </ul>
@@ -1307,6 +1364,9 @@ SETTINGS_METADATA = _wrap(
       policy. Use your real email/website; replace the
       <code>example.invalid</code> placeholder before distributing
       builds.</li>
+      <li><b>TheAudioDB API key</b> — optional key for TheAudioDB lookups; the
+      free tier works with the default, so leave it blank unless you have your
+      own key.</li>
     </ul>
     """,
 )
@@ -1316,9 +1376,11 @@ SETTINGS_YOUTUBE = _wrap(
     "Settings → YouTube",
     """
     <ul>
-      <li><b>Audio format</b> — FLAC or MP3.</li>
-      <li><b>Video format</b> — MP4, MKV or WebM.</li>
-      <li><b>Save to</b> — output folder; defaults to
+      <li><b>Audio-only format</b> — FLAC or MP3.</li>
+      <li><b>Video format (video + audio)</b> — MP4, MKV or WebM.</li>
+      <li><b>Video quality</b> — Best available, 1080p, 2K (1440p) or
+      4K (2160p). Requires ffmpeg to merge separate video/audio streams.</li>
+      <li><b>Save folder</b> — output folder; defaults to
       <code>&lt;music root&gt;/YouTube</code>.</li>
       <li><b>Automatically add downloads to library</b> — index completed
       files immediately.</li>
@@ -1343,6 +1405,9 @@ SETTINGS_UPDATES = _wrap(
       the skipped version appears here with a <i>Stop skipping</i> button
       so future checks will surface it again.</li>
     </ul>
+
+    <p>You can also run a check any time from <b>Help → Check for
+    Updates…</b>.</p>
 
     <p class="tip">Update checks run off the UI thread and do not transmit
     any of your data — see PRIVACY.md for details.</p>
@@ -1396,7 +1461,7 @@ DIAGNOSTICS = _wrap(
       fix</i> column tells you which file to provide.</li>
     </ul>
 
-    <h2>Common fixes</h2>
+    <h2>Common fixes (Windows / source checkouts)</h2>
     <ul>
       <li>Place <code>ffmpeg.exe</code> in <code>bin/</code> at the repo
       root, or install ffmpeg system-wide.</li>
@@ -1404,6 +1469,18 @@ DIAGNOSTICS = _wrap(
       <li>Place a 64-bit VLC runtime under <code>bin/vlc/</code> including
       <code>libvlc.dll</code>, <code>libvlccore.dll</code> and the
       <code>plugins/</code> folder.</li>
+    </ul>
+    <p class="tip">The installed macOS app bundles ffmpeg, libVLC and
+    libdiscid inside the <code>.app</code>, so these rarely show as missing
+    there. From a macOS source checkout, put the macOS equivalents (ffmpeg,
+    fpcalc, libdiscid) in <code>bin/</code>.</p>
+
+    <h2>More Help-menu tools</h2>
+    <ul>
+      <li><b>Help → Open Log Folder</b> — opens the folder holding the
+      rotating application logs.</li>
+      <li><b>Help → Copy Diagnostics to Clipboard</b> — copies a full
+      environment and dependency report you can paste into a bug report.</li>
     </ul>
     """,
 )
@@ -1443,6 +1520,12 @@ SHORTCUTS = _wrap(
       <tr><td><kbd>Space</kbd></td><td>Play / Pause</td></tr>
       <tr><td><kbd>Esc</kbd></td><td>Exit fullscreen</td></tr>
     </table>
+
+    <h2>Help</h2>
+    <table>
+      <tr><th>Shortcut</th><th>Action</th></tr>
+      <tr><td><kbd>F1</kbd></td><td>Open the Knowledge Base</td></tr>
+    </table>
     """,
 )
 
@@ -1456,7 +1539,9 @@ DATA_LOCATIONS = _wrap(
     <table>
       <tr><th>Platform</th><th>Folder</th></tr>
       <tr><td>Windows</td><td><code>%APPDATA%\\LyonMusicManager\\</code></td></tr>
-      <tr><td>macOS / Linux</td>
+      <tr><td>macOS</td>
+          <td><code>~/Library/Application Support/LyonMusicManager/</code></td></tr>
+      <tr><td>Linux</td>
           <td><code>$XDG_CONFIG_HOME/LyonMusicManager/</code> or
           <code>~/.config/LyonMusicManager/</code></td></tr>
     </table>
@@ -1504,9 +1589,11 @@ TROUBLESHOOT = _wrap(
     ffmpeg on PATH.</p>
 
     <h2>No CD drive appears</h2>
-    <p>CD detection is Windows-only. Confirm Windows sees the drive in
-    File Explorer and that an audio CD is inserted (data discs don't show
-    up).</p>
+    <p>CD ripping works on Windows and macOS with an attached optical drive.
+    On Windows, confirm the drive shows in File Explorer; on macOS the
+    <b>Disc</b> and <b>Rip</b> tabs only appear once an optical drive is
+    connected. Either way an audio CD must be inserted — data discs don't
+    show up.</p>
 
     <h2>Disc metadata doesn't resolve</h2>
     <p>Keep CUETools DB metadata lookup enabled, confirm internet access,
