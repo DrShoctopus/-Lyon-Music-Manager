@@ -12,9 +12,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
-    QLabel,
     QLineEdit,
-    QPlainTextEdit,
     QPushButton,
     QRadioButton,
     QVBoxLayout,
@@ -25,6 +23,7 @@ from ..core.library import Library
 from ..core.settings import Settings
 from ..core.yt_downloader import YtDownloadWorker
 from .toast import Toast
+from .widgets import AppProgressBar
 
 _AUDIO_FORMATS = ["flac", "mp3"]
 _VIDEO_FORMATS = ["mp4", "mkv", "webm"]
@@ -54,7 +53,7 @@ class YtDownloadDialog(QDialog):
 
         self.setWindowTitle("Download from YouTube")
         self.setMinimumWidth(560)
-        self.resize(580, 480)
+        self.resize(580, 320)
 
         layout = QVBoxLayout(self)
         form = QFormLayout()
@@ -104,15 +103,10 @@ class YtDownloadDialog(QDialog):
 
         layout.addLayout(form)
 
-        # Log
-        log_label = QLabel("Download log:")
-        log_label.setObjectName("sectionHeading")
-        layout.addWidget(log_label)
-        self.log = QPlainTextEdit()
-        self.log.setReadOnly(True)
-        self.log.setMinimumHeight(160)
-        self.log.setObjectName("monoLog")
-        layout.addWidget(self.log, 1)
+        # Status
+        self.status_bar = AppProgressBar()
+        self.status_bar.reset_status("Ready")
+        layout.addWidget(self.status_bar)
 
         # Buttons
         self._start_btn = QPushButton("Download")
@@ -168,18 +162,18 @@ class YtDownloadDialog(QDialog):
     def _start(self) -> None:
         url = self.url_edit.text().strip()
         if not url:
-            self._log("Please enter a URL.")
+            self._set_status("Please enter a URL.")
             return
 
         output_dir = self.dir_edit.text().strip()
         if not output_dir:
-            self._log("Please choose an output folder.")
+            self._set_status("Please choose an output folder.")
             return
 
         try:
             Path(output_dir).mkdir(parents=True, exist_ok=True)
         except OSError as exc:
-            self._log(f"Could not create output folder: {exc}")
+            self._set_status(f"Could not create output folder: {exc}")
             return
 
         mode = "audio" if self.radio_audio.isChecked() else "video"
@@ -187,10 +181,7 @@ class YtDownloadDialog(QDialog):
         playlist = self.playlist_check.isChecked()
         self._active_mode = mode
 
-        self.log.clear()
-        self._log(f"Starting {'playlist' if playlist else 'single'} download → {output_dir}")
-        self._log(f"Mode: {mode.upper()}  Format: {fmt.upper()}")
-        self._log("")
+        self.status_bar.reset_status("0% - calculating")
 
         self._start_btn.setEnabled(False)
         self._cancel_btn.setEnabled(True)
@@ -200,7 +191,7 @@ class YtDownloadDialog(QDialog):
         quality = self.settings.yt_video_quality if mode == "video" else "best"
         worker = YtDownloadWorker(url, mode, fmt, output_dir, playlist, quality, self)
         self._worker = worker
-        worker.progress.connect(self._log)
+        worker.download_progress.connect(self._on_download_progress)
         worker.track_ready.connect(self._on_track_ready)
         worker.error.connect(self._on_error)
         worker.download_finished.connect(self._on_finished)
@@ -214,30 +205,40 @@ class YtDownloadDialog(QDialog):
                 return
             self._canceling = True
             self._worker.cancel()
-            self._log("\n[Cancelling…]")
+            self._set_status("Cancelling...")
             self._cancel_btn.setEnabled(False)
             self._close_btn.setEnabled(False)
 
-    def _log(self, msg: str) -> None:
-        self.log.appendPlainText(msg)
-        sb = self.log.verticalScrollBar()
-        sb.setValue(sb.maximum())
+    def _set_status(self, msg: str, *, failed: bool = False, value: int | None = None) -> None:
+        if value is not None:
+            self.status_bar.setValue(max(0, min(100, value)))
+        self.status_bar.set_label(msg)
+        self.status_bar.set_failed(failed)
+
+    def _on_download_progress(self, percent: int, eta: str) -> None:
+        time_left = eta or "calculating"
+        self._set_status(f"{percent}% - {time_left} left", value=percent)
 
     def _on_track_ready(self, path: str) -> None:
-        self._log(f"✓  {path}")
         if self.settings.yt_auto_add:
             result = self.library.index_file(path, force=True)
             if result.status in {"added", "updated", "unchanged"}:
                 self.library.commit()
                 self.library_updated.emit()
 
-    def _on_error(self, msg: str) -> None:
-        self._log(f"\nERROR: {msg}")
+    def _on_error(self, _msg: str) -> None:
+        self._set_status("Failed", failed=True, value=100)
 
     def _on_finished(self, succeeded: int, failed: int) -> None:
-        self._log(
-            f"\nDone — {succeeded} downloaded, {failed} failed."
-        )
+        if failed > 0:
+            self._set_status("Failed", failed=True, value=100)
+        elif succeeded > 0:
+            self._set_status("100% - 0:00 left", value=100)
+        elif self._canceling:
+            self._set_status("Cancelled", value=0)
+        else:
+            self._set_status("Ready", value=0)
+
         self._start_btn.setEnabled(True)
         self._cancel_btn.setEnabled(False)
         self._close_btn.setEnabled(True)
@@ -274,13 +275,13 @@ class YtDownloadDialog(QDialog):
 
     def _request_close(self) -> None:
         if self._has_active_worker():
-            self._log("Cancel the active download before closing.")
+            self._set_status("Cancel the active download before closing.")
             return
         self.accept()
 
     def reject(self) -> None:
         if self._has_active_worker():
-            self._log("Cancel the active download before closing.")
+            self._set_status("Cancel the active download before closing.")
             return
         super().reject()
 
@@ -289,7 +290,7 @@ class YtDownloadDialog(QDialog):
             self._worker.cancel()
             if not self._canceling:
                 self._canceling = True
-                self._log("\n[Cancelling…]")
+                self._set_status("Cancelling...")
             self._cancel_btn.setEnabled(False)
             self._close_btn.setEnabled(False)
             ev.ignore()

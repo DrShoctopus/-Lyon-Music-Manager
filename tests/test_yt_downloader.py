@@ -64,6 +64,22 @@ def test_import_error_emits_download_finished(monkeypatch, tmp_path):
     assert finished == [(0, 1)]
 
 
+def test_progress_hook_emits_structured_percent_and_eta(tmp_path):
+    worker = YtDownloadWorker("https://example.invalid/video", "video", "mp4", str(tmp_path))
+    emitted: list[tuple[int, str]] = []
+    worker.download_progress.connect(lambda percent, eta: emitted.append((percent, eta)))
+
+    worker._on_progress({
+        "status": "downloading",
+        "filename": str(tmp_path / "Example.mp4"),
+        "downloaded_bytes": 250,
+        "total_bytes": 1000,
+        "eta": 125,
+    })
+
+    assert emitted == [(25, "2:05")]
+
+
 def test_fatal_download_error_counts_as_failed(monkeypatch, tmp_path):
     class FakeYoutubeDL:
         def __init__(self, *_args, **_kwargs):

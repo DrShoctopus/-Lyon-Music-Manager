@@ -457,14 +457,6 @@ QLabel#formLabel {
     color: #dce8f4;
     font-weight: 600;
 }
-QPlainTextEdit#monoLog {
-    font-family: "Consolas", "Menlo", "DejaVu Sans Mono", monospace;
-    font-size: 9pt;
-    background: #07090f;
-    border: 1px solid #27313b;
-    border-radius: 4px;
-}
-
 /* Video player catalog sidebar */
 QFrame#videoCatalogSidebar,
 QFrame#videoCatalogSearchRow,

@@ -1,6 +1,7 @@
 """yt-dlp download worker thread."""
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from PySide6.QtCore import QThread, Signal
@@ -8,6 +9,36 @@ from PySide6.QtCore import QThread, Signal
 from .ffmpeg import find_ffmpeg_binary
 
 _YT_QUALITY_HEIGHT = {"1080p": 1080, "2k": 1440, "4k": 2160}
+
+
+def _format_eta(seconds) -> str:
+    try:
+        total = max(0, int(seconds))
+    except (TypeError, ValueError):
+        return ""
+    minutes, secs = divmod(total, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    return f"{minutes}:{secs:02d}"
+
+
+def _download_percent(info: dict) -> int | None:
+    downloaded = info.get("downloaded_bytes")
+    total = info.get("total_bytes") or info.get("total_bytes_estimate")
+    try:
+        if downloaded is not None and total:
+            return max(0, min(100, int(float(downloaded) * 100 / float(total))))
+    except (TypeError, ValueError, ZeroDivisionError):
+        pass
+
+    match = re.search(r"(\d+(?:\.\d+)?)\s*%", str(info.get("_percent_str", "")))
+    if not match:
+        return None
+    try:
+        return max(0, min(100, int(float(match.group(1)))))
+    except ValueError:
+        return None
 
 
 def _video_format_selector(quality: str, has_ffmpeg: bool, container: str) -> str:
@@ -65,13 +96,15 @@ class YtDownloadWorker(QThread):
 
     Signals
     -------
-    progress(str)      -- log / status line suitable for display
+    progress(str)      -- log / status line suitable for diagnostics
+    download_progress(int, str) -- current item percent and formatted ETA
     track_ready(str)   -- absolute path of each completed output file
     download_finished(int, int) -- (succeeded, failed) counts when done
     error(str)         -- emitted on a fatal error before finished
     """
 
     progress = Signal(str)
+    download_progress = Signal(int, str)
     track_ready = Signal(str)
     download_finished = Signal(int, int)
     error = Signal(str)
@@ -189,6 +222,9 @@ class YtDownloadWorker(QThread):
             raise DownloadCancelled()
         status = d.get("status", "")
         if status == "downloading":
+            pct_value = _download_percent(d)
+            if pct_value is not None:
+                self.download_progress.emit(pct_value, _format_eta(d.get("eta")))
             pct = d.get("_percent_str", "").strip()
             speed = d.get("_speed_str", "").strip()
             eta = d.get("_eta_str", "").strip()

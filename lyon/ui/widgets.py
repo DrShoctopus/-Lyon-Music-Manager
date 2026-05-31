@@ -5,9 +5,17 @@ import os
 from collections import OrderedDict
 from typing import Any
 
-from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtGui import QColor, QKeySequence, QPainter, QPixmap
-from PySide6.QtWidgets import QLabel, QWidget
+from PySide6.QtCore import QRectF, QSize, Qt, Signal
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QKeySequence,
+    QLinearGradient,
+    QPainter,
+    QPainterPath,
+    QPixmap,
+)
+from PySide6.QtWidgets import QLabel, QProgressBar, QWidget
 
 
 def display_shortcut(seq: str) -> str:
@@ -102,6 +110,103 @@ def format_duration(seconds: float | int) -> str:
 
 def format_ms(ms: int) -> str:
     return format_duration(ms / 1000)
+
+
+def draw_app_progress_bar(
+    painter: QPainter,
+    rect,
+    pct: int,
+    label: str,
+    *,
+    failed: bool = False,
+) -> None:
+    """Draw the app's split-label progress bar used by rip and download views."""
+    r = QRectF(rect)
+    chunk_w = r.width() * max(0, min(100, pct)) / 100.0
+
+    painter.save()
+
+    bg_path = QPainterPath()
+    bg_path.addRoundedRect(r, 5.0, 5.0)
+    painter.setPen(QColor("#27313b"))
+    painter.fillPath(bg_path, QColor("#070a0f"))
+    painter.drawPath(bg_path)
+
+    if chunk_w > 0.5:
+        grad = QLinearGradient(r.left(), 0.0, r.right(), 0.0)
+        if failed:
+            grad.setColorAt(0.00, QColor("#7a1018"))
+            grad.setColorAt(0.55, QColor("#d92e35"))
+            grad.setColorAt(1.00, QColor("#ff7a7d"))
+        else:
+            grad.setColorAt(0.00, QColor("#0f3c9c"))
+            grad.setColorAt(0.55, QColor("#1b8dff"))
+            grad.setColorAt(1.00, QColor("#68f3ff"))
+        chunk_path = QPainterPath()
+        chunk_path.addRoundedRect(QRectF(r.left(), r.top(), chunk_w, r.height()), 4.0, 4.0)
+        chunk_path = chunk_path.intersected(bg_path)
+        painter.fillPath(chunk_path, grad)
+
+    normal_font = painter.font()
+    bold_font = QFont(normal_font)
+    bold_font.setBold(True)
+
+    painter.setClipping(True)
+    if chunk_w > 0.5:
+        painter.setClipRect(QRectF(r.left(), r.top(), chunk_w, r.height()))
+        painter.setFont(bold_font)
+        painter.setPen(QColor("#0d0d0d"))
+        painter.drawText(rect, Qt.AlignCenter, label)
+        painter.setFont(normal_font)
+    rest_w = r.width() - chunk_w
+    if rest_w > 0.5:
+        painter.setClipRect(QRectF(r.left() + chunk_w, r.top(), rest_w, r.height()))
+        painter.setPen(QColor("#f0fbff"))
+        painter.drawText(rect, Qt.AlignCenter, label)
+    painter.setClipping(False)
+
+    painter.restore()
+
+
+class AppProgressBar(QProgressBar):
+    """QProgressBar painted with the app's custom gradient and split-colour text."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._label = "0%"
+        self._failed = False
+        self.setRange(0, 100)
+        self.setValue(0)
+        self.setMinimumHeight(font_scaled(18))
+
+    def label(self) -> str:
+        return self._label
+
+    def set_label(self, label: str) -> None:
+        if label != self._label:
+            self._label = label
+            self.update()
+
+    def set_failed(self, failed: bool) -> None:
+        if failed != self._failed:
+            self._failed = failed
+            self.update()
+
+    def is_failed(self) -> bool:
+        return self._failed
+
+    def reset_status(self, label: str = "Ready") -> None:
+        self.setRange(0, 100)
+        self.setValue(0)
+        self.set_label(label)
+        self.set_failed(False)
+
+    def paintEvent(self, event) -> None:
+        mn, mx, val = self.minimum(), self.maximum(), self.value()
+        pct = int(100 * (val - mn) / (mx - mn)) if mx > mn else 0
+        p = QPainter(self)
+        draw_app_progress_bar(p, self.rect(), pct, self._label or f"{pct}%", failed=self._failed)
+        p.end()
 
 
 class StarRatingWidget(QWidget):

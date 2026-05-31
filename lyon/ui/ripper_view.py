@@ -4,13 +4,9 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QRectF, Qt, QThread, QTimer, Signal
+from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
-    QFont,
-    QLinearGradient,
-    QPainter,
-    QPainterPath,
     QPixmap,
     QStandardItem,
     QStandardItemModel,
@@ -23,7 +19,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
-    QProgressBar,
     QPushButton,
     QStyledItemDelegate,
     QTableView,
@@ -49,7 +44,7 @@ from ..core.ripper import (
     unique_target_folder,
 )
 from ..core.settings import Settings
-from .widgets import cover_pixmap
+from .widgets import AppProgressBar, cover_pixmap, draw_app_progress_bar
 
 
 def _row_track_no(text: str | None) -> int:
@@ -67,71 +62,6 @@ _STATUS_WAITING   = None   # not yet started
 _STATUS_DONE      = 100    # completed successfully
 _STATUS_FAILED    = -1     # failed / not completed
 _STATUS_CANCELLED = -2     # cancelled mid-rip
-
-
-def _draw_app_progress_bar(painter: QPainter, rect, pct: int, label: str) -> None:
-    """Draw an app-styled progress bar with split-colour label text.
-
-    Matches the QProgressBar QSS (dark bg, blue-cyan gradient chunk).
-    Text is dark-grey over the filled chunk and light over the empty background.
-    pct: 0-100.
-    """
-    r = QRectF(rect)
-    chunk_w = r.width() * max(0, min(100, pct)) / 100.0
-
-    painter.save()
-
-    # Background
-    bg_path = QPainterPath()
-    bg_path.addRoundedRect(r, 5.0, 5.0)
-    painter.setPen(QColor("#27313b"))
-    painter.fillPath(bg_path, QColor("#070a0f"))
-    painter.drawPath(bg_path)
-
-    # Chunk
-    if chunk_w > 0.5:
-        grad = QLinearGradient(r.left(), 0.0, r.right(), 0.0)
-        grad.setColorAt(0.00, QColor("#0f3c9c"))
-        grad.setColorAt(0.55, QColor("#1b8dff"))
-        grad.setColorAt(1.00, QColor("#68f3ff"))
-        chunk_path = QPainterPath()
-        chunk_path.addRoundedRect(QRectF(r.left(), r.top(), chunk_w, r.height()), 4.0, 4.0)
-        chunk_path = chunk_path.intersected(bg_path)
-        painter.fillPath(chunk_path, grad)
-
-    # Label – bold dark text over the filled area, light text over the empty area.
-    # Bold + near-black gives strong contrast against the blue gradient when the
-    # bar has overtaken the percentage/label text.
-    normal_font = painter.font()
-    bold_font = QFont(normal_font)
-    bold_font.setBold(True)
-
-    painter.setClipping(True)
-    if chunk_w > 0.5:
-        painter.setClipRect(QRectF(r.left(), r.top(), chunk_w, r.height()))
-        painter.setFont(bold_font)
-        painter.setPen(QColor("#0d0d0d"))
-        painter.drawText(rect, Qt.AlignCenter, label)
-        painter.setFont(normal_font)
-    rest_w = r.width() - chunk_w
-    if rest_w > 0.5:
-        painter.setClipRect(QRectF(r.left() + chunk_w, r.top(), rest_w, r.height()))
-        painter.setPen(QColor("#f0fbff"))
-        painter.drawText(rect, Qt.AlignCenter, label)
-    painter.setClipping(False)
-
-    painter.restore()
-
-
-class _AppProgressBar(QProgressBar):
-    """QProgressBar painted with the app's custom bar style and split-colour text."""
-
-    def paintEvent(self, event) -> None:
-        mn, mx, val = self.minimum(), self.maximum(), self.value()
-        pct = int(100 * (val - mn) / (mx - mn)) if mx > mn else 0
-        p = QPainter(self)
-        _draw_app_progress_bar(p, self.rect(), pct, f"{pct}%")
-        p.end()
 
 
 class _ProgressDelegate(QStyledItemDelegate):
@@ -165,7 +95,7 @@ class _ProgressDelegate(QStyledItemDelegate):
             return
 
         label = "Done" if pct == _STATUS_DONE else f"{pct}%"
-        _draw_app_progress_bar(painter, option.rect.adjusted(4, 4, -4, -4), pct, label)
+        draw_app_progress_bar(painter, option.rect.adjusted(4, 4, -4, -4), pct, label)
 
 
 class _DiscReadThread(QThread):
@@ -394,7 +324,7 @@ class RipperView(QWidget):
         # Status bar
         status_row = QHBoxLayout()
         self.status_label = QLabel("Insert a CD and click Read Disc.")
-        self.progress = _AppProgressBar()
+        self.progress = AppProgressBar()
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
         status_row.addWidget(self.status_label, 1)
