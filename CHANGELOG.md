@@ -6,7 +6,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_Nothing yet — staging area for post-1.0 work._
+### Fixed
+- macOS: random audio pops during playback in the packaged app. A
+  Finder/Dock-launched `.app` is eligible for App Nap, whose timer
+  coalescing and QoS throttling intermittently starved libVLC's audio
+  thread (terminal and from-source launches are exempt, which is why only
+  the installed DMG reproduced it). Lyon now holds an `NSProcessInfo`
+  latency-critical activity assertion while audio is playing — the
+  supported, reliable opt-out — released when paused/stopped. The
+  `NSAppSleepDisabled` Info.plist key is kept as a secondary hint.
+
+### Changed
+- Bundled libVLC upgraded 3.0.21 → 3.0.23 (Windows and macOS) to match the
+  known-good system runtime; the About dialog and third-party notices were
+  updated accordingly.
 
 ## [1.0.0] — 2026-06-04
 

@@ -166,6 +166,11 @@ if sys.platform == "darwin":
             "CFBundleIdentifier": "com.drshoctopus.sealyonmediamanager",
             "LSMinimumSystemVersion": "11.0",
             "NSHighResolutionCapable": True,
+            # Opt out of macOS App Nap. When the window is occluded/idle a
+            # Finder-launched .app is otherwise eligible for timer coalescing
+            # and background-QoS throttling, which intermittently starves
+            # libVLC's audio feed and produces audible pops during playback.
+            "NSAppSleepDisabled": True,
             "NSHumanReadableCopyright": "© 2026 DrShoctopus",
             "LSApplicationCategoryType": "public.app-category.music",
             "NSLocalNetworkUsageDescription":

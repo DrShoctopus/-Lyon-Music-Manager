@@ -205,7 +205,7 @@ equalizer can drive VLC's real `AudioEqualizer`. Source installs need
 both the Python binding from `requirements.txt` and a VLC runtime
 discoverable by python-vlc.
 
-For Windows packaging, the build pipeline downloads VLC 3.0.21 and
+For Windows packaging, the build pipeline downloads VLC 3.0.23 and
 keeps only `libvlc.dll`, `libvlccore.dll`, and `plugins\` under
 `bin\vlc\`. The app prepends that folder to PATH and sets
 `VLC_PLUGIN_PATH` at runtime before importing python-vlc.

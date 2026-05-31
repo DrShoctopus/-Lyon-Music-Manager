@@ -10,6 +10,7 @@ from urllib.parse import unquote, urlparse
 
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, QTimer, Signal
 
+from .app_nap import PlaybackActivityGuard
 from .equalizer import clamp_preamp, flat_equalizer_bands, normalize_equalizer_bands
 from .library import Library, Track
 from .playback_backend import PlaybackBackend, create_playback_backend
@@ -85,6 +86,9 @@ class Player(QObject):
         self._gapless_prebuffer_backend: PlaybackBackend | None = None
         self._gapless_prebuffer_index: int = -1
         self._active_source_key: tuple | None = None
+        # macOS only: keep a "latency-critical" activity assertion while audio
+        # is playing so App Nap can't throttle libVLC's audio thread into pops.
+        self._activity_guard = PlaybackActivityGuard()
 
         self._connect_backend(self._backend)
 
@@ -306,6 +310,7 @@ class Player(QObject):
         self._cancel_crossfade()
         self._cancel_gapless_prebuffer()
         self._cleanup_backend(self._backend)
+        self._activity_guard.release()
 
     def next(self) -> None:
         if not self._queue:
@@ -453,9 +458,19 @@ class Player(QObject):
         if callable(backend_parent) and backend_parent() is None:
             backend.setParent(self)
 
+    def _on_backend_state(self, state: str) -> None:
+        # Hold the macOS App Nap activity assertion only while audio is actually
+        # playing; release it when paused/stopped (idempotent; no-op off macOS),
+        # then forward the state to listeners.
+        if state == "playing":
+            self._activity_guard.acquire()
+        else:
+            self._activity_guard.release()
+        self.state_changed.emit(state)
+
     def _connect_backend(self, backend: PlaybackBackend) -> None:
         backend.position_changed.connect(self._on_position_changed)
-        backend.state_changed.connect(self.state_changed.emit)
+        backend.state_changed.connect(self._on_backend_state)
         backend.end_reached.connect(self._on_track_ended)
         metadata_signal = getattr(backend, "metadata_changed", None)
         if metadata_signal is not None:
@@ -467,7 +482,7 @@ class Player(QObject):
     def _disconnect_backend(self, backend: PlaybackBackend) -> None:
         slots: list[tuple[object, object]] = [
             (backend.position_changed, self._on_position_changed),
-            (backend.state_changed, self.state_changed.emit),
+            (backend.state_changed, self._on_backend_state),
             (backend.end_reached, self._on_track_ended),
         ]
         metadata_signal = getattr(backend, "metadata_changed", None)

@@ -9,7 +9,7 @@ on:
 env:
   FFMPEG_VERSION: "7.1.1"
   LIBDISCID_VERSION: "0.6.4"
-  VLC_VERSION: "3.0.21"
+  VLC_VERSION: "3.0.23"
   # Pin Chromaprint/fpcalc to a known good Windows x86_64 release. Bump
   # alongside any verified upgrade; do not auto-resolve "latest" from
   # GitHub's API or builds become non-reproducible.

@@ -28,7 +28,7 @@ reflected.
 ----------------------------------------------------------------
 libVLC (and accompanying VLC plugins)
 ----------------------------------------------------------------
-Version:     3.0.21
+Version:     3.0.23
 Home page:   https://www.videolan.org/vlc/libvlc.html
 Source:      https://www.videolan.org/vlc/download-sources.html
 License:     GNU LGPL 2.1 or later (libvlc, libvlccore)

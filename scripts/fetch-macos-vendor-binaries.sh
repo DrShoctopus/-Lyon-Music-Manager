@@ -6,7 +6,7 @@ set -euo pipefail
 VENDOR="vendor-mac"
 mkdir -p "$VENDOR"
 
-VLC_VERSION="${VLC_VERSION:-3.0.21}"
+VLC_VERSION="${VLC_VERSION:-3.0.23}"
 LIBDISCID_VERSION="${LIBDISCID_VERSION:-0.6.4}"
 FPCALC_URL="${FPCALC_URL:-https://github.com/acoustid/chromaprint/releases/download/v1.5.1/chromaprint-fpcalc-1.5.1-macos-arm64.tar.gz}"
 FPCALC_SHA256="${FPCALC_SHA256:-9c5d9565d2396dbcf0e1d797e1ffdf1e19242f3bed88ac3200e144286b57ede6}"

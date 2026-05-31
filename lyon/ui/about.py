@@ -39,7 +39,7 @@ ATTRIBUTIONS: tuple[Attribution, ...] = (
         "https://www.qt.io/qt-for-python",
     ),
     Attribution(
-        "libVLC", "3.0.21", "LGPL-2.1+",
+        "libVLC", "3.0.23", "LGPL-2.1+",
         "https://www.videolan.org/vlc/libvlc.html",
         notes="Some bundled VLC plugins are GPL-2.0+.",
     ),
