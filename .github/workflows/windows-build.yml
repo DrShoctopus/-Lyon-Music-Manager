@@ -185,7 +185,7 @@ jobs:
           $exe = Get-ChildItem -Path fpcalc-extract -Recurse -Filter fpcalc.exe | Select-Object -First 1
           if (-not $exe) { throw "fpcalc.exe was not found in ${{ env.FPCALC_ARCHIVE }}." }
           Copy-Item $exe.FullName -Destination bin\fpcalc.exe -Force
-          $versionOutput = & bin\fpcalc.exe -version 2>&1
+          $versionOutput = (& bin\fpcalc.exe -version 2>&1) -join " "
           if ($LASTEXITCODE -ne 0) { throw "fpcalc.exe -version failed: $versionOutput" }
           if ($versionOutput -notmatch [regex]::Escape("${{ env.CHROMAPRINT_VERSION }}")) {
             throw "Expected fpcalc ${{ env.CHROMAPRINT_VERSION }}, got: $versionOutput"
@@ -219,7 +219,7 @@ jobs:
           $exe = Get-ChildItem -Path deno-extract -Recurse -Filter deno.exe | Select-Object -First 1
           if (-not $exe) { throw "deno.exe was not found in $env:DENO_ARCHIVE." }
           Copy-Item $exe.FullName -Destination bin\deno.exe -Force
-          $versionOutput = & bin\deno.exe --version 2>&1
+          $versionOutput = (& bin\deno.exe --version 2>&1) -join " "
           if ($LASTEXITCODE -ne 0) { throw "deno.exe --version failed: $versionOutput" }
           if ($versionOutput -notmatch [regex]::Escape("deno $env:DENO_VERSION")) {
             throw "Expected deno $env:DENO_VERSION, got: $versionOutput"
