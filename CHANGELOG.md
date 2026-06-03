@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.1] — 2026-06-03
+
 ### Added
 - YouTube downloads can optionally use a signed-in browser session for
   age-restricted videos the user is authorized to access. The opt-in setting

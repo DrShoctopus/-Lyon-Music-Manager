@@ -2,6 +2,46 @@
 
 End-to-end Windows build for this branch (WMP / `main`).
 
+## `push-release.sh`
+
+Validate release metadata, push the current release branch, create an annotated
+`v{version}` tag, and push that tag so the Windows and macOS GitHub Actions
+workflows create a draft GitHub Release.
+
+```bash
+# from the project root, on release/{version}
+scripts/push-release.sh --yes
+```
+
+### What it does
+
+1. Reads `lyon.__version__` and derives the release tag, for example
+   `1.0.1` -> `v1.0.1`.
+2. Requires the current branch to be `release/{version}` unless `--branch` is
+   provided.
+3. Requires a clean worktree, matching upstream branch, non-behind remote state,
+   a CHANGELOG section for the version, tag-triggered release workflows, and no
+   existing remote tag.
+4. Runs the focused local release-script gate:
+   `tests/test_release_workflows.py`, `tests/test_packaging.py`, and
+   `tests/test_push_release_script.py`.
+5. Pushes the release branch, creates an annotated local tag if needed, and
+   pushes the tag.
+
+The script intentionally stops at the draft-release boundary. After GitHub
+Actions attach assets to the draft GitHub Release, smoke-test the artifacts and
+make the release public manually. Publishing the GitHub Release triggers
+`.github/workflows/publish-appcast.yml` to deploy `appcast.xml` to GitHub
+Pages.
+
+### Flags
+
+- `--version VERSION` — require the app version to match `VERSION`.
+- `--branch BRANCH` — require and push `BRANCH` instead of `release/{version}`.
+- `--remote REMOTE` — push to `REMOTE`; defaults to the branch upstream remote.
+- `--skip-tests` — skip the focused local release-script gate.
+- `--yes` — skip the interactive confirmation prompt.
+
 ## `build-windows.ps1`
 
 One command, from a fresh clone, takes you to a distributable zip.
