@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import runpy
 import sys
@@ -33,6 +34,7 @@ def test_pyinstaller_spec_resolves_repo_root(monkeypatch):
         captured["pathex"] = kwargs["pathex"]
         captured["datas"] = kwargs["datas"]
         captured["binaries"] = kwargs["binaries"]
+        captured["hiddenimports"] = kwargs["hiddenimports"]
         return types.SimpleNamespace(
             pure=[],
             zipped_data=[],
@@ -60,6 +62,68 @@ def test_pyinstaller_spec_resolves_repo_root(monkeypatch):
         str(repo / "lyon" / "ui" / "assets"),
         str(Path("lyon") / "ui" / "assets"),
     ) in captured["datas"]
+
+
+def test_pyinstaller_spec_bundles_ytdlp_ejs_solver_assets(monkeypatch, tmp_path):
+    repo = Path(__file__).resolve().parents[1]
+    captured = {}
+    package_dir = tmp_path / "yt_dlp_ejs"
+    solver_dir = package_dir / "yt" / "solver"
+    solver_dir.mkdir(parents=True)
+    (solver_dir / "core.min.js").write_text("core", encoding="utf-8")
+    (solver_dir / "lib.min.js").write_text("lib", encoding="utf-8")
+
+    pil = types.ModuleType("PIL")
+    image_mod = types.ModuleType("PIL.Image")
+
+    class FakeImage:
+        def convert(self, *_args, **_kwargs):
+            return self
+
+        def save(self, *_args, **_kwargs):
+            pass
+
+    image_mod.open = lambda *_args, **_kwargs: FakeImage()
+    pil.Image = image_mod
+    monkeypatch.setitem(sys.modules, "PIL", pil)
+    monkeypatch.setitem(sys.modules, "PIL.Image", image_mod)
+
+    def find_spec(name):
+        if name == "yt_dlp_ejs":
+            return types.SimpleNamespace(submodule_search_locations=[str(package_dir)])
+        return None
+
+    monkeypatch.setattr("importlib.util.find_spec", find_spec)
+
+    def analysis(*_args, **kwargs):
+        captured["datas"] = kwargs["datas"]
+        captured["hiddenimports"] = kwargs["hiddenimports"]
+        return types.SimpleNamespace(
+            pure=[],
+            zipped_data=[],
+            scripts=[],
+            binaries=[],
+            zipfiles=[],
+            datas=[],
+        )
+
+    globals_for_spec = {
+        "SPECPATH": str(repo / "build" / "lyon.spec"),
+        "Analysis": analysis,
+        "PYZ": lambda *_args, **_kwargs: object(),
+        "EXE": lambda *_args, **_kwargs: object(),
+        "COLLECT": lambda *_args, **_kwargs: object(),
+        "BUNDLE": lambda *_args, **_kwargs: object(),
+    }
+
+    runpy.run_path(str(repo / "build" / "lyon.spec"), init_globals=globals_for_spec)
+
+    assert "yt_dlp_ejs.yt.solver" in captured["hiddenimports"]
+    assert any(
+        str(src).endswith(("core.min.js", "lib.min.js"))
+        and Path(dest) == Path("yt_dlp_ejs") / "yt" / "solver"
+        for src, dest in captured["datas"]
+    )
 
 
 @pytest.mark.parametrize("lockfile", ["requirements.txt", "requirements-build.txt"])
@@ -170,6 +234,30 @@ def test_macos_vendor_script_verifies_and_replaces_vendor_archives():
     assert "musicbrainz.org/static/libdiscid" not in script
 
 
+def test_windows_build_script_uses_current_vlc_version_for_local_builds():
+    repo = Path(__file__).resolve().parents[1]
+    script = (repo / "scripts" / "build-windows.ps1").read_text(encoding="utf-8")
+
+    assert "$VlcVersion = '3.0.23'" in script
+    assert "$vlcArchive = \"vlc-$VlcVersion-win64.zip\"" in script
+    assert "/vlc/$VlcVersion/win64/" in script
+    assert "$vlcVersion = '3.0.21'" not in script
+
+
+def test_vendor_scripts_refetch_cached_vlc_when_version_changes():
+    repo = Path(__file__).resolve().parents[1]
+    mac_script = (repo / "scripts" / "fetch-macos-vendor-binaries.sh").read_text(encoding="utf-8")
+    windows_script = (repo / "scripts" / "build-windows.ps1").read_text(encoding="utf-8")
+
+    assert "VLC_DMG_VERSION_FILE=\"$VENDOR/vlc.dmg.version\"" in mac_script
+    assert "Cached libVLC DMG is not ${VLC_VERSION}; refetching" in mac_script
+    assert "printf '%s\\n' \"$VLC_VERSION\" > \"$VLC_DMG_VERSION_FILE\"" in mac_script
+
+    assert "$vlcVersionMarker = Join-Path $vlcDir 'lyon-vlc-version.txt'" in windows_script
+    assert "bin\\vlc runtime is missing or not version $VlcVersion; refreshing" in windows_script
+    assert "Set-Content -Path $vlcVersionMarker -Value $VlcVersion" in windows_script
+
+
 def test_macos_bundle_script_cleans_up_vlc_mount():
     repo = Path(__file__).resolve().parents[1]
     script = (repo / "scripts" / "build-macos-bundle.sh").read_text(encoding="utf-8")
@@ -177,3 +265,46 @@ def test_macos_bundle_script_cleans_up_vlc_mount():
     assert "cleanup_vlc_mount" in script
     assert "trap cleanup_vlc_mount EXIT" in script
     assert "mkdir -p \"$VLC_MOUNT\"" in script
+
+
+def test_macos_vendor_script_fetches_and_verifies_deno_runtime():
+    repo = Path(__file__).resolve().parents[1]
+    script = (repo / "scripts" / "fetch-macos-vendor-binaries.sh").read_text(encoding="utf-8")
+    manifest = json.loads((repo / "build" / "vendor-runtimes.json").read_text(encoding="utf-8"))
+
+    assert manifest["deno"]["macos_arm64"]["archive"] == "deno-aarch64-apple-darwin.zip"
+    assert "load_deno_manifest_value url" in script
+    assert "load_deno_manifest_value sha256" in script
+    assert 'download_with_retries "${DENO_URL}" "$VENDOR/deno.zip"' in script
+    assert "Fetching deno (arm64)" in script
+    assert 'verify_checksum "$VENDOR/deno.zip" "$DENO_SHA256"' in script
+    assert 'verify_arm64_only "$VENDOR/deno"' in script
+    assert "Cached deno is not arm64; refetching" in script
+
+
+def test_macos_bundle_script_injects_and_verifies_deno_runtime():
+    repo = Path(__file__).resolve().parents[1]
+    script = (repo / "scripts" / "build-macos-bundle.sh").read_text(encoding="utf-8")
+
+    assert "STAGED_DENO=\"${STAGED_DENO:-vendor-mac/deno}\"" in script
+    assert "cp \"$STAGED_DENO\" \"$BIN/deno\"; chmod +x \"$BIN/deno\"" in script
+    assert "\"$BIN/ffmpeg\" \"$BIN/fpcalc\" \"$BIN/deno\"" in script
+
+
+def test_windows_build_script_fetches_and_verifies_deno_runtime():
+    repo = Path(__file__).resolve().parents[1]
+    script = (repo / "scripts" / "build-windows.ps1").read_text(encoding="utf-8")
+    manifest = json.loads((repo / "build" / "vendor-runtimes.json").read_text(encoding="utf-8"))
+
+    assert manifest["deno"]["windows"]["archive"] == "deno-x86_64-pc-windows-msvc.zip"
+    assert "$VendorRuntimeManifest = Get-Content" in script
+    assert "$DenoVersion = [string]$VendorRuntimeManifest.deno.version" in script
+    assert "$DenoArchive = [string]$VendorRuntimeManifest.deno.windows.archive" in script
+    assert "$DenoSha256 = [string]$VendorRuntimeManifest.deno.windows.sha256" in script
+    assert "Invoke-WebRequestWithRetry -Uri $denoRelease.Url -OutFile $tmp" in script
+    assert "Test-DenoVersion" in script
+    assert "Assert-DenoVersion" in script
+    assert "bin\\deno.exe is missing or not version $DenoVersion; refreshing" in script
+    assert "Assert-FileSha256 -Path $tmp -Expected $DenoSha256 -Label $DenoArchive" in script
+    assert "'bin\\deno.exe'" in script
+    assert "Packaged app is missing deno.exe" in script

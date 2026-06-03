@@ -202,6 +202,21 @@ def test_now_playing_view_prefers_track_artist_over_album_artist(player):
     assert view.artist.text() == "Second Artist"
 
 
+def test_now_playing_view_refreshes_library_metadata_without_track_change(player):
+    old_track = _track("Before")
+    old_track.artwork_path = "old-cover.jpg"
+    refreshed_track = _track("After")
+    refreshed_track.artwork_path = "new-cover.jpg"
+    player.set_queue([old_track], start_index=0)
+    view = NowPlayingView(player)
+
+    player.update_library_tracks([refreshed_track])
+
+    assert view.title.text() == "After"
+    assert view._current_track is refreshed_track
+    assert view._current_track.artwork_path == "new-cover.jpg"
+
+
 def test_now_playing_view_renders_queue_preview(player):
     view = NowPlayingView(player)
     player.set_queue([_track(f"T{i}") for i in range(5)], start_index=0)

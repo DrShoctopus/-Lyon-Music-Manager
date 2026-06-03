@@ -192,6 +192,8 @@ class TransportBar(QWidget):
         outer.addWidget(self.bar)
 
         player.track_changed.connect(self._on_track)
+        if hasattr(player, "track_metadata_changed"):
+            player.track_metadata_changed.connect(self._on_track)
         if hasattr(player, "stream_metadata_changed"):
             player.stream_metadata_changed.connect(self._on_track)
         player.position_changed.connect(self._on_position)

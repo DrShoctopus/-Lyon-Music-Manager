@@ -1,0 +1,15 @@
+{
+  "deno": {
+    "version": "2.8.1",
+    "windows": {
+      "archive": "deno-x86_64-pc-windows-msvc.zip",
+      "url": "https://github.com/denoland/deno/releases/download/v2.8.1/deno-x86_64-pc-windows-msvc.zip",
+      "sha256": "5fb5bac71f609fb91ec8960fb290885aadc27eeb22f07a8eca0c3db6be38b11a"
+    },
+    "macos_arm64": {
+      "archive": "deno-aarch64-apple-darwin.zip",
+      "url": "https://github.com/denoland/deno/releases/download/v2.8.1/deno-aarch64-apple-darwin.zip",
+      "sha256": "8154e2de0ee8c1cae31fa88e078724aaef0295fab9fd2ad6f8520389cee908f6"
+    }
+  }
+}

@@ -28,7 +28,7 @@ reflected.
 ----------------------------------------------------------------
 libVLC (and accompanying VLC plugins)
 ----------------------------------------------------------------
-Version:     3.0.21
+Version:     3.0.23
 Home page:   https://www.videolan.org/vlc/libvlc.html
 Source:      https://www.videolan.org/vlc/download-sources.html
 License:     GNU LGPL 2.1 or later (libvlc, libvlccore)
@@ -91,6 +91,20 @@ Copyright:   © 2010–present, Lukáš Lalinský and contributors
 The installer ships `fpcalc.exe` (Windows x86_64) from the upstream
 release. Source is available from the GitHub repository above.
 
+----------------------------------------------------------------
+Deno
+----------------------------------------------------------------
+Version:     2.8.1
+Home page:   https://deno.com/
+Source:      https://github.com/denoland/deno
+License:     MIT License
+Copyright:   © 2018–present, the Deno authors
+
+The installer ships unmodified copies of `deno.exe` (Windows x86_64)
+and `deno` (macOS arm64) from the upstream Deno release so yt-dlp can
+run the bundled JavaScript signature solver without depending on a
+system runtime.
+
 
 ================================================================
 2. PYTHON LIBRARIES (bundled inside the PyInstaller distribution)
@@ -150,6 +164,16 @@ Home page:   https://github.com/yt-dlp/yt-dlp
 License:     Unlicense (public domain dedication)
 Copyright:   The yt-dlp authors have released their work under the
              Unlicense; see https://unlicense.org/.
+
+----------------------------------------------------------------
+yt-dlp-ejs
+----------------------------------------------------------------
+Version:     0.8.0
+Home page:   https://github.com/yt-dlp/ejs
+License:     Unlicense AND MIT AND ISC
+Copyright:   yt-dlp-ejs contributors; prebuilt wheels include solver
+             JavaScript and bundled meriyah (ISC) / astring (MIT)
+             components as described by the upstream package metadata.
 
 ----------------------------------------------------------------
 requests
@@ -276,6 +300,7 @@ Full canonical text is also available at the following URLs:
 - Qt LGPL Exception 1.1: https://doc.qt.io/qt-6/lgpl.html
 - Python Software Foundation License v2: https://docs.python.org/3/license.html
 - Unlicense: https://unlicense.org/
+- ISC License: https://opensource.org/license/isc-license-txt/
 - HPND: https://opensource.org/license/historical-php/
 - MPL 2.0: https://www.mozilla.org/en-US/MPL/2.0/
 

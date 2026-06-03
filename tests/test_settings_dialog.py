@@ -66,6 +66,31 @@ def test_settings_dialog_toggles_metadata_diagnostics(app, monkeypatch):
     assert dialog.result_settings.metadata_diagnostics_enabled is True
 
 
+def test_settings_dialog_marks_blank_theaudiodb_key_as_opt_out(app, monkeypatch):
+    dialog = SettingsDialog(Settings(theaudiodb_api_key="123"), None)
+    monkeypatch.setattr(settings_dialog_module, "QMessageBox", _NoMissingPathPrompt)
+
+    dialog.audiodb_key.clear()
+    dialog._accept()
+
+    assert dialog.result_settings.theaudiodb_api_key == ""
+    assert dialog.result_settings.theaudiodb_api_key_opt_out is True
+
+
+def test_settings_dialog_persists_youtube_browser_cookies_option(app, monkeypatch):
+    dialog = SettingsDialog(Settings(), None)
+    monkeypatch.setattr(settings_dialog_module, "QMessageBox", _NoMissingPathPrompt)
+
+    assert dialog.yt_browser_cookies_browser.isEnabled() is False
+
+    dialog.yt_use_browser_cookies.setChecked(True)
+    dialog.yt_browser_cookies_browser.setCurrentText("Chrome")
+    dialog._accept()
+
+    assert dialog.result_settings.yt_use_browser_cookies is True
+    assert dialog.result_settings.yt_browser_cookies_browser == "chrome"
+
+
 def test_settings_dialog_opens_wide_enough_for_top_tabs(app):
     previous_stylesheet = app.styleSheet()
     app.setStyleSheet(WMP_QSS)

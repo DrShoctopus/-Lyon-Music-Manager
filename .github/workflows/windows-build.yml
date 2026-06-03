@@ -9,7 +9,7 @@ on:
 env:
   FFMPEG_VERSION: "7.1.1"
   LIBDISCID_VERSION: "0.6.4"
-  VLC_VERSION: "3.0.21"
+  VLC_VERSION: "3.0.23"
   # Pin Chromaprint/fpcalc to a known good Windows x86_64 release. Bump
   # alongside any verified upgrade; do not auto-resolve "latest" from
   # GitHub's API or builds become non-reproducible.
@@ -41,6 +41,22 @@ jobs:
 
       - name: Install Python dependencies
         run: python -m pip install -r requirements-build.txt
+
+      - name: Load Deno vendor metadata
+        id: deno
+        shell: pwsh
+        run: |
+          $manifest = Get-Content build/vendor-runtimes.json -Raw | ConvertFrom-Json
+          $deno = $manifest.deno.windows
+          "version=$($manifest.deno.version)" >> $env:GITHUB_OUTPUT
+          "archive=$($deno.archive)" >> $env:GITHUB_OUTPUT
+          "url=$($deno.url)" >> $env:GITHUB_OUTPUT
+          "sha256=$($deno.sha256)" >> $env:GITHUB_OUTPUT
+          "DENO_VERSION=$($manifest.deno.version)" >> $env:GITHUB_ENV
+          "DENO_ARCHIVE=$($deno.archive)" >> $env:GITHUB_ENV
+          "DENO_URL=$($deno.url)" >> $env:GITHUB_ENV
+          "DENO_SHA256=$($deno.sha256)" >> $env:GITHUB_ENV
+
 
       - name: Run Ruff gate
         run: python -m ruff check lyon tests scripts
@@ -74,7 +90,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: bin
-          key: windows-bins-ffmpeg-${{ env.FFMPEG_VERSION }}-discid-${{ env.LIBDISCID_VERSION }}-vlc-${{ env.VLC_VERSION }}-chromaprint-${{ env.CHROMAPRINT_VERSION }}
+          key: windows-bins-ffmpeg-${{ env.FFMPEG_VERSION }}-discid-${{ env.LIBDISCID_VERSION }}-vlc-${{ env.VLC_VERSION }}-chromaprint-${{ env.CHROMAPRINT_VERSION }}-deno-${{ steps.deno.outputs.version }}
 
       - name: Fetch ffmpeg.exe (hash-verified)
         if: steps.cache-bins.outputs.cache-hit != 'true'
@@ -169,13 +185,47 @@ jobs:
           $exe = Get-ChildItem -Path fpcalc-extract -Recurse -Filter fpcalc.exe | Select-Object -First 1
           if (-not $exe) { throw "fpcalc.exe was not found in ${{ env.FPCALC_ARCHIVE }}." }
           Copy-Item $exe.FullName -Destination bin\fpcalc.exe -Force
-          $versionOutput = & bin\fpcalc.exe -version 2>&1
+          $versionOutput = (& bin\fpcalc.exe -version 2>&1) -join " "
           if ($LASTEXITCODE -ne 0) { throw "fpcalc.exe -version failed: $versionOutput" }
           if ($versionOutput -notmatch [regex]::Escape("${{ env.CHROMAPRINT_VERSION }}")) {
             throw "Expected fpcalc ${{ env.CHROMAPRINT_VERSION }}, got: $versionOutput"
           }
           Remove-Item fpcalc.zip
           Remove-Item -Recurse -Force fpcalc-extract
+
+      - name: Fetch Deno runtime (hash-verified)
+        if: steps.cache-bins.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path bin | Out-Null
+          function Invoke-WebRequestWithRetry {
+            param([string]$Uri, [string]$OutFile, [int]$Attempts = 3)
+            for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
+              try {
+                Invoke-WebRequest -Uri $Uri -OutFile $OutFile -UseBasicParsing -ErrorAction Stop
+                return
+              } catch {
+                if ($attempt -ge $Attempts) { throw }
+                Start-Sleep -Seconds (2 * $attempt)
+              }
+            }
+          }
+          Invoke-WebRequestWithRetry -Uri $env:DENO_URL -OutFile deno.zip
+          $actual = (Get-FileHash -Algorithm SHA256 deno.zip).Hash.ToLowerInvariant()
+          $expected = $env:DENO_SHA256
+          if ($actual -ne $expected) { throw "deno.zip SHA-256 mismatch: expected $expected, got $actual" }
+          Write-Host "Verified $env:DENO_ARCHIVE SHA-256: $actual"
+          Expand-Archive deno.zip -DestinationPath deno-extract -Force
+          $exe = Get-ChildItem -Path deno-extract -Recurse -Filter deno.exe | Select-Object -First 1
+          if (-not $exe) { throw "deno.exe was not found in $env:DENO_ARCHIVE." }
+          Copy-Item $exe.FullName -Destination bin\deno.exe -Force
+          $versionOutput = (& bin\deno.exe --version 2>&1) -join " "
+          if ($LASTEXITCODE -ne 0) { throw "deno.exe --version failed: $versionOutput" }
+          if ($versionOutput -notmatch [regex]::Escape("deno $env:DENO_VERSION")) {
+            throw "Expected deno $env:DENO_VERSION, got: $versionOutput"
+          }
+          Remove-Item deno.zip
+          Remove-Item -Recurse -Force deno-extract
 
       - name: Fetch libVLC runtime (hash-verified)
         if: steps.cache-bins.outputs.cache-hit != 'true'
@@ -222,11 +272,12 @@ jobs:
           python -c "from lyon.app import main; print('imports OK')"
           python -c "from PySide6.QtCore import QCoreApplication; app = QCoreApplication([]); from lyon.core.playback_backend import create_playback_backend; backend = create_playback_backend(); print(type(backend).__name__); assert type(backend).__name__ == 'VlcPlaybackBackend'"
           python -c "from lyon.core.fingerprint import is_available; assert is_available(); print('fpcalc OK')"
+          bin\deno.exe --version
 
       - name: Validate PyInstaller inputs
         shell: pwsh
         run: |
-          foreach ($required in @('main.py', 'docs\brand\lyon-app-icon.png', 'bin\ffmpeg.exe', 'bin\fpcalc.exe')) {
+          foreach ($required in @('main.py', 'docs\brand\lyon-app-icon.png', 'bin\ffmpeg.exe', 'bin\fpcalc.exe', 'bin\deno.exe')) {
             if (-not (Test-Path $required)) {
               throw "Required build input missing: $required"
             }
@@ -262,6 +313,7 @@ jobs:
             $bundleBin = "dist\LyonMusicManager\bin"
           }
           if (-not (Test-Path (Join-Path $bundleBin 'fpcalc.exe'))) { throw "Packaged app is missing fpcalc.exe." }
+          if (-not (Test-Path (Join-Path $bundleBin 'deno.exe'))) { throw "Packaged app is missing deno.exe." }
 
       - name: Read app version
         id: appver

@@ -19,6 +19,7 @@ from .equalizer import (
     flat_equalizer_bands,
     normalize_equalizer_bands,
 )
+from .youtube_options import normalize_yt_browser_cookie_browser
 
 LOG = logging.getLogger(__name__)
 _RIP_FORMATS = {"flac", "mp3", "aac", "opus", "ogg", "alac", "wav", "aiff", "wma"}
@@ -41,6 +42,7 @@ _MAX_PODCAST_SUBSCRIPTIONS = 500
 
 DEFAULT_MUSICBRAINZ_CONTACT = "https://github.com/DrShoctopus/Sea-Lyon-Media-Manager"
 DEFAULT_UPDATE_APPCAST_URL = "https://drshoctopus.github.io/Sea-Lyon-Media-Manager/appcast.xml"
+DEFAULT_THEAUDIODB_API_KEY = "123"
 _PLACEHOLDER_CONTACT_MARKERS = ("example.", "localhost", "your-email", "your.email")
 
 
@@ -278,7 +280,8 @@ class Settings:
     musicbrainz_app: str = "LyonMusicManager"
     musicbrainz_version: str = field(default_factory=_app_version)
     musicbrainz_contact: str = DEFAULT_MUSICBRAINZ_CONTACT
-    theaudiodb_api_key: str = ""    # blank → TheAudioDB disabled; enter "123" for free tier
+    theaudiodb_api_key: str = DEFAULT_THEAUDIODB_API_KEY  # blank → TheAudioDB disabled
+    theaudiodb_api_key_opt_out: bool = False
     eject_after_rip: bool = True
     auto_lookup_metadata: bool = True
     cuetools_db_metadata_enabled: bool = True
@@ -299,6 +302,8 @@ class Settings:
     yt_video_quality: str = "best"       # best | 1080p | 2k | 4k
     yt_output_dir: str = ""              # defaults to music_root/YouTube at runtime
     yt_auto_add: bool = True             # add downloaded files to library automatically
+    yt_use_browser_cookies: bool = False  # opt-in browser session use for restricted videos
+    yt_browser_cookies_browser: str = "firefox"
     queue_track_paths: list[str] = field(default_factory=list)
     queue_current_index: int = 0
     crossfade_seconds: int = 0          # 0 = disabled; >0 = overlap duration on track change
@@ -359,6 +364,10 @@ class Settings:
         self.lastfm_session_key = str(self.lastfm_session_key or "").strip()
         self.lastfm_username = str(self.lastfm_username or "").strip()
         self.listenbrainz_token = str(self.listenbrainz_token or "").strip()
+        self.theaudiodb_api_key = str(self.theaudiodb_api_key or "").strip()
+        self.theaudiodb_api_key_opt_out = _bool_value(self.theaudiodb_api_key_opt_out, False)
+        if self.theaudiodb_api_key:
+            self.theaudiodb_api_key_opt_out = False
         self.recent_stream_urls = normalize_stream_urls(self.recent_stream_urls)
         self.dlna_enabled = _bool_value(self.dlna_enabled, False)
         self.dlna_port = _clamp_int(self.dlna_port, 8200, 0, 65535)
@@ -383,6 +392,10 @@ class Settings:
         self.yt_video_quality = str(self.yt_video_quality or "best").lower()
         if self.yt_video_quality not in _YT_VIDEO_QUALITIES:
             self.yt_video_quality = "best"
+        self.yt_use_browser_cookies = _bool_value(self.yt_use_browser_cookies, False)
+        self.yt_browser_cookies_browser = normalize_yt_browser_cookie_browser(
+            self.yt_browser_cookies_browser
+        )
         self.library_paths = normalize_library_paths(self.library_paths)
         self.watch_library_folders = _bool_value(self.watch_library_folders, True)
         self.equalizer_preamp = clamp_preamp(self.equalizer_preamp)
@@ -470,6 +483,12 @@ class Settings:
                     if field_info.init
                 }
                 data = {k: v for k, v in data.items() if k in known}
+                if (
+                    "theaudiodb_api_key" in data
+                    and not str(data.get("theaudiodb_api_key") or "").strip()
+                    and not _bool_value(data.get("theaudiodb_api_key_opt_out"), False)
+                ):
+                    data["theaudiodb_api_key"] = DEFAULT_THEAUDIODB_API_KEY
                 return cls(**data)
             except OSError as exc:
                 LOG.warning("Could not read settings.json; using defaults: %s", exc)

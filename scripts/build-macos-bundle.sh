@@ -11,6 +11,7 @@ STAGED_VLC_DMG="${STAGED_VLC_DMG:-vendor-mac/vlc.dmg}"
 STAGED_LIBDISCID_DYLIB="${STAGED_LIBDISCID_DYLIB:-vendor-mac/libdiscid.0.dylib}"
 STAGED_FFMPEG="${STAGED_FFMPEG:-vendor-mac/ffmpeg}"
 STAGED_FPCALC="${STAGED_FPCALC:-vendor-mac/fpcalc}"
+STAGED_DENO="${STAGED_DENO:-vendor-mac/deno}"
 
 mkdir -p "$FW/plugins" "$BIN"
 
@@ -50,9 +51,10 @@ rm -rf "$(dirname "$VLC_STAGE")"
 # --- libdiscid --------------------------------------------------------
 cp "$STAGED_LIBDISCID_DYLIB" "$FW/libdiscid.0.dylib"
 
-# --- ffmpeg + fpcalc --------------------------------------------------
+# --- ffmpeg + fpcalc + deno ------------------------------------------
 cp "$STAGED_FFMPEG" "$BIN/ffmpeg"; chmod +x "$BIN/ffmpeg"
 cp "$STAGED_FPCALC" "$BIN/fpcalc"; chmod +x "$BIN/fpcalc"
+cp "$STAGED_DENO" "$BIN/deno"; chmod +x "$BIN/deno"
 
 # --- Rewrite dylib install names to @rpath ---------------------------
 install_name_tool -id "@rpath/libvlc.dylib"      "$FW/libvlc.dylib"
@@ -86,7 +88,7 @@ while IFS= read -r -d '' f; do
 done < <(find "$APP" -type f \( -name "*.dylib" -o -name "*.so" \) -print0)
 
 # Thin executables too
-for f in "$APP/Contents/MacOS/LyonMusicManager" "$BIN/ffmpeg" "$BIN/fpcalc"; do
+for f in "$APP/Contents/MacOS/LyonMusicManager" "$BIN/ffmpeg" "$BIN/fpcalc" "$BIN/deno"; do
     [ -f "$f" ] || continue
     archs=$(lipo -archs "$f" 2>/dev/null || true)
     case "$archs" in

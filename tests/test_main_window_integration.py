@@ -437,6 +437,59 @@ def test_transport_resume_from_library_keeps_paused_track(main_window, monkeypat
     assert main_window.player.is_playing()
 
 
+def test_library_metadata_update_refreshes_current_now_playing_track(main_window, monkeypatch):
+    from lyon.core.library import Track
+
+    old_track = Track(
+        id=77,
+        path="/music/current.flac",
+        title="Old Title",
+        artist="Artist",
+        album_artist="Artist",
+        album="Album",
+        track_no=1,
+        disc_no=1,
+        year=2026,
+        genre="",
+        duration=120.0,
+        artwork_path="old-cover.jpg",
+    )
+    refreshed_track = Track(
+        id=77,
+        path="/music/current.flac",
+        title="New Title",
+        artist="Artist",
+        album_artist="Artist",
+        album="Album",
+        track_no=1,
+        disc_no=1,
+        year=2026,
+        genre="",
+        duration=120.0,
+        artwork_path="new-cover.jpg",
+    )
+    main_window.player.set_queue([old_track], 0)
+    now_playing = main_window.now_playing
+    monkeypatch.setattr(
+        main_window.library,
+        "track_by_id",
+        lambda track_id: refreshed_track if track_id == 77 else None,
+    )
+    track_changes = []
+    metadata_changes = []
+    main_window.player.track_changed.connect(track_changes.append)
+    main_window.player.track_metadata_changed.connect(metadata_changes.append)
+
+    main_window.library_view.tracks_metadata_changed.emit([77])
+
+    assert main_window.player.current() is refreshed_track
+    assert now_playing.title.text() == "New Title"
+    assert now_playing._current_track.artwork_path == "new-cover.jpg"
+    assert main_window.transport.title_lbl._full == "New Title"
+    assert track_changes == []
+    assert metadata_changes == [refreshed_track]
+
+
 def test_disc_tab_no_drive_state(main_window):
     main_window.tab_bar.setCurrentIndex(main_window._tab_index["Disc"])
 

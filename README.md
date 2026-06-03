@@ -11,8 +11,8 @@
 > until the DMG and oldest-advertised-OS smoke gates pass.
 
 Sea Lyon is written in Python with PySide6 and uses SQLite, Mutagen,
-libVLC, ffmpeg, yt-dlp, CUETools DB, MusicBrainz, TheAudioDB, Cover Art
-Archive, LRCLIB, and libdiscid.
+libVLC, ffmpeg, yt-dlp, yt-dlp-ejs, CUETools DB, MusicBrainz,
+TheAudioDB, Cover Art Archive, LRCLIB, and libdiscid.
 
 **Current version:** `1.0.0` — see [`lyon/__init__.py`](lyon/__init__.py).
 **Release status:** Windows x64 is the mandatory 1.0 package; macOS
@@ -228,6 +228,15 @@ Linux source-only development is best-effort.
 - Audio formats: FLAC and MP3.
 - Video formats: MP4, MKV, and WebM.
 - Optional playlist downloads.
+- Optional browser-session cookie handoff for age-restricted or otherwise
+  account-gated videos you are authorized to access. Enable it under
+  **Settings → YouTube**; Sea Lyon stores only the selected browser name,
+  not your cookies. yt-dlp reads the selected browser's cookie database
+  only at download time and sends applicable YouTube cookies to YouTube.
+- YouTube player-signature challenge solving via yt-dlp-ejs. Deno is the
+  preferred JavaScript runtime; Node is also supported. Source runs can
+  use a system runtime, and packaged builds include pinned Deno under the
+  app `bin/` folder.
 - yt-dlp progress log and automatic library import for completed
   files.
 - ffmpeg is used for extraction, merging, thumbnails, metadata, and
@@ -257,6 +266,18 @@ from `requirements.in`. Build machines should install the hashed
 layers PyInstaller, pytest, and build-only icon tooling on top of the
 runtime dependencies.
 
+### YouTube JavaScript Runtime
+
+Some YouTube downloads require solving player-signature JavaScript
+challenges before media formats are available. Sea Lyon includes the
+Python `yt-dlp-ejs` solver package and enables Deno and Node for yt-dlp.
+
+- macOS source runs: `brew install deno`.
+- Windows source runs: install Deno or Node and ensure it is on `PATH`,
+  or place `deno.exe` / `node.exe` in `bin/`.
+- Packaged builds: the release workflows and local build scripts stage
+  pinned Deno in the app `bin/` directory.
+
 ### Native Runtime Files — Windows
 
 For full playback, ripping, and CD support, place native binaries in
@@ -268,6 +289,7 @@ bin/
   ffmpeg.exe
   discid.dll
   fpcalc.exe
+  deno.exe
   vlc/
     libvlc.dll
     libvlccore.dll
@@ -287,6 +309,7 @@ Place native binaries at these paths for source runs (the
 bin/
   ffmpeg          (arm64; eugeneware/ffmpeg-static build)
   fpcalc          (arm64; Chromaprint release)
+  deno            (arm64; optional for source runs with no PATH runtime)
 vendor-mac/
   libvlc.dylib    (arm64; from VLC 3.0.x DMG)
   libdiscid.0.dylib
@@ -568,7 +591,14 @@ plus a redacted settings snapshot for support.
   contact value in Settings → Metadata.
 - **YouTube search/download fails** — confirm `yt-dlp` is installed
   in the active environment. ffmpeg is also needed for high-quality
-  video merging and audio conversion.
+  video merging and audio conversion. YouTube may also require a supported
+  JavaScript runtime for player signature challenges; on macOS from-source
+  runs, `brew install deno` is the simplest fix. Packaged builds include
+  pinned Deno. For age-restricted videos, sign in and age-verify in a
+  supported browser, then enable **Use browser session for restricted
+  videos** under Settings → YouTube. Sea Lyon stores only the selected
+  browser name; yt-dlp reads and sends applicable YouTube cookies during
+  that download.
 - **SmartScreen warning at install (Windows)** — expected for 1.0.
   Click "More info → Run anyway". See
   [`docs/SMARTSCREEN_NOTES.md`](docs/SMARTSCREEN_NOTES.md) for the
@@ -587,7 +617,8 @@ plus a redacted settings snapshot for support.
   responsibility tail for CD ripping, YouTube downloading, DLNA
   broadcasting, scrobbling).
 - [`PRIVACY.md`](PRIVACY.md) — Privacy policy. **No telemetry.** All
-  network calls are listed.
+  network calls are listed, including optional YouTube browser-cookie
+  handoff and local JavaScript challenge solving.
 - [`THIRD_PARTY_NOTICES.txt`](THIRD_PARTY_NOTICES.txt) — Per-
   dependency license attribution. The bundle is effectively GPL-2+
   because the ffmpeg "essentials" build links libx264/libx265 (planned
@@ -598,7 +629,7 @@ plus a redacted settings snapshot for support.
 
 Sea Lyon Media Manager uses Qt/PySide6, libVLC, ffmpeg, libdiscid,
 Chromaprint, CUETools DB, MusicBrainz, TheAudioDB, Cover Art Archive,
-yt-dlp, Mutagen, requests, defusedxml, watchdog, and pyacoustid.
+yt-dlp, yt-dlp-ejs, Mutagen, requests, defusedxml, watchdog, and pyacoustid.
 Respect MusicBrainz access policies by setting an appropriate
 app/contact value before distributing builds or performing heavy
 metadata lookups (the default contact points at the project's GitHub

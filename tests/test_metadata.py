@@ -507,6 +507,45 @@ def test_theaudiodb_artist_lookup_maps_bio_image_and_similar(monkeypatch):
     assert calls[0][1] == {"s": "Artist"}
 
 
+def test_artist_lookup_uses_default_free_theaudiodb_key(monkeypatch):
+    calls = []
+
+    def fake_get_json(url, params=None, headers=None):
+        calls.append((url, params, headers))
+        return {
+            "artists": [
+                {
+                    "strArtist": "Artist",
+                    "strBiographyEN": "Artist biography.",
+                }
+            ]
+        }
+
+    monkeypatch.setattr(metadata, "_get_json", fake_get_json)
+
+    artist = metadata.lookup_artist_info("Artist")
+
+    assert artist is not None
+    assert artist.biography == "Artist biography."
+    assert calls[0][0].endswith("/123/search.php")
+    assert calls[0][1] == {"s": "Artist"}
+
+
+def test_blank_theaudiodb_key_disables_artist_lookup(monkeypatch):
+    monkeypatch.setattr(
+        metadata._settings.Settings,
+        "load",
+        lambda: types.SimpleNamespace(theaudiodb_api_key=""),
+    )
+    monkeypatch.setattr(
+        metadata,
+        "_get_json",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("network call")),
+    )
+
+    assert metadata.lookup_artist_info("Artist") is None
+
+
 def test_artist_lookup_caches_repeated_success_and_clear_invalidates(monkeypatch):
     calls = []
 
