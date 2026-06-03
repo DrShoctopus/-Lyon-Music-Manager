@@ -8,8 +8,8 @@
     installer (dist\SeaLyonMediaManager-{version}-Setup.exe).
 
     Steps: create Python 3.14 venv, install dependencies, download
-    ffmpeg.exe, fpcalc.exe, libdiscid.dll, and the VLC runtime into bin\, run
-    PyInstaller, zip output, compile installer.
+    ffmpeg.exe, fpcalc.exe, deno.exe, libdiscid.dll, and the VLC runtime into
+    bin\, run PyInstaller, zip output, compile installer.
 
     Run from the project root:
         scripts\build-windows.ps1
@@ -44,6 +44,12 @@ Write-Host "    Project root: $Root"
 $ChromaprintVersion = '1.5.1'
 $FpcalcArchive = 'chromaprint-fpcalc-1.5.1-windows-x86_64.zip'
 $FpcalcUrl = 'https://github.com/acoustid/chromaprint/releases/download/v1.5.1/chromaprint-fpcalc-1.5.1-windows-x86_64.zip'
+$VlcVersion = '3.0.23'
+$VendorRuntimeManifest = Get-Content (Join-Path $Root 'build/vendor-runtimes.json') -Raw | ConvertFrom-Json
+$DenoVersion = [string]$VendorRuntimeManifest.deno.version
+$DenoArchive = [string]$VendorRuntimeManifest.deno.windows.archive
+$DenoUrl = [string]$VendorRuntimeManifest.deno.windows.url
+$DenoSha256 = [string]$VendorRuntimeManifest.deno.windows.sha256
 
 function Get-ExpectedSha256FromText {
     param(
@@ -101,6 +107,26 @@ function Assert-FileSha256 {
     Write-Host "    Verified $Label SHA-256: $actual"
 }
 
+function Invoke-WebRequestWithRetry {
+    param(
+        [Parameter(Mandatory = $true)][string]$Uri,
+        [Parameter(Mandatory = $true)][string]$OutFile,
+        [int]$Attempts = 3
+    )
+
+    for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
+        try {
+            Invoke-WebRequest -Uri $Uri -OutFile $OutFile -UseBasicParsing -ErrorAction Stop
+            return
+        } catch {
+            if ($attempt -ge $Attempts) { throw }
+            $delay = 2 * $attempt
+            Write-Host "    Download failed (attempt $attempt/$Attempts): $($_.Exception.Message). Retrying in $delay seconds..."
+            Start-Sleep -Seconds $delay
+        }
+    }
+}
+
 function Invoke-VerifiedDownload {
     param(
         [Parameter(Mandatory = $true)][string]$Uri,
@@ -109,7 +135,7 @@ function Invoke-VerifiedDownload {
         [string]$ChecksumFileName
     )
 
-    Invoke-WebRequest -Uri $Uri -OutFile $OutFile -UseBasicParsing -ErrorAction Stop
+    Invoke-WebRequestWithRetry -Uri $Uri -OutFile $OutFile
     $expected = Get-ExpectedSha256 -Uri $ChecksumUri -FileName $ChecksumFileName
     Assert-FileSha256 -Path $OutFile -Expected $expected -Label ([System.IO.Path]::GetFileName($OutFile))
 }
@@ -144,6 +170,39 @@ function Assert-FpcalcVersion {
         throw "Expected fpcalc $ExpectedVersion, got: $output"
     }
     Write-Host "    Verified fpcalc version: $output"
+}
+
+function Test-DenoVersion {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$ExpectedVersion
+    )
+
+    if (-not (Test-Path $Path)) { return $false }
+    try {
+        $output = & $Path --version 2>&1
+        if ($LASTEXITCODE -ne 0) { return $false }
+        return ([string]$output) -match [regex]::Escape("deno $ExpectedVersion")
+    } catch {
+        return $false
+    }
+}
+
+function Assert-DenoVersion {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$ExpectedVersion
+    )
+
+    $output = & $Path --version 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "deno.exe --version failed: $output"
+    }
+    if (([string]$output) -notmatch [regex]::Escape("deno $ExpectedVersion")) {
+        throw "Expected deno $ExpectedVersion, got: $output"
+    }
+    $firstLine = $output | Select-Object -First 1
+    Write-Host "    Verified deno version: $firstLine"
 }
 
 # 0. Optional clean -----------------------------------------------------------
@@ -197,7 +256,7 @@ if ($LASTEXITCODE -ne 0) { throw "pip upgrade failed" }
 & $venvPython -m pip install -r requirements-build.txt --quiet
 if ($LASTEXITCODE -ne 0) { throw "pip install -r requirements-build.txt failed" }
 
-# 4. Fetch ffmpeg.exe + fpcalc.exe + libdiscid.dll + VLC runtime into bin\ -----
+# 4. Fetch ffmpeg.exe + fpcalc.exe + deno.exe + libdiscid.dll + VLC runtime into bin\ -----
 $bin = Join-Path $Root 'bin'
 New-Item -ItemType Directory -Force -Path $bin | Out-Null
 
@@ -209,11 +268,23 @@ $fpcalcRelease = [pscustomobject]@{
     Url = $FpcalcUrl
 }
 $needFpcalc = -not (Test-Path $fpcalcPath)
+$denoPath = Join-Path $bin 'deno.exe'
+$denoRelease = [pscustomobject]@{
+    Version = $DenoVersion
+    Name = $DenoArchive
+    Url = $DenoUrl
+    Sha256 = $DenoSha256
+}
+$needDeno = -not (Test-Path $denoPath)
 $needDiscid = -not (Test-Path (Join-Path $bin 'discid.dll'))
 $vlcDir = Join-Path $bin 'vlc'
+$vlcVersionMarker = Join-Path $vlcDir 'lyon-vlc-version.txt'
+$vlcVersionMatches = (Test-Path $vlcVersionMarker) -and
+                     ((Get-Content -Path $vlcVersionMarker -Raw).Trim() -eq $VlcVersion)
 $needVlc = -not (Test-Path (Join-Path $vlcDir 'libvlc.dll')) -or
            -not (Test-Path (Join-Path $vlcDir 'libvlccore.dll')) -or
-           -not (Test-Path (Join-Path $vlcDir 'plugins'))
+           -not (Test-Path (Join-Path $vlcDir 'plugins')) -or
+           -not $vlcVersionMatches
 
 if (-not $SkipBinaries) {
     if (Test-Path $fpcalcPath) {
@@ -224,11 +295,20 @@ if (-not $SkipBinaries) {
             $needFpcalc = $true
         }
     }
+    if (Test-Path $denoPath) {
+        if (Test-DenoVersion -Path $denoPath -ExpectedVersion $denoRelease.Version) {
+            $needDeno = $false
+        } else {
+            Write-Host "    bin\deno.exe is missing or not version $DenoVersion; refreshing"
+            $needDeno = $true
+        }
+    }
 }
 
 if ($SkipBinaries) {
     if ($needFfmpeg) { Write-Warning "bin\ffmpeg.exe missing; CD ripping won't work in the built app." }
     if ($needFpcalc) { Write-Warning "bin\fpcalc.exe missing; AcoustID fingerprinting won't work in the built app." }
+    if ($needDeno) { Write-Warning "bin\deno.exe missing; YouTube signature solving may fail in the built app." }
     if ($needDiscid) { Write-Warning "bin\discid.dll missing; CD detection won't work in the built app." }
     if ($needVlc) { Write-Warning "bin\vlc runtime missing; packaged audio/video playback and EQ will be disabled." }
 } else {
@@ -268,6 +348,24 @@ if ($SkipBinaries) {
         Remove-Item $tmp; Remove-Item $extract -Recurse -Force
     } else {
         Write-Host "    bin\fpcalc.exe already present and up to date; skipping"
+    }
+
+    if ($needDeno) {
+        Write-Host "==> Downloading deno.exe ($($denoRelease.Version))" -ForegroundColor Cyan
+        $tmp = Join-Path $env:TEMP $denoRelease.Name
+        $extract = Join-Path $env:TEMP 'lyon-deno-extract'
+        if (Test-Path $tmp) { Remove-Item $tmp -Force }
+        if (Test-Path $extract) { Remove-Item $extract -Recurse -Force }
+        Invoke-WebRequestWithRetry -Uri $denoRelease.Url -OutFile $tmp
+        Assert-FileSha256 -Path $tmp -Expected $DenoSha256 -Label $DenoArchive
+        Expand-Archive $tmp -DestinationPath $extract -Force
+        $exe = Get-ChildItem -Path $extract -Recurse -Filter deno.exe | Select-Object -First 1
+        if (-not $exe) { throw "deno.exe not found inside $($denoRelease.Name)." }
+        Copy-Item $exe.FullName -Destination $denoPath -Force
+        Assert-DenoVersion -Path $denoPath -ExpectedVersion $denoRelease.Version
+        Remove-Item $tmp; Remove-Item $extract -Recurse -Force
+    } else {
+        Write-Host "    bin\deno.exe already present and up to date; skipping"
     }
 
     if ($needDiscid) {
@@ -318,13 +416,13 @@ if ($SkipBinaries) {
     }
 
     if ($needVlc) {
+        Write-Host "    bin\vlc runtime is missing or not version $VlcVersion; refreshing"
         Write-Host "==> Downloading VLC runtime (Windows x64)" -ForegroundColor Cyan
-        $vlcVersion = '3.0.21'
         $tmp = Join-Path $env:TEMP "lyon-vlc.zip"
         $extract = Join-Path $env:TEMP 'lyon-vlc-extract'
         if (Test-Path $extract) { Remove-Item $extract -Recurse -Force }
-        $vlcArchive = "vlc-$vlcVersion-win64.zip"
-        $vlcUrl = "https://download.videolan.org/pub/videolan/vlc/$vlcVersion/win64/$vlcArchive"
+        $vlcArchive = "vlc-$VlcVersion-win64.zip"
+        $vlcUrl = "https://download.videolan.org/pub/videolan/vlc/$VlcVersion/win64/$vlcArchive"
         Invoke-VerifiedDownload `
             -Uri $vlcUrl `
             -OutFile $tmp `
@@ -341,6 +439,7 @@ if ($SkipBinaries) {
         if (-not (Test-Path (Join-Path $vlcDir 'libvlc.dll'))) { throw "libvlc.dll was not copied to bin\vlc." }
         if (-not (Test-Path (Join-Path $vlcDir 'libvlccore.dll'))) { throw "libvlccore.dll was not copied to bin\vlc." }
         if (-not (Test-Path (Join-Path $vlcDir 'plugins'))) { throw "VLC plugins directory was not copied to bin\vlc." }
+        Set-Content -Path $vlcVersionMarker -Value $VlcVersion
         Remove-Item $tmp; Remove-Item $extract -Recurse -Force
     } else {
         Write-Host "    bin\vlc runtime already present; skipping"
@@ -361,10 +460,11 @@ if ($LASTEXITCODE -ne 0) { throw "Import smoke test failed; aborting before PyIn
 if ($LASTEXITCODE -ne 0) { throw "VLC backend smoke test failed; aborting before PyInstaller." }
 & $venvPython -c "from lyon.core.fingerprint import is_available; assert is_available(); print('fpcalc OK')"
 if ($LASTEXITCODE -ne 0) { throw "fpcalc smoke test failed; aborting before PyInstaller." }
+Assert-DenoVersion -Path $denoPath -ExpectedVersion $DenoVersion
 
 # 6. PyInstaller bundle -------------------------------------------------------
 Write-Host "==> Validating PyInstaller inputs" -ForegroundColor Cyan
-foreach ($required in @('main.py', 'docs\brand\lyon-app-icon.png', 'bin\ffmpeg.exe', 'bin\fpcalc.exe')) {
+foreach ($required in @('main.py', 'docs\brand\lyon-app-icon.png', 'bin\ffmpeg.exe', 'bin\fpcalc.exe', 'bin\deno.exe')) {
     if (-not (Test-Path (Join-Path $Root $required))) {
         throw "Required build input missing: $required"
     }
@@ -384,6 +484,7 @@ if (-not (Test-Path (Join-Path $bundleVlc 'plugins'))) { throw "Packaged app is 
 $bundleBin = Join-Path $bundle '_internal\bin'
 if (-not (Test-Path $bundleBin)) { $bundleBin = Join-Path $bundle 'bin' }
 if (-not (Test-Path (Join-Path $bundleBin 'fpcalc.exe'))) { throw "Packaged app is missing fpcalc.exe." }
+if (-not (Test-Path (Join-Path $bundleBin 'deno.exe'))) { throw "Packaged app is missing deno.exe." }
 
 # Read the app version from the Python package for use in output filenames.
 $initPy = Join-Path $Root 'lyon\__init__.py'

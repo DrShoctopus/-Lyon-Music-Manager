@@ -33,8 +33,12 @@ There are four ways to build:
 - **Xcode command line tools** and Homebrew are used by the macOS
   workflow helpers. The workflow installs `create-dmg` when building
   the DMG.
+- **Deno or Node** is needed at runtime for YouTube downloads that hit
+  yt-dlp player-signature JavaScript challenges. Source runs can use a
+  system install (`brew install deno` on macOS); packaged builds stage
+  pinned Deno in the app `bin/` folder.
 
-Binary runtimes (ffmpeg, libdiscid, fpcalc, VLC) are fetched
+Binary runtimes (ffmpeg, libdiscid, fpcalc, Deno, VLC) are fetched
 automatically by the build scripts / workflows with SHA-256 verification.
 For source runs you can drop pre-fetched copies into `bin/` to skip the
 download.
@@ -47,6 +51,7 @@ bin\
   ffmpeg.exe
   discid.dll
   fpcalc.exe
+  deno.exe                   (YouTube JS challenge solving)
   vlc\
     libvlc.dll
     libvlccore.dll
@@ -91,9 +96,9 @@ scripts\build-windows.ps1
 This script:
 
 1. Creates / refreshes `.venv` and installs `requirements-build.txt`.
-2. Downloads ffmpeg, libdiscid, fpcalc, and VLC into `bin\` with
-   SHA-256 verification against the upstream `.sha256` sidecar or the
-   project's `SHA256SUMS` files.
+2. Downloads ffmpeg, libdiscid, fpcalc, Deno, and VLC into `bin\` with
+   SHA-256 verification against upstream sidecars or pinned project
+   checksums.
 3. Runs PyInstaller via `build\lyon.spec`.
 4. Zips the bundle to
    `dist\SeaLyonMediaManager-{version}-windows.zip`.
@@ -126,7 +131,7 @@ The CI pipeline:
 2. **Runs `pytest`** (must pass and collect at least `PYTEST_FLOOR`
    tests — currently 680). The build aborts if any test fails or the
    collected count drops, to catch silently-skipped tests.
-3. Hash-verifies and downloads ffmpeg, libdiscid, VLC, and fpcalc.
+3. Hash-verifies and downloads ffmpeg, libdiscid, VLC, fpcalc, and Deno.
    fpcalc is pinned to a known Chromaprint version
    (`CHROMAPRINT_VERSION` env var); do not auto-resolve "latest" from
    the GitHub API or builds become non-reproducible.
@@ -164,10 +169,10 @@ The macOS pipeline:
 1. Confirms the host and Python are arm64-native.
 2. Installs Python deps from `requirements-build.txt`.
 3. Runs the pytest collection floor and full suite.
-4. Fetches arm64 ffmpeg, fpcalc, VLC, and libdiscid.
+4. Fetches arm64 ffmpeg, fpcalc, Deno, VLC, and libdiscid.
 5. Builds the `.icns` icon and PyInstaller `.app`.
-6. Injects libVLC, plugins, ffmpeg, fpcalc, and libdiscid into the app
-   bundle.
+6. Injects libVLC, plugins, ffmpeg, fpcalc, Deno, and libdiscid into
+   the app bundle under `Contents/MacOS/bin/` / `Contents/Frameworks`.
 7. Signs, notarizes, and staples when Apple Developer ID secrets are
    configured; otherwise emits an unsigned DMG.
 8. Builds `SeaLyonMediaManager-{version}-arm64.dmg` and
@@ -205,7 +210,7 @@ equalizer can drive VLC's real `AudioEqualizer`. Source installs need
 both the Python binding from `requirements.txt` and a VLC runtime
 discoverable by python-vlc.
 
-For Windows packaging, the build pipeline downloads VLC 3.0.21 and
+For Windows packaging, the build pipeline downloads VLC 3.0.23 and
 keeps only `libvlc.dll`, `libvlccore.dll`, and `plugins\` under
 `bin\vlc\`. The app prepends that folder to PATH and sets
 `VLC_PLUGIN_PATH` at runtime before importing python-vlc.
@@ -237,6 +242,11 @@ Common issues:
   availability, and the MusicBrainz contact value in *Settings*.
   Hammering MusicBrainz with a generic User-Agent gets the IP
   rate-limited.
+- **YouTube downloads fail with signature solving / n challenge messages**
+  — install Deno or Node for source runs. Packaged builds stage pinned
+  Deno in the app `bin/` folder. The Python lockfiles include
+  `yt-dlp-ejs`, but yt-dlp still needs a JavaScript runtime to execute
+  the solver.
 - **SmartScreen warning at install** — expected for v1.0 because the
   installer is unsigned. Click "More info → Run anyway". A code-signed
   build is planned for v1.1.

@@ -1,13 +1,66 @@
 """yt-dlp download worker thread."""
 from __future__ import annotations
 
+import logging
+import re
+import shutil
+import sys
 from pathlib import Path
+from typing import Callable
 
 from PySide6.QtCore import QThread, Signal
 
 from .ffmpeg import find_ffmpeg_binary
+from .settings import bundled_bin_dir
+from .youtube_options import is_youtube_url, yt_browser_cookies_option
 
+LOG = logging.getLogger(__name__)
 _YT_QUALITY_HEIGHT = {"1080p": 1080, "2k": 1440, "4k": 2160}
+_JS_RUNTIMES = ("deno", "node")
+_MACOS_RUNTIME_DIRS = (Path("/opt/homebrew/bin"), Path("/usr/local/bin"))
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+_SAFARI_COOKIE_PERMISSION_MESSAGE = (
+    "macOS blocked access to Safari cookies. Grant Full Disk Access to Sea Lyon "
+    "or choose another signed-in browser in Settings -> YouTube."
+)
+_YOUTUBE_BROWSER_SESSION_SETTINGS_MESSAGE = (
+    "Enable browser in Settings > YouTube."
+)
+_YOUTUBE_JS_CHALLENGE_MESSAGE = (
+    "Sea Lyon could not solve YouTube's player JavaScript challenge. "
+    "Install Deno or Node, or use a build that bundles a JavaScript runtime "
+    "and yt-dlp-ejs, then retry."
+)
+
+
+def _format_eta(seconds) -> str:
+    try:
+        total = max(0, int(seconds))
+    except (TypeError, ValueError):
+        return ""
+    minutes, secs = divmod(total, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    return f"{minutes}:{secs:02d}"
+
+
+def _download_percent(info: dict) -> int | None:
+    downloaded = info.get("downloaded_bytes")
+    total = info.get("total_bytes") or info.get("total_bytes_estimate")
+    try:
+        if downloaded is not None and total:
+            return max(0, min(100, int(float(downloaded) * 100 / float(total))))
+    except (TypeError, ValueError, ZeroDivisionError):
+        pass
+
+    match = re.search(r"(\d+(?:\.\d+)?)\s*%", str(info.get("_percent_str", "")))
+    if not match:
+        return None
+    try:
+        return max(0, min(100, int(float(match.group(1)))))
+    except ValueError:
+        return None
 
 
 def _video_format_selector(quality: str, has_ffmpeg: bool, container: str) -> str:
@@ -39,6 +92,97 @@ def _video_postprocessors(fmt: str) -> list[dict]:
     return postprocessors
 
 
+def _browser_cookies_option(browser: str) -> tuple[str] | None:
+    return yt_browser_cookies_option(browser)
+
+
+def _youtube_extractor_args_for_browser(_browser_name: str) -> dict[str, dict[str, list[str]]]:
+    """Avoid YouTube's fragile Safari web client whenever browser cookies are used.
+
+    yt-dlp may otherwise try the `web_safari` client when authenticated cookies
+    are available. That client is prone to YouTube player/JS challenge failures,
+    regardless of which local browser supplied the cookies, so keep this policy
+    centralized and explicit.
+    """
+    return {"youtube": {"player_client": ["default", "-web_safari"]}}
+
+
+def _clean_error_message(message: object) -> str:
+    text = _ANSI_ESCAPE_RE.sub("", str(message or ""))
+    return " ".join(text.split())
+
+
+def _has_all_markers(text: str, markers: tuple[str, ...]) -> bool:
+    return all(marker in text for marker in markers)
+
+
+def _is_youtube_age_confirmation_error(text: str) -> bool:
+    # yt-dlp uses this wording when YouTube requires authenticated cookies.
+    return "Sign in to confirm your age" in text and (
+        "--cookies-from-browser" in text
+        or "--cookies" in text
+        or "cookies" in text.lower()
+    )
+
+
+def _is_macos_safari_cookie_permission_error(text: str) -> bool:
+    # macOS Full Disk Access errors include Safari's cookie container path.
+    return _has_all_markers(
+        text,
+        ("Operation not permitted", "com.apple.Safari", "Cookies.binarycookies"),
+    )
+
+
+_YOUTUBE_ERROR_CLASSIFIERS: tuple[tuple[Callable[[str], bool], str], ...] = (
+    (_is_youtube_age_confirmation_error, _YOUTUBE_BROWSER_SESSION_SETTINGS_MESSAGE),
+    (_is_macos_safari_cookie_permission_error, _SAFARI_COOKIE_PERMISSION_MESSAGE),
+)
+_YOUTUBE_JS_CHALLENGE_MARKERS = (
+    "Signature solving failed",
+    "n challenge solving failed",
+    "No supported JavaScript runtime could be found",
+)
+
+
+def _user_facing_error_message(exc: BaseException) -> str:
+    text = _clean_error_message(exc)
+    for predicate, message in _YOUTUBE_ERROR_CLASSIFIERS:
+        if predicate(text):
+            return message
+    return text
+
+
+def _is_youtube_js_challenge_warning(message: object) -> bool:
+    text = _clean_error_message(message)
+    return any(marker in text for marker in _YOUTUBE_JS_CHALLENGE_MARKERS)
+
+
+def _find_js_runtime_binary(name: str) -> Path | None:
+    executable_names = (f"{name}.exe", name) if sys.platform == "win32" else (name,)
+    bin_dir = bundled_bin_dir()
+    for executable in executable_names:
+        candidate = bin_dir / executable
+        if candidate.exists():
+            return candidate
+    found = shutil.which(f"{name}.exe") if sys.platform == "win32" else shutil.which(name)
+    if found:
+        return Path(found)
+    if sys.platform == "darwin":
+        for runtime_dir in _MACOS_RUNTIME_DIRS:
+            candidate = runtime_dir / name
+            if candidate.exists():
+                return candidate
+    return None
+
+
+def _js_runtime_options() -> dict[str, dict]:
+    runtimes = {name: {} for name in _JS_RUNTIMES}
+    for name in _JS_RUNTIMES:
+        if path := _find_js_runtime_binary(name):
+            runtimes[name]["path"] = str(path)
+    return runtimes
+
+
 class _YtLogger:
     """Forwards yt-dlp log messages to the worker's progress signal."""
 
@@ -54,9 +198,12 @@ class _YtLogger:
         self._worker.progress.emit(msg)
 
     def warning(self, msg: str) -> None:
+        LOG.warning("yt-dlp warning: %s", msg)
+        self._worker._record_yt_dlp_warning(msg)
         self._worker.progress.emit(f"WARNING: {msg}")
 
     def error(self, msg: str) -> None:
+        LOG.warning("yt-dlp error: %s", msg)
         self._worker.progress.emit(f"ERROR: {msg}")
 
 
@@ -65,13 +212,15 @@ class YtDownloadWorker(QThread):
 
     Signals
     -------
-    progress(str)      -- log / status line suitable for display
+    progress(str)      -- log / status line suitable for diagnostics
+    download_progress(int, str) -- current item percent and formatted ETA
     track_ready(str)   -- absolute path of each completed output file
     download_finished(int, int) -- (succeeded, failed) counts when done
     error(str)         -- emitted on a fatal error before finished
     """
 
     progress = Signal(str)
+    download_progress = Signal(int, str)
     track_ready = Signal(str)
     download_finished = Signal(int, int)
     error = Signal(str)
@@ -85,6 +234,8 @@ class YtDownloadWorker(QThread):
         playlist: bool = False,
         quality: str = "best",   # 'best' | '1080p' | '2k' | '4k'
         parent=None,
+        *,
+        browser_cookies_browser: str = "",
     ) -> None:
         super().__init__(parent)
         self.url = url
@@ -93,13 +244,19 @@ class YtDownloadWorker(QThread):
         self.output_dir = output_dir
         self.playlist = playlist
         self.quality = quality
+        self.browser_cookies_browser = browser_cookies_browser
         self._cancelled = False
         self._succeeded = 0
         self._failed = 0
         self._emitted_paths: set[str] = set()
+        self._youtube_js_challenge_failed = False
 
     def cancel(self) -> None:
         self._cancelled = True
+
+    def _record_yt_dlp_warning(self, message: object) -> None:
+        if _is_youtube_js_challenge_warning(message):
+            self._youtube_js_challenge_failed = True
 
     def run(self) -> None:
         try:
@@ -159,6 +316,10 @@ class YtDownloadWorker(QThread):
             "post_hooks": [self._on_post_hook],
             "noplaylist": not self.playlist,
             "writethumbnail": True,
+            # Deno is yt-dlp's default/recommended JS runtime. Node is also
+            # supported but must be explicitly enabled; it gives source runs
+            # and packaged builds another way to solve YouTube JS challenges.
+            "js_runtimes": _js_runtime_options(),
             # Video downloads need a persistent, Qt-friendly sidecar thumbnail
             # for the catalog card.  EmbedThumbnail deletes it unless the
             # postprocessor is told the thumbnail is intentionally kept.
@@ -169,6 +330,12 @@ class YtDownloadWorker(QThread):
             ydl_opts["merge_output_format"] = merge_fmt
         if ffmpeg_path:
             ydl_opts["ffmpeg_location"] = str(ffmpeg_path.parent)
+        browser_cookies = _browser_cookies_option(self.browser_cookies_browser)
+        if browser_cookies and is_youtube_url(self.url):
+            ydl_opts["cookiesfrombrowser"] = browser_cookies
+            ydl_opts["extractor_args"] = _youtube_extractor_args_for_browser(
+                self.browser_cookies_browser
+            )
 
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -177,7 +344,14 @@ class YtDownloadWorker(QThread):
             if not self._cancelled:
                 if self._succeeded == 0 and self._failed == 0:
                     self._failed = 1
-                self.error.emit(str(exc))
+                LOG.warning("yt-dlp download failed: %s", _clean_error_message(exc))
+                message = _user_facing_error_message(exc)
+                if (
+                    self._youtube_js_challenge_failed
+                    and "Requested format is not available" in _clean_error_message(exc)
+                ):
+                    message = _YOUTUBE_JS_CHALLENGE_MESSAGE
+                self.error.emit(message)
         finally:
             self.download_finished.emit(self._succeeded, self._failed)
 
@@ -189,6 +363,9 @@ class YtDownloadWorker(QThread):
             raise DownloadCancelled()
         status = d.get("status", "")
         if status == "downloading":
+            pct_value = _download_percent(d)
+            if pct_value is not None:
+                self.download_progress.emit(pct_value, _format_eta(d.get("eta")))
             pct = d.get("_percent_str", "").strip()
             speed = d.get("_speed_str", "").strip()
             eta = d.get("_eta_str", "").strip()

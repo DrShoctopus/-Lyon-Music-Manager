@@ -343,6 +343,9 @@ class MainWindow(QMainWindow):
         self.library_view.request_open_settings.connect(self.open_settings)
         self.library_view.request_diagnostics.connect(self.show_diagnostics)
         self.library_view.request_scan_replaygain.connect(self._on_scan_replaygain)
+        self.library_view.tracks_metadata_changed.connect(
+            self._on_library_tracks_metadata_changed
+        )
         self._library_watcher.paths_changed.connect(self._on_watched_paths_changed)
         self._library_watcher.paths_deleted.connect(self._on_watched_paths_deleted)
         self._library_watcher.paths_moved.connect(self._on_watched_paths_moved)
@@ -743,6 +746,28 @@ class MainWindow(QMainWindow):
     def _on_player_track_changed(self, track: object) -> None:
         if track is not None and getattr(track, "is_library_item", True):
             self._last_radio_request = None
+
+    def _on_library_tracks_metadata_changed(self, track_ids: object) -> None:
+        if not isinstance(track_ids, (list, tuple, set)):
+            return
+        refreshed: list[Track] = []
+        seen: set[int] = set()
+        for raw_id in track_ids:
+            try:
+                track_id = int(raw_id)
+            except (TypeError, ValueError):
+                continue
+            if track_id in seen:
+                continue
+            seen.add(track_id)
+            try:
+                track = self.library.track_by_id(track_id)
+            except Exception:
+                continue
+            if track is not None:
+                refreshed.append(track)
+        if refreshed:
+            self.player.update_library_tracks(refreshed)
 
     def _on_stream_error(self, url: str) -> None:
         last = self._last_radio_request

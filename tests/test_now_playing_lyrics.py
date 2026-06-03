@@ -178,21 +178,23 @@ def test_fetch_lrclib_sends_correct_query_string():
 
 def test_on_lyrics_ready_ignores_stale_result(player):
     view = NowPlayingView(player, settings=Settings())
-    view._lyrics_task_id = 42
+    stale_key = view._lyrics_cache_key(_track(track_id=7))
+    view._lyrics_task_key = view._lyrics_cache_key(_track(track_id=42))
     # Pre-load panel with placeholder so we can detect whether it was overwritten
     view._lyrics_panel.set_lyrics([], "Searching for lyrics…")
     # Stale response (task_id mismatch) — should not touch the panel
-    view._on_lyrics_ready(7, "[00:01.00]Stale", "")
+    view._on_lyrics_ready(stale_key, "[00:01.00]Stale", "")
     labels = [lbl.text() for lbl in view._lyrics_panel._labels]
     assert any("Searching" in t for t in labels)
     # But it should still cache the stale result for later
-    assert view._lyrics_cache[7] == ("[00:01.00]Stale", "")
+    assert view._lyrics_cache[stale_key] == ("[00:01.00]Stale", "")
 
 
 def test_on_lyrics_ready_renders_synced_when_present(player):
     view = NowPlayingView(player, settings=Settings())
-    view._lyrics_task_id = 1
-    view._on_lyrics_ready(1, "[00:01.00]Hello\n[00:05.00]World", "Hello\nWorld")
+    key = view._lyrics_cache_key(_track(track_id=1))
+    view._lyrics_task_key = key
+    view._on_lyrics_ready(key, "[00:01.00]Hello\n[00:05.00]World", "Hello\nWorld")
     rendered = [lbl.text() for lbl in view._lyrics_panel._labels]
     # Synced path strips timestamps and shows lyric text
     assert "Hello" in rendered
@@ -201,8 +203,9 @@ def test_on_lyrics_ready_renders_synced_when_present(player):
 
 def test_on_lyrics_ready_falls_back_to_plain_when_no_synced(player):
     view = NowPlayingView(player, settings=Settings())
-    view._lyrics_task_id = 1
-    view._on_lyrics_ready(1, "", "Plain line A\nPlain line B")
+    key = view._lyrics_cache_key(_track(track_id=1))
+    view._lyrics_task_key = key
+    view._on_lyrics_ready(key, "", "Plain line A\nPlain line B")
     rendered = [lbl.text() for lbl in view._lyrics_panel._labels]
     assert "Plain line A" in rendered
     assert "Plain line B" in rendered
@@ -210,8 +213,9 @@ def test_on_lyrics_ready_falls_back_to_plain_when_no_synced(player):
 
 def test_on_lyrics_ready_shows_placeholder_when_both_empty(player):
     view = NowPlayingView(player, settings=Settings())
-    view._lyrics_task_id = 1
-    view._on_lyrics_ready(1, "", "")
+    key = view._lyrics_cache_key(_track(track_id=1))
+    view._lyrics_task_key = key
+    view._on_lyrics_ready(key, "", "")
     rendered = [lbl.text() for lbl in view._lyrics_panel._labels]
     assert rendered == ["No lyrics available."]
 
@@ -220,30 +224,32 @@ def test_on_lyrics_ready_shows_placeholder_when_both_empty(player):
 
 def test_lyrics_cache_skips_empty_result(player):
     view = NowPlayingView(player, settings=Settings())
-    view._lyrics_task_id = 5
-    view._on_lyrics_ready(5, "", "")
+    key = view._lyrics_cache_key(_track(track_id=5))
+    view._lyrics_task_key = key
+    view._on_lyrics_ready(key, "", "")
 
-    assert 5 not in view._lyrics_cache
+    assert key not in view._lyrics_cache
 
 
 def test_empty_lyrics_result_does_not_block_later_retry(player):
     view = NowPlayingView(player, settings=Settings())
-    view._lyrics_task_id = 5
-    view._on_lyrics_ready(5, "", "")
     track = _track(track_id=5)
+    key = view._lyrics_cache_key(track)
+    view._lyrics_task_key = key
+    view._on_lyrics_ready(key, "", "")
 
     with patch("lyon.ui.now_playing.threading.Thread") as mock_thread:
         view._load_lyrics(track)
 
     mock_thread.assert_called_once()
-    assert view._lyrics_task_id == 5
+    assert view._lyrics_task_key == key
 
 
 def test_lyrics_cache_serves_hit_without_spawning_thread(player, tmp_path):
     view = NowPlayingView(player, settings=Settings())
     track = _track(track_id=99)
     # Prime cache with a known synced result
-    view._lyrics_cache[99] = ("[00:01.00]Cached line", "")
+    view._lyrics_cache[view._lyrics_cache_key(track)] = ("[00:01.00]Cached line", "")
     # The track has no .lrc file and no real audio file with embedded tags,
     # so _load_lyrics will reach step 3 (online) where the cache should hit.
     with patch("lyon.ui.now_playing.threading.Thread") as mock_thread:
@@ -253,14 +259,36 @@ def test_lyrics_cache_serves_hit_without_spawning_thread(player, tmp_path):
     assert "Cached line" in rendered
 
 
+def test_lyrics_cache_misses_after_same_track_id_metadata_change(player):
+    settings = Settings(auto_lookup_metadata=False)
+    view = NowPlayingView(player, settings=settings)
+    old_track = _track(track_id=99, title="Before")
+    refreshed_track = _track(track_id=99, title="After")
+
+    with patch("lyon.ui.now_playing.threading.Thread"):
+        view._on_track(old_track)
+    view._on_lyrics_ready(view._lyrics_cache_key(old_track), "", "Old cached lyric")
+
+    with patch("lyon.ui.now_playing.threading.Thread") as mock_thread:
+        view._on_track(refreshed_track)
+
+    mock_thread.assert_called_once()
+    rendered = [lbl.text() for lbl in view._lyrics_panel._labels]
+    assert any("Searching" in text for text in rendered)
+    assert "Old cached lyric" not in rendered
+
+
 def test_lyrics_cache_evicts_oldest_when_over_capacity(player):
     view = NowPlayingView(player, settings=Settings())
     view._PANEL_CACHE_MAX = 3  # shrink for the test
-    view._lyrics_task_id = 1
+    keys = []
     for i in range(1, 6):
-        view._on_lyrics_ready(i, "", f"text{i}")
+        key = view._lyrics_cache_key(_track(track_id=i))
+        keys.append(key)
+        view._lyrics_task_key = key
+        view._on_lyrics_ready(key, "", f"text{i}")
     # Capacity 3 → only the three newest survive
-    assert set(view._lyrics_cache.keys()) == {3, 4, 5}
+    assert set(view._lyrics_cache.keys()) == set(keys[2:])
 
 
 # ---- Settings toggle ----------------------------------------------------
@@ -285,7 +313,7 @@ def test_fetch_lyrics_online_enabled_spawns_thread(player):
     with patch("lyon.ui.now_playing.threading.Thread") as mock_thread:
         view._load_lyrics(track)
     mock_thread.assert_called_once()
-    assert view._lyrics_task_id == 2
+    assert view._lyrics_task_key == view._lyrics_cache_key(track)
 
 
 def test_now_playing_side_panel_and_tabs_are_wide(player):

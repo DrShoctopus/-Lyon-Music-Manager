@@ -39,7 +39,7 @@ ATTRIBUTIONS: tuple[Attribution, ...] = (
         "https://www.qt.io/qt-for-python",
     ),
     Attribution(
-        "libVLC", "3.0.21", "LGPL-2.1+",
+        "libVLC", "3.0.23", "LGPL-2.1+",
         "https://www.videolan.org/vlc/libvlc.html",
         notes="Some bundled VLC plugins are GPL-2.0+.",
     ),
@@ -57,6 +57,11 @@ ATTRIBUTIONS: tuple[Attribution, ...] = (
         "https://acoustid.org/chromaprint",
     ),
     Attribution(
+        "Deno", "2.8.1", "MIT",
+        "https://github.com/denoland/deno",
+        notes="Bundled JavaScript runtime for yt-dlp signature solving.",
+    ),
+    Attribution(
         "python-vlc", "3.0.21203", "LGPL-2.1+",
         "https://github.com/oaubert/python-vlc",
     ),
@@ -71,6 +76,11 @@ ATTRIBUTIONS: tuple[Attribution, ...] = (
     Attribution(
         "yt-dlp", "2026.3.17", "Unlicense",
         "https://github.com/yt-dlp/yt-dlp",
+    ),
+    Attribution(
+        "yt-dlp-ejs", "0.8.0", "Unlicense / MIT / ISC",
+        "https://github.com/yt-dlp/ejs",
+        notes="External JavaScript challenge solver package used by yt-dlp.",
     ),
     Attribution(
         "requests", "2.34.2", "Apache-2.0",

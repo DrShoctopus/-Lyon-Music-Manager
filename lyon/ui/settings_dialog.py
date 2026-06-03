@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..core.settings import Settings, normalize_library_paths, normalize_update_appcast_url
+from ..core.youtube_options import YT_BROWSER_COOKIE_BROWSERS
 from .about_dialog import build_about_widget
 
 if TYPE_CHECKING:
@@ -53,7 +54,6 @@ _FORM_FIELD_MIN_WIDTH = 280
 _PATH_FIELD_MIN_WIDTH = 420
 _COMBO_FIELD_MIN_WIDTH = 220
 _SPIN_FIELD_MIN_WIDTH = 160
-
 
 class SettingsDialog(QDialog):
     def __init__(
@@ -475,6 +475,28 @@ class SettingsDialog(QDialog):
         self.yt_auto_add.setChecked(settings.yt_auto_add)
         form.addRow("", self.yt_auto_add)
 
+        self.yt_use_browser_cookies = QCheckBox(
+            "Use browser session for restricted videos"
+        )
+        self.yt_use_browser_cookies.setChecked(settings.yt_use_browser_cookies)
+        self.yt_use_browser_cookies.setToolTip(
+            "Allows yt-dlp to read cookies from the selected signed-in browser. "
+            "Sea Lyon stores only this preference, not the cookies."
+        )
+        form.addRow("", self.yt_use_browser_cookies)
+
+        self.yt_browser_cookies_browser = QComboBox()
+        self._prepare_combo(self.yt_browser_cookies_browser)
+        for label, key in YT_BROWSER_COOKIE_BROWSERS:
+            self.yt_browser_cookies_browser.addItem(label, key)
+        for i in range(self.yt_browser_cookies_browser.count()):
+            if self.yt_browser_cookies_browser.itemData(i) == settings.yt_browser_cookies_browser:
+                self.yt_browser_cookies_browser.setCurrentIndex(i)
+                break
+        self.yt_browser_cookies_browser.setEnabled(settings.yt_use_browser_cookies)
+        self.yt_use_browser_cookies.toggled.connect(self.yt_browser_cookies_browser.setEnabled)
+        form.addRow("Browser session:", self.yt_browser_cookies_browser)
+
         return w
 
     def _build_scrobbling_tab(self, settings: Settings) -> QWidget:
@@ -839,11 +861,18 @@ class SettingsDialog(QDialog):
         self.result_settings.ctdb_verify_rips = self.ctdb_verify.isChecked()
         self.result_settings.musicbrainz_contact = self.contact.text().strip() or self.result_settings.musicbrainz_contact
         self.result_settings.theaudiodb_api_key = self.audiodb_key.text().strip()
+        self.result_settings.theaudiodb_api_key_opt_out = not bool(
+            self.result_settings.theaudiodb_api_key
+        )
         self.result_settings.yt_audio_format = self.yt_audio_fmt.currentText()
         self.result_settings.yt_video_format = self.yt_video_fmt.currentText()
         self.result_settings.yt_video_quality = self.yt_video_quality.currentData() or "best"
         self.result_settings.yt_output_dir = self.yt_save_dir.text().strip()
         self.result_settings.yt_auto_add = self.yt_auto_add.isChecked()
+        self.result_settings.yt_use_browser_cookies = self.yt_use_browser_cookies.isChecked()
+        self.result_settings.yt_browser_cookies_browser = (
+            self.yt_browser_cookies_browser.currentData() or "firefox"
+        )
         self.result_settings.lastfm_scrobbling_enabled = self.lastfm_enabled.isChecked()
         self.result_settings.listenbrainz_scrobbling_enabled = self.lbz_enabled.isChecked()
         self.result_settings.listenbrainz_token = self.lbz_token.text().strip()

@@ -47,6 +47,10 @@ class YouTubeAcknowledgementDialog(QDialog):
             "by YouTube's terms, by the copyright in the underlying content, "
             "or by law where you live. Sea Lyon does not grant you any right "
             "to content you do not independently have permission to obtain.<br><br>"
+            "If you enable browser-session downloads for restricted videos, "
+            "yt-dlp may read applicable YouTube cookies from the browser you "
+            "select and send them to YouTube for that download. Sea Lyon "
+            "stores only the selected browser name, not your cookies.<br><br>"
             "You are solely responsible for ensuring that any search or "
             "download you initiate is permitted by YouTube's terms and by "
             "applicable law.",
