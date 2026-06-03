@@ -1,0 +1,33 @@
+name: Create Draft Release
+
+on:
+  workflow_dispatch:
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create v1.0.1 draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create v1.0.1 \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "v1.0.1" \
+            --notes "## What's Changed
+
+- Fix YT Downloader Age Restricted Video
+- Fix Now Playing Lyrics
+- Update YT Download UI
+- Fix Artist Info On Now Playing Screen (Windows)
+- Fix: Update stale album art
+- fix(macos): stop random audio pops in packaged app
+- fix(build): refresh bundled VLC version caches
+- Address PR review findings
+- Fix Python 3.14 lockfile metadata
+
+**Full Changelog**: https://github.com/DrShoctopus/Sea-Lyon-Media-Manager/compare/v1.0.0...v1.0.1" \
+            --draft \
+            --target release/1.0.1
