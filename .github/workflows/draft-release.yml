@@ -1,7 +1,11 @@
 name: Create Draft Release
 
 on:
-  workflow_dispatch:
+  push:
+    branches:
+      - release/1.0.1
+    paths:
+      - .github/workflows/draft-release.yml
 
 jobs:
   create-release:
