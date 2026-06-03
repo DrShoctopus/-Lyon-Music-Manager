@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "push-release.sh"
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="bash syntax check uses the POSIX release helper")
 def test_push_release_script_is_valid_bash():
     assert SCRIPT.exists()
 
