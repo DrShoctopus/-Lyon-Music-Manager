@@ -76,14 +76,14 @@ for Updates…**.
 
 ## Status
 
-`LMM-DEV` is the active development branch tracking the v1.0 release.
-The repository is feature-complete for v1.0; release engineering,
+`development` is the active development branch tracking the v1.0.2 release.
+The repository is feature-complete for v1.0.1; release engineering,
 smoke testing, and publish steps are documented in
 [`docs/BUILD.md`](docs/BUILD.md), [`docs/RELEASING.md`](docs/RELEASING.md),
 [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md), and
 [`CHANGELOG.md`](CHANGELOG.md).
 
-**Packaged 1.0 release:** Windows 10 / 11 (x64) ships. macOS Apple
+**Packaged 1.0.1 release:** Windows 10 / 11 (x64) ships. macOS Apple
 Silicon ships only if the DMG passes the documented 1.0 gate on the
 oldest macOS version advertised for the release.
 Linux source-only development is best-effort.
