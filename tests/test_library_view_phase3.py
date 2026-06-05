@@ -105,6 +105,34 @@ class FakeLibrary:
         self.updated_tracks.append((track_id, dict(fields)))
 
 
+class CountingLibrary(FakeLibrary):
+    def __init__(self, artists_map: dict[str, dict[str, list[Track]]]):
+        super().__init__(artists_map)
+        self.reset_counts()
+
+    def reset_counts(self) -> None:
+        self.albums_for_artist_calls = 0
+        self.tracks_for_album_calls = 0
+        self.tracks_for_artist_calls = 0
+        self.all_albums_calls = 0
+
+    def albums_for_artist(self, artist: str, _media=None):
+        self.albums_for_artist_calls += 1
+        return list(super().albums_for_artist(artist, _media))
+
+    def tracks_for_album(self, artist: str, album: str, _media=None) -> list[Track]:
+        self.tracks_for_album_calls += 1
+        return super().tracks_for_album(artist, album, _media)
+
+    def tracks_for_artist(self, artist: str, _media=None) -> list[Track]:
+        self.tracks_for_artist_calls += 1
+        return super().tracks_for_artist(artist, _media)
+
+    def all_albums(self, _media=None):
+        self.all_albums_calls += 1
+        return super().all_albums(_media)
+
+
 @pytest.fixture(scope="module")
 def app():
     existing = QtWidgets.QApplication.instance()
@@ -199,6 +227,51 @@ def test_list_album_art_uses_async_loader(app, monkeypatch, tmp_path):
     assert signals is view._art_signals
     assert gen == view._grid_gen
     assert [item.text() for item in view._grid_art_map[art_path]] == ["First", "Second"]
+
+
+def test_refresh_artists_blocks_selection_cascade(app):
+    library = CountingLibrary({
+        f"Artist {i}": {"Album": [_track(i + 1, "Song", f"Artist {i}", "Album")]}
+        for i in range(5)
+    })
+    view = LibraryView(library)
+    library.reset_counts()
+
+    view._refresh_artists()
+
+    assert library.albums_for_artist_calls == 1
+    assert library.tracks_for_album_calls == 1
+
+
+def test_refresh_albums_blocks_selection_cascade(app):
+    library = CountingLibrary({
+        "Artist": {
+            f"Album {i}": [_track(i + 1, "Song", "Artist", f"Album {i}")]
+            for i in range(5)
+        }
+    })
+    view = LibraryView(library)
+    library.reset_counts()
+
+    view._refresh_albums()
+
+    assert library.tracks_for_artist_calls == 1
+    assert library.tracks_for_album_calls == 0
+
+
+def test_refresh_list_mode_does_not_rebuild_grid_or_repeat_child_queries(app):
+    library = CountingLibrary({
+        f"Artist {i}": {"Album": [_track(i + 1, "Song", f"Artist {i}", "Album")]}
+        for i in range(5)
+    })
+    view = LibraryView(library)
+    library.reset_counts()
+
+    view.refresh()
+
+    assert library.albums_for_artist_calls == 1
+    assert library.tracks_for_album_calls == 1
+    assert library.all_albums_calls == 0
 
 
 def test_grid_albums_respect_show_videos_toggle(app):

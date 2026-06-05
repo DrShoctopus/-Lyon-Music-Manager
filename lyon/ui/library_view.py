@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import logging
 from collections import OrderedDict
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from PySide6.QtCore import (
@@ -149,6 +150,19 @@ def _exec_dialog(dialog: QDialog) -> int:
     finally:
         dialog.deleteLater()
 
+
+@contextmanager
+def _blocked_selection_signals(*views) -> Iterator[None]:
+    blocked = []
+    for view in views:
+        selection_model = view.selectionModel()
+        if selection_model is not None:
+            blocked.append((selection_model, selection_model.blockSignals(True)))
+    try:
+        yield
+    finally:
+        for selection_model, previous in reversed(blocked):
+            selection_model.blockSignals(previous)
 
 
 class _TrackTableModel(QAbstractTableModel):
@@ -986,22 +1000,23 @@ class LibraryView(QWidget):
         self._refresh_playlists()
 
         # Populate genres pane (both list and grid share genres_model)
-        self.genres_model.clear()
-        ag_item = QStandardItem("All Genres")
-        ag_item.setData(_ALL_GENRES_KEY, Qt.UserRole)
-        f = ag_item.font()
-        f.setItalic(True)
-        ag_item.setFont(f)
-        self.genres_model.appendRow(ag_item)
-        for g in self._library_all_genres(self._media_type_filter):
-            it = QStandardItem(g)
-            it.setData(g, Qt.UserRole)
-            self.genres_model.appendRow(it)
+        with _blocked_selection_signals(self.genres, self._grid_genres):
+            self.genres_model.clear()
+            ag_item = QStandardItem("All Genres")
+            ag_item.setData(_ALL_GENRES_KEY, Qt.UserRole)
+            f = ag_item.font()
+            f.setItalic(True)
+            ag_item.setFont(f)
+            self.genres_model.appendRow(ag_item)
+            for g in self._library_all_genres(self._media_type_filter):
+                it = QStandardItem(g)
+                it.setData(g, Qt.UserRole)
+                self.genres_model.appendRow(it)
 
-        # Reset genre selection to "All Genres" without firing signal
-        self.genres.blockSignals(True)
-        self.genres.setCurrentIndex(self.genres_model.index(0, 0))
-        self.genres.blockSignals(False)
+            # Reset genre selections to "All Genres" without firing selection signals.
+            all_genres_idx = self.genres_model.index(0, 0)
+            self.genres.setCurrentIndex(all_genres_idx)
+            self._grid_genres.setCurrentIndex(all_genres_idx)
 
         if has_tracks:
             # Preserve view mode across refresh
@@ -1035,81 +1050,104 @@ class LibraryView(QWidget):
         genre_key = genre_idx.data(Qt.UserRole) if genre_idx.isValid() else _ALL_GENRES_KEY
         genre = None if genre_key == _ALL_GENRES_KEY else genre_key
 
-        self.artists_model.clear()
-        virtual_collections = self._available_virtual_collections()
-        for key, label in virtual_collections:
-            item = QStandardItem(label)
-            item.setData(key, Qt.UserRole)
-            fnt = item.font()
-            fnt.setItalic(True)
-            item.setFont(fnt)
-            self.artists_model.appendRow(item)
-        real_artists = self._library_all_artists(self._media_type_filter, genre=genre)
-        for a in real_artists:
-            it = QStandardItem(a)
-            it.setData(a, Qt.UserRole)
-            self.artists_model.appendRow(it)
+        with _blocked_selection_signals(self.artists):
+            self.artists_model.clear()
+            virtual_collections = self._available_virtual_collections()
+            for key, label in virtual_collections:
+                item = QStandardItem(label)
+                item.setData(key, Qt.UserRole)
+                fnt = item.font()
+                fnt.setItalic(True)
+                item.setFont(fnt)
+                self.artists_model.appendRow(item)
+            real_artists = self._library_all_artists(self._media_type_filter, genre=genre)
+            for a in real_artists:
+                it = QStandardItem(a)
+                it.setData(a, Qt.UserRole)
+                self.artists_model.appendRow(it)
 
-        if real_artists:
-            self.artists.setCurrentIndex(
-                self.artists_model.index(len(virtual_collections), 0)
-            )
+            if real_artists:
+                self.artists.setCurrentIndex(
+                    self.artists_model.index(len(virtual_collections), 0)
+                )
+            elif self.artists_model.rowCount():
+                self.artists.setCurrentIndex(self.artists_model.index(0, 0))
+            else:
+                self.artists.setCurrentIndex(QModelIndex())
+
+        if self.artists.currentIndex().isValid():
+            self._refresh_albums()
         else:
-            self.artists.setCurrentIndex(self.artists_model.index(0, 0))
+            self.albums_model.clear()
+            self._current_tracks = []
+            self._clear_tracks_model()
+            self._update_footer()
 
     _VIRTUAL_KEYS = frozenset(k for k, _ in _VIRTUAL_COLLECTIONS)
 
     def _refresh_albums(self) -> None:
         self._clear_playlist_selection()
-        self.albums_model.clear()
         self._grid_gen += 1
         gen = self._grid_gen
         self._grid_art_map = {}
-        idx = self.artists.currentIndex()
-        if not idx.isValid():
-            self._current_tracks = []
-            self._clear_tracks_model()
-            self._update_footer()
-            return
-        artist_key = idx.data(Qt.UserRole)
-        # Virtual collection selected — clear album pane and populate tracks directly
-        if artist_key in self._VIRTUAL_KEYS:
+        virtual_key = None
+        should_refresh_tracks = False
+
+        with _blocked_selection_signals(self.albums):
             self.albums_model.clear()
-            self._populate_virtual_collection(artist_key)
-            return
-        artist = idx.data(Qt.DisplayRole)
-        albums = list(self.library.albums_for_artist(artist, self._media_type_filter))
-        # When the artist has multiple albums, offer an "All Albums" view.
-        if len(albums) >= 2:
-            all_item = QStandardItem("All Albums")
-            all_item.setData(_ALL_ALBUMS_KEY, Qt.UserRole)
-            font = all_item.font()
-            font.setItalic(True)
-            all_item.setFont(font)
-            self.albums_model.appendRow(all_item)
-        pool = QThreadPool.globalInstance()
-        for album, _art in albums:
-            it = QStandardItem(album)
-            it.setData(album, Qt.UserRole)
-            if not _art:
-                it.setForeground(QColor("#888888"))
-            self.albums_model.appendRow(it)
-            if not _art:
-                continue
-            if _art in self._art_cache:
-                self._art_cache.move_to_end(_art)
-                it.setIcon(QIcon(self._art_cache[_art]))
+            idx = self.artists.currentIndex()
+            if not idx.isValid():
+                self._current_tracks = []
+                self._clear_tracks_model()
+                self._update_footer()
+                return
+            artist_key = idx.data(Qt.UserRole)
+            # Virtual collection selected — clear album pane and populate tracks directly
+            if artist_key in self._VIRTUAL_KEYS:
+                virtual_key = artist_key
             else:
-                first = _art not in self._grid_art_map
-                self._grid_art_map.setdefault(_art, []).append(it)
-                if first:
-                    pool.start(_ArtLoader(gen, _art, self._art_signals, lambda: self._grid_gen))
-        if self.albums_model.rowCount():
-            self.albums.setCurrentIndex(self.albums_model.index(0, 0))
-        else:
-            self._current_tracks = []
-            self._clear_tracks_model()
-            self._update_footer()
+                artist = idx.data(Qt.DisplayRole)
+                albums = list(self.library.albums_for_artist(artist, self._media_type_filter))
+                # When the artist has multiple albums, offer an "All Albums" view.
+                if len(albums) >= 2:
+                    all_item = QStandardItem("All Albums")
+                    all_item.setData(_ALL_ALBUMS_KEY, Qt.UserRole)
+                    font = all_item.font()
+                    font.setItalic(True)
+                    all_item.setFont(font)
+                    self.albums_model.appendRow(all_item)
+                pool = QThreadPool.globalInstance()
+                for album, _art in albums:
+                    it = QStandardItem(album)
+                    it.setData(album, Qt.UserRole)
+                    if not _art:
+                        it.setForeground(QColor("#888888"))
+                    self.albums_model.appendRow(it)
+                    if not _art:
+                        continue
+                    if _art in self._art_cache:
+                        self._art_cache.move_to_end(_art)
+                        it.setIcon(QIcon(self._art_cache[_art]))
+                    else:
+                        first = _art not in self._grid_art_map
+                        self._grid_art_map.setdefault(_art, []).append(it)
+                        if first:
+                            pool.start(
+                                _ArtLoader(gen, _art, self._art_signals, lambda: self._grid_gen)
+                            )
+                if self.albums_model.rowCount():
+                    self.albums.setCurrentIndex(self.albums_model.index(0, 0))
+                    should_refresh_tracks = True
+                else:
+                    self._current_tracks = []
+                    self._clear_tracks_model()
+                    self._update_footer()
+
+        if virtual_key is not None:
+            self._populate_virtual_collection(virtual_key)
+            return
+        if should_refresh_tracks:
+            self._refresh_tracks()
 
     def _populate_virtual_collection(self, key: str) -> None:
         mt = self._media_type_filter
@@ -1254,13 +1292,17 @@ class LibraryView(QWidget):
 
     # ------------------------------------------------------------------ simple view
     def _sv_refresh_artists(self) -> None:
-        self._sv_artists_model.clear()
-        for a in self._library_all_artists(self._media_type_filter):
-            it = QStandardItem(a)
-            it.setData(a, Qt.UserRole)
-            self._sv_artists_model.appendRow(it)
-        if self._sv_artists_model.rowCount():
-            self._sv_artists.setCurrentIndex(self._sv_artists_model.index(0, 0))
+        with _blocked_selection_signals(self._sv_artists):
+            self._sv_artists_model.clear()
+            for a in self._library_all_artists(self._media_type_filter):
+                it = QStandardItem(a)
+                it.setData(a, Qt.UserRole)
+                self._sv_artists_model.appendRow(it)
+            if self._sv_artists_model.rowCount():
+                self._sv_artists.setCurrentIndex(self._sv_artists_model.index(0, 0))
+            else:
+                self._sv_artists.setCurrentIndex(QModelIndex())
+        self._sv_refresh_albums()
 
     def _sv_refresh_albums(self) -> None:
         # Block the album selection signal while we rebuild the model: model.clear()
