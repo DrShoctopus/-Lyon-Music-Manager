@@ -1044,6 +1044,38 @@ def test_watched_indexing_waits_while_ripping(main_window, tmp_path, monkeypatch
         main_window._watch_debounce_timer.stop()
 
 
+def test_stale_watch_index_finish_does_not_clear_new_worker(main_window, monkeypatch):
+    from lyon.core.library import ScanSummary
+
+    old_worker = object()
+    new_worker = object()
+    main_window._watch_index_thread = new_worker
+    main_window._scan_status_label.setVisible(True)
+    main_window._scan_progress.setVisible(True)
+    monkeypatch.setattr(main_window, "sender", lambda: old_worker)
+
+    main_window._on_watch_index_finished(ScanSummary(added=1))
+
+    assert main_window._watch_index_thread is new_worker
+    assert not main_window._scan_status_label.isHidden()
+    assert not main_window._scan_progress.isHidden()
+
+
+def test_stale_watch_index_failure_does_not_clear_new_worker(main_window, monkeypatch):
+    old_worker = object()
+    new_worker = object()
+    main_window._watch_index_thread = new_worker
+    main_window._scan_status_label.setVisible(True)
+    main_window._scan_progress.setVisible(True)
+    monkeypatch.setattr(main_window, "sender", lambda: old_worker)
+
+    main_window._on_watch_index_failed("boom")
+
+    assert main_window._watch_index_thread is new_worker
+    assert not main_window._scan_status_label.isHidden()
+    assert not main_window._scan_progress.isHidden()
+
+
 def test_main_window_stays_usable_when_playback_backend_is_unavailable(qapp, monkeypatch, tmp_path):
     from lyon.core import player as player_mod
     from lyon.core.library import Library

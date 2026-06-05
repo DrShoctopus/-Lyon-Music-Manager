@@ -118,6 +118,7 @@ _MIGRATIONS: list[tuple[int, str]] = [
 ]
 
 _PAGE_SIZE = 500  # rows per page in streaming queries
+_SCAN_COMMIT_INTERVAL = 500  # indexed filesystem entries per scan transaction
 
 
 @dataclass
@@ -302,26 +303,48 @@ class Library:
         flows own library cleanup so disconnected drives are safe.
         """
         summary = ScanSummary()
+        entries_since_commit = 0
+
+        def commit_progress(*, force: bool = False) -> None:
+            nonlocal entries_since_commit
+            if not force and entries_since_commit < _SCAN_COMMIT_INTERVAL:
+                return
+            with self._lock:
+                self.conn.commit()
+            entries_since_commit = 0
+
         for root in roots:
             root = Path(root)
             if not root.exists():
                 continue
             for dirpath, _dirs, files in os.walk(root):
                 if should_cancel is not None and should_cancel():
-                    with self._lock:
-                        self.conn.commit()
+                    commit_progress(force=True)
                     return summary
                 for name in files:
+                    if should_cancel is not None and should_cancel():
+                        commit_progress(force=True)
+                        return summary
                     ext = os.path.splitext(name)[1].lower()
+                    full = os.path.join(dirpath, name)
                     if ext in SUPPORTED_EXTS:
-                        full = os.path.join(dirpath, name)
-                        summary.add_result(self.index_file(full, force=force))
+                        try:
+                            summary.add_result(self.index_file(full, force=force))
+                        except Exception as exc:  # noqa: BLE001
+                            LOG.exception("Failed to index %s: %s", full, exc)
+                            summary.failed += 1
+                        entries_since_commit += 1
+                        commit_progress()
                     elif ext == SUPPORTED_CUE_EXT:
-                        full = os.path.join(dirpath, name)
-                        summary.merge(self._index_cue_file(full, force=force))
+                        try:
+                            summary.merge(self._index_cue_file(full, force=force))
+                        except Exception as exc:  # noqa: BLE001
+                            LOG.exception("Failed to index CUE sheet %s: %s", full, exc)
+                            summary.failed += 1
+                        entries_since_commit += 1
+                        commit_progress()
         summary.removed += self.remove_stale_cue_tracks()
-        with self._lock:
-            self.conn.commit()
+        commit_progress(force=True)
         return summary
 
     def add_file(self, path: str | os.PathLike, disc_id: str | None = None) -> bool:
@@ -1648,11 +1671,13 @@ def _read_tags(path: str) -> dict | None:
     if f is None:
         return None
     info = getattr(f, "info", None)
+
     def first(key: str) -> str:
         v = f.get(key)
         if isinstance(v, list) and v:
             return str(v[0])
         return ""
+
     def to_int(s: str) -> int:
         if not s:
             return 0
@@ -1664,24 +1689,29 @@ def _read_tags(path: str) -> dict | None:
                 return int(s[:4])
             except ValueError:
                 return 0
-    disc_id = first("musicbrainz_discid")
-    if not disc_id:
-        disc_id = first("MusicBrainz/Disc Id")
-    return {
-        "title": first("title") or Path(path).stem,
-        "artist": first("artist"),
-        "album_artist": first("albumartist") or first("artist"),
-        "album": first("album"),
-        "track_no": to_int(first("tracknumber")),
-        "disc_no": to_int(first("discnumber")) or 1,
-        "year": to_int(first("date") or first("year")),
-        "genre": first("genre"),
-        "grouping": first("grouping"),
-        "duration": float(getattr(info, "length", 0.0) or 0.0),
-        "bitrate": int(getattr(info, "bitrate", 0) or 0),
-        "samplerate": int(getattr(info, "sample_rate", 0) or 0),
-        "disc_id": disc_id,
-    }
+
+    try:
+        disc_id = first("musicbrainz_discid")
+        if not disc_id:
+            disc_id = first("MusicBrainz/Disc Id")
+        return {
+            "title": first("title") or Path(path).stem,
+            "artist": first("artist"),
+            "album_artist": first("albumartist") or first("artist"),
+            "album": first("album"),
+            "track_no": to_int(first("tracknumber")),
+            "disc_no": to_int(first("discnumber")) or 1,
+            "year": to_int(first("date") or first("year")),
+            "genre": first("genre"),
+            "grouping": first("grouping"),
+            "duration": float(getattr(info, "length", 0.0) or 0.0),
+            "bitrate": int(getattr(info, "bitrate", 0) or 0),
+            "samplerate": int(getattr(info, "sample_rate", 0) or 0),
+            "disc_id": disc_id,
+        }
+    except Exception as exc:  # noqa: BLE001
+        LOG.warning("Failed to parse tags from %s: %s", path, exc)
+        return None
 
 
 def _audio_duration_seconds(path: Path | None) -> float | None:

@@ -76,11 +76,11 @@ class LibraryFolderWatcher(QObject):
             self.watch_error.emit("Install watchdog to enable watched library folders.")
             return
 
-        existing_roots = [
+        existing_roots = _collapse_nested_paths([
             str(Path(root))
             for root in roots
             if root and Path(root).exists() and Path(root).is_dir()
-        ]
+        ])
         if not existing_roots:
             return
 
@@ -315,6 +315,49 @@ def coalesce_batch(target: WatchBatch, incoming: WatchBatch) -> None:
     for path in incoming.changed_paths:
         if path not in target.deleted_paths and path not in target.moved_paths.values():
             target.changed_paths.add(path)
+    target.scan_roots = set(_collapse_nested_paths(target.scan_roots))
+    target.changed_paths = {
+        path
+        for path in target.changed_paths
+        if not _path_is_under_any(path, target.scan_roots)
+    }
+
+
+def _collapse_nested_paths(paths: set[str] | list[str]) -> list[str]:
+    """Return paths with children removed when a parent path is already present."""
+    collapsed: list[str] = []
+    for path in sorted(paths, key=_path_sort_key):
+        if not _path_is_under_any(path, collapsed):
+            collapsed.append(path)
+    return collapsed
+
+
+def _path_sort_key(path: str) -> tuple[int, str]:
+    norm = _normalized_path(path)
+    depth = len(norm.rstrip(os.sep).split(os.sep)) if norm else 0
+    return depth, norm
+
+
+def _path_is_under_any(path: str, roots: set[str] | list[str]) -> bool:
+    return any(_path_is_under(path, root) for root in roots)
+
+
+def _path_is_under(path: str, root: str) -> bool:
+    path_norm = _normalized_path(path)
+    root_norm = _normalized_path(root)
+    if not path_norm or not root_norm:
+        return False
+    try:
+        return os.path.commonpath([root_norm, path_norm]) == root_norm
+    except ValueError:
+        return False
+
+
+def _normalized_path(path: str) -> str:
+    try:
+        return os.path.normcase(os.path.abspath(path))
+    except OSError:
+        return ""
 
 
 def _event_path(event: FileSystemEvent) -> str:

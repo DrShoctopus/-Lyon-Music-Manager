@@ -41,6 +41,13 @@ class _FakeAudio(dict):
         }.get(key)
 
 
+class _ExplodingAudio(dict):
+    info = _FakeInfo()
+
+    def get(self, key):
+        raise RuntimeError(f"bad tag value for {key}")
+
+
 def _set_file_state(path: Path, payload: bytes, mtime_ns: int) -> None:
     path.write_bytes(payload)
     os.utime(path, ns=(mtime_ns, mtime_ns))
@@ -105,6 +112,104 @@ def test_index_file_refreshes_changed_metadata_and_preserves_user_state(tmp_path
         assert updated.play_count == 1
         assert updated.file_size == 3
         assert updated.file_mtime_ns == 1_700_000_100_000_000_000
+    finally:
+        library.close()
+
+
+def test_scan_paths_summary_continues_after_bad_tag_object(tmp_path, monkeypatch):
+    root = tmp_path / "Music"
+    root.mkdir()
+    good_a = root / "good-a.flac"
+    bad = root / "bad.flac"
+    good_b = root / "good-b.flac"
+    for i, path in enumerate((good_a, bad, good_b), start=1):
+        _set_file_state(path, f"file-{i}".encode(), 1_700_000_000_000_000_000 + i)
+
+    def fake_mutagen(path, **_kwargs):
+        if Path(path).name == "bad.flac":
+            return _ExplodingAudio()
+        return _FakeAudio(Path(path).stem)
+
+    monkeypatch.setattr(library_module, "MutagenFile", fake_mutagen)
+    library = Library(tmp_path / "library.db")
+    try:
+        summary = library.scan_paths_summary([root])
+
+        assert summary.added == 2
+        assert summary.skipped == 1
+        assert {track.title for track in library.all_tracks()} == {"good-a", "good-b"}
+    finally:
+        library.close()
+
+
+def test_scan_paths_summary_checks_cancel_between_files(tmp_path, monkeypatch):
+    root = tmp_path / "Music"
+    root.mkdir()
+    for i in range(3):
+        _set_file_state(
+            root / f"track-{i}.flac",
+            f"file-{i}".encode(),
+            1_700_000_000_000_000_000 + i,
+        )
+
+    monkeypatch.setattr(
+        library_module,
+        "MutagenFile",
+        lambda path, **_kwargs: _FakeAudio(Path(path).stem),
+    )
+    calls = 0
+
+    def should_cancel() -> bool:
+        nonlocal calls
+        calls += 1
+        return calls > 2
+
+    library = Library(tmp_path / "library.db")
+    try:
+        summary = library.scan_paths_summary([root], should_cancel=should_cancel)
+
+        assert summary.added == 1
+        assert library.count_tracks() == 1
+    finally:
+        library.close()
+
+
+def test_scan_paths_summary_commits_large_scans_in_batches(tmp_path, monkeypatch):
+    root = tmp_path / "Music"
+    root.mkdir()
+    for i in range(501):
+        _set_file_state(
+            root / f"track-{i:03d}.flac",
+            b"file",
+            1_700_000_000_000_000_000 + i,
+        )
+
+    monkeypatch.setattr(
+        library_module,
+        "MutagenFile",
+        lambda path, **_kwargs: _FakeAudio(Path(path).stem),
+    )
+    library = Library(tmp_path / "library.db")
+
+    class CountingConnection:
+        def __init__(self, conn):
+            self.conn = conn
+            self.commits = 0
+
+        def __getattr__(self, name):
+            return getattr(self.conn, name)
+
+        def commit(self):
+            self.commits += 1
+            return self.conn.commit()
+
+    counting_conn = CountingConnection(library.conn)
+    library.conn = counting_conn
+    try:
+        summary = library.scan_paths_summary([root])
+
+        assert summary.added == 501
+        assert counting_conn.commits >= 2
     finally:
         library.close()
 
@@ -264,6 +369,59 @@ def test_watch_batch_coalesces_duplicate_and_conflicting_events():
     assert target.changed_paths == set()
     assert target.deleted_paths == {"/music/a.flac"}
     assert target.moved_paths == {"/music/b.flac": "/music/c.flac"}
+
+
+def test_watch_batch_collapses_nested_scan_roots_and_covered_file_events():
+    target = WatchBatch(
+        scan_roots={"/music/Artist"},
+        changed_paths={"/music/Artist/Album/a.flac", "/music/Other/b.flac"},
+    )
+
+    coalesce_batch(
+        target,
+        WatchBatch(
+            scan_roots={"/music", "/music/Artist/Album"},
+            changed_paths={"/music/Artist/Album/c.flac"},
+        ),
+    )
+
+    assert target.scan_roots == {"/music"}
+    assert target.changed_paths == set()
+
+
+def test_library_folder_watcher_collapses_nested_roots_before_scheduling(tmp_path, monkeypatch):
+    scheduled: list[str] = []
+
+    class FakeObserver:
+        def schedule(self, _handler, root, recursive=False):
+            scheduled.append(root)
+            assert recursive is True
+
+        def start(self):
+            pass
+
+        def stop(self):
+            pass
+
+        def join(self, timeout=None):
+            pass
+
+        def is_alive(self):
+            return True
+
+    root = tmp_path / "Music"
+    artist = root / "Artist"
+    album = artist / "Album"
+    album.mkdir(parents=True)
+    other = tmp_path / "Other"
+    other.mkdir()
+    monkeypatch.setattr(library_watcher_module, "Observer", FakeObserver)
+
+    watcher = LibraryFolderWatcher()
+    watcher.start([str(album), str(root), str(artist), str(other)])
+
+    assert scheduled == [str(root), str(other)]
+    watcher.stop()
 
 
 def test_library_index_thread_settles_changed_paths_as_one_batch(monkeypatch):

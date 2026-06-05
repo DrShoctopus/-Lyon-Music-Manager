@@ -1180,6 +1180,8 @@ class MainWindow(QMainWindow):
         self._watch_index_thread.start()
 
     def _on_watch_index_finished(self, summary: ScanSummary) -> None:
+        if not self._watch_index_sender_is_current():
+            return
         self._scan_status_label.setVisible(False)
         self._scan_status_label.setText("")
         self._scan_progress.setVisible(False)
@@ -1203,11 +1205,17 @@ class MainWindow(QMainWindow):
         self._watch_index_thread = None
 
     def _on_watch_index_failed(self, error: str) -> None:
+        if not self._watch_index_sender_is_current():
+            return
         self._scan_status_label.setVisible(False)
         self._scan_status_label.setText("")
         self._scan_progress.setVisible(False)
         self.show_toast(f"Library update failed: {error}", level="error", duration_ms=6000)
         self._watch_index_thread = None
+
+    def _watch_index_sender_is_current(self) -> bool:
+        sender = self.sender()
+        return sender is None or sender is self._watch_index_thread
 
     def _ripper_is_running(self) -> bool:
         ripper_view = self._ripper_view
