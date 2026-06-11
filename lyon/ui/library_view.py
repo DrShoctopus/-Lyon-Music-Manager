@@ -523,6 +523,10 @@ class _IdentifyTrackDialog(QDialog):
 
 _GRID_ICON_SIZE = 180
 _ART_CACHE_MAX = 200
+_LARGE_LIBRARY_THRESHOLD = 10_000
+_UI_POPULATE_CHUNK = 500
+_LARGE_LIBRARY_THRESHOLD = 10_000
+_UI_POPULATE_CHUNK = 500
 
 
 class _ArtSignals(QObject):
@@ -601,6 +605,10 @@ class LibraryView(QWidget):
         self._grid_art_map: dict[str, list[QStandardItem]] = {}
         self._art_signals = _ArtSignals(self)
         self._art_signals.loaded.connect(self._on_artwork_loaded)
+        self._populate_gen = 0
+        self._populate_timer = QTimer(self)
+        self._populate_timer.timeout.connect(self._populate_next_chunk)
+        self._populate_state: dict | None = None
 
         # ---- Top toolbar
         top = QHBoxLayout()
@@ -980,8 +988,32 @@ class LibraryView(QWidget):
         self._show_videos = checked
         self.refresh()
 
-    def refresh(self) -> None:
-        has_tracks = bool(self._library_all_artists(self._media_type_filter))
+    def _library_has_tracks(self) -> bool:
+        fn = getattr(self.library, "count_tracks", None)
+        if callable(fn):
+            try:
+                return fn(self._media_type_filter) > 0
+            except TypeError:
+                return fn() > 0
+        return bool(self._library_all_artists(self._media_type_filter))
+
+    def _is_large_library(self) -> bool:
+        fn = getattr(self.library, "count_tracks", None)
+        if not callable(fn):
+            return False
+        try:
+            count = fn(self._media_type_filter)
+        except TypeError:
+            count = fn()
+        return count >= _LARGE_LIBRARY_THRESHOLD
+
+    def refresh_after_scan(self) -> None:
+        """Refresh the library UI after a background scan without freezing."""
+        self.refresh(chunked=self._is_large_library())
+
+    def refresh(self, *, chunked: bool = False) -> None:
+        self._cancel_populate()
+        has_tracks = self._library_has_tracks()
         active_pl = self._active_playlist_id
         self._refresh_playlists()
 
@@ -1007,11 +1039,11 @@ class LibraryView(QWidget):
             # Preserve view mode across refresh
             current_page = self._browser_stack.currentIndex()
             self._browser_stack.setCurrentIndex(max(1, current_page))
-            self._refresh_artists()
+            self._refresh_artists(chunked=chunked)
             if self._browser_stack.currentIndex() == 2:
                 self._refresh_grid_albums()
             elif self._browser_stack.currentIndex() == 3:
-                self._sv_refresh_artists()
+                self._sv_refresh_artists(chunked=chunked)
         else:
             self._browser_stack.setCurrentIndex(0)
             self.artists_model.clear()
@@ -1029,7 +1061,57 @@ class LibraryView(QWidget):
                 self._clear_tracks_model()
                 self._update_footer()
 
-    def _refresh_artists(self) -> None:
+    def _cancel_populate(self) -> None:
+        self._populate_gen += 1
+        self._populate_timer.stop()
+        self._populate_state = None
+
+    def _start_artist_populate(
+        self,
+        list_view: QListView,
+        model: QStandardItemModel,
+        virtual_count: int,
+        artists: list[str],
+    ) -> None:
+        self._cancel_populate()
+        self._populate_gen += 1
+        self._populate_state = {
+            "gen": self._populate_gen,
+            "list_view": list_view,
+            "model": model,
+            "virtual_count": virtual_count,
+            "artists": artists,
+            "offset": 0,
+        }
+        self._populate_timer.start(0)
+
+    def _populate_next_chunk(self) -> None:
+        state = self._populate_state
+        if state is None or state["gen"] != self._populate_gen:
+            self._populate_timer.stop()
+            return
+        artists: list[str] = state["artists"]
+        offset: int = state["offset"]
+        end = min(offset + _UI_POPULATE_CHUNK, len(artists))
+        model: QStandardItemModel = state["model"]
+        for name in artists[offset:end]:
+            it = QStandardItem(name)
+            it.setData(name, Qt.UserRole)
+            model.appendRow(it)
+        state["offset"] = end
+        if end >= len(artists):
+            self._populate_timer.stop()
+            self._populate_state = None
+            virtual_count = state["virtual_count"]
+            list_view: QListView = state["list_view"]
+            if artists:
+                list_view.setCurrentIndex(model.index(virtual_count, 0))
+            else:
+                list_view.setCurrentIndex(model.index(0, 0))
+        else:
+            self._populate_timer.start(0)
+
+    def _refresh_artists(self, *, chunked: bool = False) -> None:
         """Repopulate artist list filtered by current genre selection."""
         genre_idx = self.genres.currentIndex()
         genre_key = genre_idx.data(Qt.UserRole) if genre_idx.isValid() else _ALL_GENRES_KEY
@@ -1045,6 +1127,14 @@ class LibraryView(QWidget):
             item.setFont(fnt)
             self.artists_model.appendRow(item)
         real_artists = self._library_all_artists(self._media_type_filter, genre=genre)
+        if chunked and len(real_artists) > _UI_POPULATE_CHUNK:
+            self._start_artist_populate(
+                self.artists,
+                self.artists_model,
+                len(virtual_collections),
+                real_artists,
+            )
+            return
         for a in real_artists:
             it = QStandardItem(a)
             it.setData(a, Qt.UserRole)
@@ -1151,7 +1241,7 @@ class LibraryView(QWidget):
                 self._list_mode_btn.blockSignals(False)
             return
         self._set_view_mode_checked(self._list_mode_btn)
-        has_tracks = bool(self._library_all_artists(self._media_type_filter))
+        has_tracks = self._library_has_tracks()
         self._browser_stack.setCurrentIndex(1 if has_tracks else 0)
 
     def _on_view_mode_toggled(self, checked: bool) -> None:
@@ -1194,6 +1284,12 @@ class LibraryView(QWidget):
         genre_idx = self._grid_genres.currentIndex()
         genre_key = genre_idx.data(Qt.UserRole) if genre_idx.isValid() else _ALL_GENRES_KEY
         genre = None if genre_key == _ALL_GENRES_KEY else genre_key
+
+        if genre is None and self._is_large_library():
+            hint = QStandardItem("Select a genre to browse albums")
+            hint.setEnabled(False)
+            self._grid_albums_model.appendRow(hint)
+            return
 
         if genre is None:
             albums = self._library_all_albums(self._media_type_filter)
@@ -1253,9 +1349,18 @@ class LibraryView(QWidget):
         self._navigate_to_album(artist, album)
 
     # ------------------------------------------------------------------ simple view
-    def _sv_refresh_artists(self) -> None:
+    def _sv_refresh_artists(self, *, chunked: bool = False) -> None:
         self._sv_artists_model.clear()
-        for a in self._library_all_artists(self._media_type_filter):
+        artists = self._library_all_artists(self._media_type_filter)
+        if chunked and len(artists) > _UI_POPULATE_CHUNK:
+            self._start_artist_populate(
+                self._sv_artists,
+                self._sv_artists_model,
+                0,
+                artists,
+            )
+            return
+        for a in artists:
             it = QStandardItem(a)
             it.setData(a, Qt.UserRole)
             self._sv_artists_model.appendRow(it)

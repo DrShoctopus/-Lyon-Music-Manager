@@ -16,6 +16,7 @@ from lyon.ui.library_view import (
     _COL_TITLE,
     _NUM_COLS,
     _PLAYING_GLYPH,
+    _UI_POPULATE_CHUNK,
     LibraryView,
 )
 
@@ -388,3 +389,61 @@ def test_fetch_album_metadata_reports_dialog_start_failure(view, monkeypatch):
     view._fetch_album_metadata("Alpha Band", "First Album")
 
     assert messages[-1] == "Metadata fetch could not be started."
+
+
+def test_refresh_after_scan_uses_chunked_populate_for_large_libraries(view, monkeypatch):
+    calls: list[bool] = []
+    original_refresh = view.refresh
+
+    def recording_refresh(*, chunked: bool = False) -> None:
+        calls.append(chunked)
+        original_refresh(chunked=chunked)
+
+    monkeypatch.setattr(view, "refresh", recording_refresh)
+    monkeypatch.setattr(view, "_is_large_library", lambda: True)
+
+    view.refresh_after_scan()
+
+    assert calls == [True]
+
+
+def test_refresh_after_scan_uses_full_refresh_for_small_libraries(view, monkeypatch):
+    calls: list[bool] = []
+    original_refresh = view.refresh
+
+    def recording_refresh(*, chunked: bool = False) -> None:
+        calls.append(chunked)
+        original_refresh(chunked=chunked)
+
+    monkeypatch.setattr(view, "refresh", recording_refresh)
+    monkeypatch.setattr(view, "_is_large_library", lambda: False)
+
+    view.refresh_after_scan()
+
+    assert calls == [False]
+
+
+def test_large_library_grid_requires_genre_selection(view, monkeypatch):
+    monkeypatch.setattr(view, "_is_large_library", lambda: True)
+    view._grid_genres.setCurrentIndex(view.genres_model.index(0, 0))
+
+    view._refresh_grid_albums()
+
+    assert view._grid_albums_model.rowCount() == 1
+    assert "Select a genre" in view._grid_albums_model.item(0).text()
+
+
+def test_chunked_artist_populate_appends_in_batches(view, monkeypatch):
+    artists = [f"Artist {i:04d}" for i in range(_UI_POPULATE_CHUNK + 25)]
+    monkeypatch.setattr(view, "_library_all_artists", lambda *_args, **_kwargs: artists)
+
+    view._refresh_artists(chunked=True)
+
+    assert view._populate_state is not None
+    assert view._populate_state["offset"] == 0
+    assert view.artists_model.rowCount() == len(view._available_virtual_collections())
+
+    while view._populate_state is not None:
+        view._populate_next_chunk()
+
+    assert view.artists_model.rowCount() == len(view._available_virtual_collections()) + len(artists)
