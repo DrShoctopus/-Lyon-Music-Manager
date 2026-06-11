@@ -275,7 +275,7 @@ class MainWindow(QMainWindow):
         # ---- stacked content (order must match _TAB_ORDER)
         self.stack = QStackedWidget()
         self.library_view = LibraryView(self.library)
-        self._library_refresh_timer.timeout.connect(self.library_view.refresh)
+        self._library_refresh_timer.timeout.connect(self.library_view.refresh_after_scan)
         self._library_refresh_timer.timeout.connect(self._refresh_video_catalog_if_loaded)
 
         # Build tab bar + stack together so indices always match _TAB_ORDER.
@@ -1028,7 +1028,7 @@ class MainWindow(QMainWindow):
         toast_level = "success" if (n > 0 or updated > 0 or removed > 0) else "info"
         self.show_toast(message, level=toast_level, duration_ms=4000)
         self.dlna_server.invalidate_cache()
-        self.library_view.refresh()
+        self.library_view.refresh_after_scan()
         self._refresh_video_catalog_if_loaded()
         self._scan_thread = None
 

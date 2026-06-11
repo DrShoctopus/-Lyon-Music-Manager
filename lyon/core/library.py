@@ -118,6 +118,7 @@ _MIGRATIONS: list[tuple[int, str]] = [
 ]
 
 _PAGE_SIZE = 500  # rows per page in streaming queries
+_SCAN_COMMIT_INTERVAL = 1000  # commit every N indexed files to cap transaction size
 
 
 @dataclass
@@ -302,6 +303,7 @@ class Library:
         flows own library cleanup so disconnected drives are safe.
         """
         summary = ScanSummary()
+        files_since_commit = 0
         for root in roots:
             root = Path(root)
             if not root.exists():
@@ -316,9 +318,15 @@ class Library:
                     if ext in SUPPORTED_EXTS:
                         full = os.path.join(dirpath, name)
                         summary.add_result(self.index_file(full, force=force))
+                        files_since_commit += 1
                     elif ext == SUPPORTED_CUE_EXT:
                         full = os.path.join(dirpath, name)
                         summary.merge(self._index_cue_file(full, force=force))
+                        files_since_commit += 1
+                    if files_since_commit >= _SCAN_COMMIT_INTERVAL:
+                        with self._lock:
+                            self.conn.commit()
+                        files_since_commit = 0
         summary.removed += self.remove_stale_cue_tracks()
         with self._lock:
             self.conn.commit()
@@ -479,7 +487,10 @@ class Library:
     def _track_row_for_path(self, path: str) -> sqlite3.Row | None:
         with self._lock:
             return self.conn.execute(
-                "SELECT * FROM tracks WHERE path = ?", (path,)
+                """SELECT id, file_size, file_mtime_ns, disc_id, file_hash,
+                          acoustid_id, media_type, scan_error
+                   FROM tracks WHERE path = ?""",
+                (path,),
             ).fetchone()
 
     def _backfill_disc_id(self, path: str, disc_id: str) -> None:
@@ -1506,31 +1517,45 @@ class Library:
         if not existing_roots:
             return 0
 
-        with self._lock:
-            rows = self.conn.execute(
-                "SELECT id, path FROM tracks WHERE media_type != 'cue_track'"
-            ).fetchall()
+        removed = 0
+        batch_size = _PAGE_SIZE
+        last_id = 0
+        while True:
+            with self._lock:
+                rows = self.conn.execute(
+                    """SELECT id, path FROM tracks
+                       WHERE media_type != 'cue_track' AND id > ?
+                       ORDER BY id LIMIT ?""",
+                    (last_id, batch_size),
+                ).fetchall()
+            if not rows:
+                break
+            last_id = int(rows[-1]["id"])
 
-        missing_ids: list[int] = []
-        for row in rows:
-            path = row["path"]
-            if Path(path).exists():
-                continue
-            try:
-                path_norm = os.path.normcase(os.path.abspath(path))
-                if any(os.path.commonpath([root, path_norm]) == root for root in existing_roots):
-                    missing_ids.append(row["id"])
-            except (OSError, ValueError):
-                continue
+            missing_ids: list[int] = []
+            for row in rows:
+                path = row["path"]
+                if Path(path).exists():
+                    continue
+                try:
+                    path_norm = os.path.normcase(os.path.abspath(path))
+                    if any(
+                        os.path.commonpath([root, path_norm]) == root
+                        for root in existing_roots
+                    ):
+                        missing_ids.append(row["id"])
+                except (OSError, ValueError):
+                    continue
 
-        if not missing_ids:
-            return 0
-        with self._lock:
-            self.conn.executemany(
-                "DELETE FROM tracks WHERE id = ?", [(id_,) for id_ in missing_ids]
-            )
-            self.conn.commit()
-        return len(missing_ids)
+            if missing_ids:
+                with self._lock:
+                    self.conn.executemany(
+                        "DELETE FROM tracks WHERE id = ?",
+                        [(id_,) for id_ in missing_ids],
+                    )
+                    self.conn.commit()
+                removed += len(missing_ids)
+        return removed
 
 
 def _row_to_track(r: sqlite3.Row) -> Track:

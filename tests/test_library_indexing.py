@@ -522,3 +522,60 @@ def test_index_file_backfills_disc_id_from_tags_for_unchanged_existing_row(tmp_p
         assert library.has_disc("abc123XYZ", 1)
     finally:
         library.close()
+
+
+def test_scan_paths_summary_with_small_commit_interval(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        library_module,
+        "MutagenFile",
+        lambda path, **_kwargs: _FakeAudio(Path(path).stem),
+    )
+    monkeypatch.setattr(library_module, "_SCAN_COMMIT_INTERVAL", 2)
+
+    music = tmp_path / "Music"
+    music.mkdir()
+    for i in range(5):
+        _set_file_state(music / f"track{i:02d}.flac", f"audio{i}".encode(), 1_700_000_000_000_000_000 + i)
+
+    library = Library(tmp_path / "library.db")
+    try:
+        summary = library.scan_paths_summary([music])
+        assert summary.added == 5
+        assert library.count_tracks() == 5
+    finally:
+        library.close()
+
+
+def test_remove_missing_under_existing_roots_batches_large_libraries(tmp_path):
+    mounted_root = tmp_path / "Mounted"
+    mounted_root.mkdir()
+    present_file = mounted_root / "present.flac"
+    present_file.write_bytes(b"present")
+
+    library = Library(tmp_path / "library.db")
+    try:
+        for i in range(1200):
+            path = mounted_root / f"missing{i:04d}.flac"
+            library.conn.execute(
+                """INSERT INTO tracks
+                   (path, title, artist, album_artist, album, track_no, disc_no, year,
+                    genre, duration, bitrate, samplerate)
+                   VALUES (?, ?, '', '', '', 1, 1, 0, '', 1, 1, 1)""",
+                (str(path), f"Missing {i}"),
+            )
+        library.conn.execute(
+            """INSERT INTO tracks
+               (path, title, artist, album_artist, album, track_no, disc_no, year,
+                genre, duration, bitrate, samplerate)
+               VALUES (?, 'Present', '', '', '', 1, 1, 0, '', 1, 1, 1)""",
+            (str(present_file),),
+        )
+        library.commit()
+
+        removed = library.remove_missing_under_existing_roots([mounted_root])
+
+        assert removed == 1200
+        assert library.count_tracks() == 1
+        assert next(library.all_tracks()).title == "Present"
+    finally:
+        library.close()
