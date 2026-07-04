@@ -1184,7 +1184,6 @@ def test_scan_finished_clears_thread_handle_even_if_refresh_fails(main_window, m
 def test_restore_queue_failure_does_not_break_startup(main_window, monkeypatch, tmp_path):
     """A saved queue that fails to load must never abort MainWindow construction."""
     from lyon.core.library import Library
-
     from lyon.core.settings import Settings
     from lyon.ui import main_window as main_window_mod
 
