@@ -1993,7 +1993,11 @@ class MainWindow(QMainWindow):
         for url in ev.mimeData().urls():
             if not url.isLocalFile():
                 continue
-            path = url.toLocalFile()
+            # QUrl.toLocalFile() yields forward slashes even on Windows;
+            # normalize to native separators so drop-sourced rows match the
+            # os.walk-sourced paths the scanner stores (path is UNIQUE in the
+            # tracks table, so a separator mismatch would duplicate rows).
+            path = os.path.normpath(url.toLocalFile())
             from pathlib import Path as _Path
             p = _Path(path)
             if p.is_dir():
