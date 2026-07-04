@@ -85,9 +85,39 @@ class QueueDialog(QDialog):
         layout.addLayout(controls)
         layout.addWidget(buttons)
 
+        # Bound-method slots only: a lambda here has no receiver QObject, so
+        # Qt cannot auto-disconnect it when this dialog is deleteLater()d and
+        # the next track change would call into deleted C++ widgets.  The
+        # explicit disconnect on finished makes closing deterministic.
         self.player.queue_changed.connect(self.refresh)
-        self.player.track_changed.connect(lambda _track: self.refresh())
+        self.player.track_changed.connect(self._on_track_changed)
+        self.finished.connect(self._disconnect_player_signals)
+        self._marked_row = -1
         self.refresh()
+
+    _CURRENT_COLOR = QColor("#72f4ff")
+
+    def _disconnect_player_signals(self, *_args) -> None:
+        for signal, slot in (
+            (self.player.queue_changed, self.refresh),
+            (self.player.track_changed, self._on_track_changed),
+        ):
+            try:
+                signal.disconnect(slot)
+            except (RuntimeError, TypeError):
+                pass  # already disconnected
+
+    def _on_track_changed(self, _track) -> None:
+        """Move the ▶ marker without rebuilding the table.
+
+        A full refresh() builds four QTableWidgetItems per queued track;
+        with a very large queue that stalls the UI for seconds on every song
+        change.  Only the outgoing and incoming current rows need repainting.
+        """
+        if self.table.rowCount() != len(self.player.queue()):
+            self.refresh()
+            return
+        self._update_current_marker()
 
     def refresh(self) -> None:
         queue = self.player.queue()
@@ -96,26 +126,59 @@ class QueueDialog(QDialog):
         self._save_pl_btn.setEnabled(
             self._library is not None and any(t.is_library_item for t in queue)
         )
-        self.table.setRowCount(len(queue))
-        for row, track in enumerate(queue):
-            values = [
-                "▶" if row == current else str(row + 1),
-                track.title,
-                track.display_artist,
-                format_duration(track.duration),
-            ]
-            for col, value in enumerate(values):
-                item = QTableWidgetItem(value)
-                item.setFlags(item.flags() & ~Qt.ItemIsEditable)
-                if row == current:
-                    item.setForeground(QColor("#72f4ff"))
-                self.table.setItem(row, col, item)
+        self.table.setUpdatesEnabled(False)
+        try:
+            self.table.setRowCount(len(queue))
+            for row, track in enumerate(queue):
+                values = [
+                    "▶" if row == current else str(row + 1),
+                    track.title,
+                    track.display_artist,
+                    format_duration(track.duration),
+                ]
+                for col, value in enumerate(values):
+                    item = QTableWidgetItem(value)
+                    item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                    if row == current:
+                        item.setForeground(self._CURRENT_COLOR)
+                    self.table.setItem(row, col, item)
+        finally:
+            self.table.setUpdatesEnabled(True)
+        self._marked_row = current
         if 0 <= current < self.table.rowCount():
             self.table.selectRow(current)
             self.table.scrollToItem(self.table.item(current, 0), QAbstractItemView.PositionAtCenter)
         self.table.resizeColumnToContents(0)
         self.table.resizeColumnToContents(2)
         self.table.resizeColumnToContents(3)
+
+    def _update_current_marker(self) -> None:
+        queue = self.player.queue()
+        current = self.player.current_index()
+        old = self._marked_row
+        if old == current:
+            return
+        self.summary.setText(self._summary_text(queue, current))
+        for row, is_current in ((old, False), (current, True)):
+            if not (0 <= row < self.table.rowCount()):
+                continue
+            num_item = self.table.item(row, 0)
+            if num_item is not None:
+                num_item.setText("▶" if is_current else str(row + 1))
+            for col in range(self.table.columnCount()):
+                item = self.table.item(row, col)
+                if item is None:
+                    continue
+                if is_current:
+                    item.setForeground(self._CURRENT_COLOR)
+                else:
+                    item.setData(Qt.ForegroundRole, None)
+        self._marked_row = current
+        if 0 <= current < self.table.rowCount():
+            self.table.selectRow(current)
+            self.table.scrollToItem(
+                self.table.item(current, 0), QAbstractItemView.PositionAtCenter
+            )
 
     @staticmethod
     def _summary_text(queue: list[Track], current: int) -> str:

@@ -639,7 +639,14 @@ def test_index_file_recovers_disc_id_from_audio_tags(tmp_path, monkeypatch):
 
 
 def test_index_file_backfills_disc_id_from_tags_for_unchanged_existing_row(tmp_path, monkeypatch):
-    """A rescan should recover disc_id tags even when size/mtime are unchanged."""
+    """A rescan recovers disc_id tags for never-checked (NULL) rows.
+
+    Rows written before the disc_id column existed (pre-v2) have NULL there;
+    the first unchanged-file rescan reads tags once to backfill.  Rows whose
+    tags were already read store '' (checked, absent) and are never re-read —
+    a real tag edit changes size/mtime and takes the full reindex path, which
+    picks the new disc ID up there.
+    """
 
     class _FakeAudioWithMutableDiscId(dict):
         info = _FakeInfo()
@@ -672,6 +679,10 @@ def test_index_file_backfills_disc_id_from_tags_for_unchanged_existing_row(tmp_p
         assert library.index_file(path).status == "added"
         library.commit()
         assert not library.has_disc("abc123XYZ", 1)
+
+        # Simulate a pre-v2 row: the disc_id column was never populated.
+        library.conn.execute("UPDATE tracks SET disc_id = NULL")
+        library.commit()
 
         fake_audio.disc_id = "abc123XYZ"
         assert library.index_file(path).status == "unchanged"

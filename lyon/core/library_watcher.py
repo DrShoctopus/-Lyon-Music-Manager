@@ -8,7 +8,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, QThread, Signal
 
-from .library import SUPPORTED_EXTS, Library, ScanSummary
+from .library import _SCAN_COMMIT_INTERVAL, SUPPORTED_EXTS, Library, ScanSummary
 
 try:  # pragma: no cover - dependency availability is environment-specific
     from watchdog.events import FileSystemEvent, FileSystemEventHandler
@@ -257,10 +257,18 @@ class LibraryIndexThread(QThread):
 
             changed_paths = sorted(self.batch.changed_paths)
             self._wait_for_stable_batch(changed_paths)
+            since_commit = 0
             for path in changed_paths:
                 if self._should_cancel():
                     break
                 summary.add_result(self.library.index_file(path))
+                since_commit += 1
+                # Large drops route whole libraries through this batch; commit
+                # periodically so progress survives interruption and the WAL
+                # stays bounded, matching scan_paths_summary behaviour.
+                if since_commit >= _SCAN_COMMIT_INTERVAL:
+                    self.library.commit()
+                    since_commit = 0
 
             self.library.commit()
             self.finished_with.emit(summary)

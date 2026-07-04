@@ -1117,3 +1117,161 @@ def test_main_window_stays_usable_when_playback_backend_is_unavailable(qapp, mon
         w.player.stop()
         w.library.close()
         w.deleteLater()
+
+
+# ----------------------------------------------------------------- large-library crash fixes
+def test_thread_running_tolerates_deleted_qthread_wrapper(main_window):
+    """Worker threads deleteLater() themselves; stale wrappers must read as stopped."""
+    stale = QtCore.QThread()
+    stale.deleteLater()
+    QtCore.QCoreApplication.sendPostedEvents(None, QtCore.QEvent.DeferredDelete)
+
+    assert main_window._thread_running(stale) is False
+    assert main_window._thread_running(None) is False
+
+
+def test_close_event_completes_with_stale_thread_wrappers(main_window):
+    """closeEvent used to crash on isRunning() after a thread deleteLater()d itself,
+    aborting shutdown (settings save, library close) mid-way."""
+    stale = QtCore.QThread()
+    stale.deleteLater()
+    QtCore.QCoreApplication.sendPostedEvents(None, QtCore.QEvent.DeferredDelete)
+    main_window._scan_thread = stale
+    main_window._watch_index_thread = stale
+    main_window._update_thread = stale
+
+    event = QtGui.QCloseEvent()
+    main_window.closeEvent(event)
+
+    assert event.isAccepted()
+
+
+def test_finish_update_thread_clears_handles_even_when_wait_times_out(main_window):
+    class StuckThread:
+        def __init__(self):
+            self.quit_called = False
+
+        def quit(self):
+            self.quit_called = True
+
+        def wait(self, _ms):
+            return False
+
+    stuck = StuckThread()
+    main_window._update_thread = stuck
+    main_window._update_worker = object()
+
+    main_window._finish_update_thread(stuck)
+
+    assert stuck.quit_called
+    assert main_window._update_thread is None
+    assert main_window._update_worker is None
+
+
+def test_scan_finished_clears_thread_handle_even_if_refresh_fails(main_window, monkeypatch):
+    main_window._scan_thread = object()
+
+    def boom():
+        raise RuntimeError("Internal C++ object already deleted")
+
+    monkeypatch.setattr(main_window.library_view, "refresh", boom)
+
+    main_window._on_scan_finished(3, 1, 0, "Scanned")  # must not raise
+
+    assert main_window._scan_thread is None
+
+
+def test_restore_queue_failure_does_not_break_startup(main_window, monkeypatch, tmp_path):
+    """A saved queue that fails to load must never abort MainWindow construction."""
+    from lyon.core.library import Library
+
+    from lyon.core.settings import Settings
+    from lyon.ui import main_window as main_window_mod
+
+    settings = Settings(
+        music_root=str(tmp_path / "Music"),
+        library_paths=[],
+        first_run_completed=True,
+        youtube_acknowledged=True,
+        update_check_enabled=False,
+        queue_track_paths=[f"/music/q{i}.flac" for i in range(10)],
+    )
+    monkeypatch.setattr(Settings, "load", classmethod(lambda cls: settings))
+    monkeypatch.setattr(
+        main_window_mod, "Library", lambda: Library(tmp_path / "library2.db")
+    )
+    monkeypatch.setattr(
+        Library,
+        "tracks_for_paths",
+        lambda self, paths: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+
+    w = main_window_mod.MainWindow()
+    try:
+        assert w.player.queue() == []
+    finally:
+        w.player.stop()
+        w.library.close()
+        w.deleteLater()
+
+
+def test_large_file_drop_routes_to_worker_thread(main_window, monkeypatch, tmp_path):
+    """Dropping more files than the sync limit must not index on the UI thread."""
+    paths = [str(tmp_path / f"drop_{i}.mp3") for i in range(3)]
+    captured: dict = {}
+    monkeypatch.setattr(main_window, "_SYNC_DROP_INDEX_LIMIT", 2)
+    monkeypatch.setattr(
+        main_window,
+        "_start_index_files",
+        lambda files, label: captured.update(files=files, label=label),
+    )
+    sync_calls: list[str] = []
+    monkeypatch.setattr(
+        main_window.library,
+        "index_file",
+        lambda path, **kw: sync_calls.append(path),
+    )
+
+    class FakeMime:
+        def hasUrls(self):
+            return True
+
+        def urls(self):
+            return [QtCore.QUrl.fromLocalFile(p) for p in paths]
+
+    class FakeDrop:
+        def __init__(self):
+            self.accepted = False
+
+        def mimeData(self):
+            return FakeMime()
+
+        def acceptProposedAction(self):
+            self.accepted = True
+
+    event = FakeDrop()
+    main_window.dropEvent(event)
+
+    assert captured["files"] == paths
+    assert sync_calls == []
+    assert event.accepted
+
+
+def test_start_index_files_runs_batch_and_clears_thread(main_window, tmp_path):
+    """_start_index_files must index off-thread and clean up its handle."""
+    files = []
+    for i in range(3):
+        p = tmp_path / f"tune_{i}.mp3"
+        p.write_bytes(b"\x00" * 128)  # unreadable as audio → counted, not crashed
+        files.append(str(p))
+
+    main_window._start_index_files(files, "Adding 3 files")
+    thread = main_window._watch_index_thread
+    assert thread is not None
+
+    deadline = QtCore.QDeadlineTimer(10_000)
+    while main_window._watch_index_thread is not None and not deadline.hasExpired():
+        QtCore.QCoreApplication.processEvents()
+        QtCore.QThread.msleep(10)
+
+    assert main_window._watch_index_thread is None

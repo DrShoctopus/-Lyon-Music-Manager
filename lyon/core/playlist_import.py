@@ -103,8 +103,8 @@ def import_playlist(library: Library, file_path: Path) -> ImportResult:
     lower_map: dict[str, int] = {}
     if unmatched_raw:
         lower_map = {
-            os.path.normcase(t.path): t.id
-            for t in library.all_tracks()
+            os.path.normcase(path): track_id
+            for path, track_id in library.all_track_path_ids()
         }
 
     track_ids: list[int] = []

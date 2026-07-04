@@ -119,6 +119,10 @@ _MIGRATIONS: list[tuple[int, str]] = [
 
 _PAGE_SIZE = 500  # rows per page in streaming queries
 _SCAN_COMMIT_INTERVAL = 500  # indexed filesystem entries per scan transaction
+# SQLite caps host parameters per statement (999 on pre-3.32 builds, 32766
+# after).  Queries that expand a caller-supplied list into "IN (?,?,...)"
+# must chunk at a size safe for every build we might run against.
+_SQL_IN_CHUNK = 500
 
 
 @dataclass
@@ -379,11 +383,15 @@ class Library:
         if row is not None and not force and _row_matches_stat(row, stat):
             if disc_id:
                 self._backfill_disc_id(path, disc_id)
-            elif media_type == "audio" and not _row_disc_id(row):
+            elif media_type == "audio" and _row_disc_id_unchecked(row):
+                # disc_id semantics: NULL = tags never checked, '' = checked
+                # and absent.  Recording '' here means each file pays this
+                # tag read once, not on every startup reconciliation scan —
+                # at 100k tracks the difference is a full library re-parse
+                # per launch.
                 meta = _read_tags(path)
-                tag_disc_id = meta.get("disc_id") if meta is not None else ""
-                if tag_disc_id:
-                    self._backfill_disc_id(path, tag_disc_id)
+                tag_disc_id = (meta.get("disc_id") or "") if meta is not None else ""
+                self._mark_disc_id_checked(path, tag_disc_id)
             return IndexResult("unchanged", path)
 
         meta = _read_tags(path)
@@ -438,6 +446,14 @@ class Library:
             )
             else None
         )
+        stored_disc_id = disc_id or meta.get("disc_id") or (
+            row["disc_id"] if row is not None and "disc_id" in row.keys() else None
+        )
+        if media_type == "audio" and not stored_disc_id:
+            # Tags were just read and carried no disc ID: store '' (checked,
+            # absent) rather than NULL (never checked) so rescans skip the
+            # disc-ID backfill read for this file.
+            stored_disc_id = ""
         now = time.time()
         with self._lock:
             values = (
@@ -455,7 +471,7 @@ class Library:
                 meta["samplerate"],
                 str(art) if art else None,
                 media_type,
-                disc_id or meta.get("disc_id") or (row["disc_id"] if row is not None and "disc_id" in row.keys() else None),
+                stored_disc_id,
                 int(stat.st_size),
                 int(stat.st_mtime_ns),
                 now,
@@ -510,6 +526,20 @@ class Library:
             self.conn.execute(
                 "UPDATE tracks SET disc_id = ?"
                 " WHERE path = ? AND (disc_id IS NULL OR disc_id = '')",
+                (disc_id, path),
+            )
+
+    def _mark_disc_id_checked(self, path: str, disc_id: str) -> None:
+        """Record a tag-sourced disc ID ('' when absent) on a NULL row.
+
+        Writing '' distinguishes "checked, no disc ID in tags" from NULL
+        ("never checked"), which is what lets unchanged-file rescans skip
+        the tag read.  Real disc IDs from rips still overwrite '' via
+        _backfill_disc_id.
+        """
+        with self._lock:
+            self.conn.execute(
+                "UPDATE tracks SET disc_id = ? WHERE path = ? AND disc_id IS NULL",
                 (disc_id, path),
             )
 
@@ -1489,16 +1519,37 @@ class Library:
             self.conn.commit()
 
     def tracks_for_paths(self, paths: list[str]) -> list[Track]:
-        """Return Track objects for the given file paths, preserving order, skipping unknowns."""
+        """Return Track objects for the given file paths, preserving order, skipping unknowns.
+
+        Queries in chunks so an arbitrarily long list (a restored 100k-track
+        queue, a whole-library playlist) never exceeds SQLite's host-parameter
+        limit.
+        """
         if not paths:
             return []
-        placeholders = ",".join("?" * len(paths))
-        with self._lock:
-            rows = self.conn.execute(
-                f"SELECT * FROM tracks WHERE path IN ({placeholders})", paths
-            ).fetchall()
-        path_to_track = {r["path"]: _row_to_track(r) for r in rows}
+        path_to_track: dict[str, Track] = {}
+        unique_paths = list(dict.fromkeys(paths))
+        for start in range(0, len(unique_paths), _SQL_IN_CHUNK):
+            chunk = unique_paths[start:start + _SQL_IN_CHUNK]
+            placeholders = ",".join("?" * len(chunk))
+            with self._lock:
+                rows = self.conn.execute(
+                    f"SELECT * FROM tracks WHERE path IN ({placeholders})", chunk
+                ).fetchall()
+            for r in rows:
+                path_to_track[r["path"]] = _row_to_track(r)
         return [path_to_track[p] for p in paths if p in path_to_track]
+
+    def all_track_path_ids(self) -> list[tuple[str, int]]:
+        """Return (path, id) for every track without building Track objects.
+
+        Bulk path-matching helpers (playlist import) only need the mapping;
+        materialising full Track rows for a 100k library costs an order of
+        magnitude more memory than these tuples.
+        """
+        with self._lock:
+            rows = self.conn.execute("SELECT path, id FROM tracks").fetchall()
+        return [(r["path"], int(r["id"])) for r in rows]
 
     def remove_missing(self) -> int:
         with self._lock:
@@ -1656,10 +1707,13 @@ def _row_matches_stat(row: sqlite3.Row, stat: os.stat_result) -> bool:
     )
 
 
-def _row_disc_id(row: sqlite3.Row) -> str:
-    if "disc_id" not in row.keys():
-        return ""
-    return str(row["disc_id"] or "").strip()
+def _row_disc_id_unchecked(row: sqlite3.Row) -> bool:
+    """True when this row's tags have never been checked for a disc ID.
+
+    NULL means never checked; '' means checked and absent (see
+    _mark_disc_id_checked).
+    """
+    return "disc_id" in row.keys() and row["disc_id"] is None
 
 
 def _read_tags(path: str) -> dict | None:

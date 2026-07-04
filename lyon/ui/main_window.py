@@ -1,6 +1,7 @@
 """Top-level window with native tab bar and stacked views."""
 from __future__ import annotations
 
+import logging
 import os
 import sys
 from collections.abc import Callable
@@ -34,7 +35,7 @@ from ..core.cast_controller import CastController
 from ..core.cd_detect import close_dll_handles as close_cd_dll_handles
 from ..core.diagnostics import collect_diagnostics_bundle, logs_dir
 from ..core.dlna_server import DlnaServer
-from ..core.library import SUPPORTED_EXTS, Library, ScanSummary, Track
+from ..core.library import SUPPORTED_EXTS, IndexResult, Library, ScanSummary, Track
 from ..core.library_watcher import (
     LibraryFolderWatcher,
     LibraryIndexThread,
@@ -63,6 +64,8 @@ from .styles import apply_app_styles
 from .toast import Toast
 from .transport_bar import TransportBar
 from .yt_download_dialog import YtDownloadDialog
+
+LOG = logging.getLogger(__name__)
 
 
 def _dlna_settings_signature(settings: Settings) -> tuple[object, ...]:
@@ -367,9 +370,15 @@ class MainWindow(QMainWindow):
         # Ensure transport visibility matches initial tab (Library, index 0).
         self._on_view_changed(0)
 
-        # Restore previous queue (no auto-play)
+        # Restore previous queue (no auto-play).  Never let a bad or huge
+        # saved queue abort MainWindow construction — losing the queue is
+        # recoverable, an app that cannot start is not.
         if self.settings.queue_track_paths:
-            restored = self.library.tracks_for_paths(self.settings.queue_track_paths)
+            try:
+                restored = self.library.tracks_for_paths(self.settings.queue_track_paths)
+            except Exception:  # noqa: BLE001
+                LOG.exception("Could not restore the saved playback queue")
+                restored = []
             if restored:
                 self.player.load_queue(
                     restored,
@@ -869,7 +878,7 @@ class MainWindow(QMainWindow):
         self._start_scan(self.settings.library_paths or [self.settings.music_root], "Rescanned", prune=True)
 
     def _on_scan_replaygain(self, tracks: list) -> None:
-        if self._rg_scanner is not None and self._rg_scanner.isRunning():
+        if self._thread_running(self._rg_scanner):
             self.show_toast("ReplayGain scan already in progress.", level="warning")
             return
         ffmpeg = find_ffmpeg()
@@ -999,11 +1008,28 @@ class MainWindow(QMainWindow):
             level="info",
         )
 
+    @staticmethod
+    def _thread_running(thread: QThread | None) -> bool:
+        """True when *thread* is a live, running QThread.
+
+        Worker threads here deleteLater() themselves on finish, so a Python
+        reference can outlive its C++ object; shiboken then raises
+        RuntimeError from isRunning().  Treat that (and None) as "not
+        running" so callers like closeEvent can never crash on a stale
+        handle.
+        """
+        if thread is None:
+            return False
+        try:
+            return thread.isRunning()
+        except RuntimeError:
+            return False
+
     def _start_scan(self, roots: list[str], label: str, prune: bool = False) -> None:
-        if self._scan_thread is not None and self._scan_thread.isRunning():
+        if self._thread_running(self._scan_thread):
             self.show_toast("Library scan already running.", level="warning")
             return
-        if self._watch_index_thread is not None and self._watch_index_thread.isRunning():
+        if self._thread_running(self._watch_index_thread):
             self.show_toast("Library update already running.", level="warning")
             return
         self._scan_status_label.setText("Scanning library…")
@@ -1016,6 +1042,10 @@ class MainWindow(QMainWindow):
         self._scan_thread.start()
 
     def _on_scan_finished(self, n: int, updated: int, removed: int, label: str) -> None:
+        # Drop the handle before any UI work: the thread deleteLater()s
+        # itself, so an exception below must not leave a stale wrapper for
+        # closeEvent / the next _start_scan to trip over.
+        self._scan_thread = None
         self._scan_status_label.setVisible(False)
         self._scan_status_label.setText("")
         self._scan_progress.setVisible(False)
@@ -1027,17 +1057,19 @@ class MainWindow(QMainWindow):
         message = ", ".join(parts)
         toast_level = "success" if (n > 0 or updated > 0 or removed > 0) else "info"
         self.show_toast(message, level=toast_level, duration_ms=4000)
-        self.dlna_server.invalidate_cache()
-        self.library_view.refresh()
-        self._refresh_video_catalog_if_loaded()
-        self._scan_thread = None
+        try:
+            self.dlna_server.invalidate_cache()
+            self.library_view.refresh()
+            self._refresh_video_catalog_if_loaded()
+        except Exception:  # noqa: BLE001 — a refresh failure must not poison scan state
+            LOG.exception("Post-scan library refresh failed")
 
     def _on_scan_failed(self, label: str, error: str) -> None:
+        self._scan_thread = None
         self._scan_status_label.setVisible(False)
         self._scan_status_label.setText("")
         self._scan_progress.setVisible(False)
         self.show_toast(f"{label} failed: {error}", level="error", duration_ms=6000)
-        self._scan_thread = None
 
     # ------------------------------------------------------------------ watched folders
     def _restart_library_watcher(self) -> None:
@@ -1156,10 +1188,10 @@ class MainWindow(QMainWindow):
         if self._ripper_is_running():
             self._watch_debounce_timer.start(1500)
             return
-        if self._scan_thread is not None and self._scan_thread.isRunning():
+        if self._thread_running(self._scan_thread):
             self._watch_debounce_timer.start(1000)
             return
-        if self._watch_index_thread is not None and self._watch_index_thread.isRunning():
+        if self._thread_running(self._watch_index_thread):
             self._watch_debounce_timer.start(1000)
             return
 
@@ -1182,6 +1214,9 @@ class MainWindow(QMainWindow):
     def _on_watch_index_finished(self, summary: ScanSummary) -> None:
         if not self._watch_index_sender_is_current():
             return
+        # Clear before UI work so an exception can't leave a stale wrapper
+        # behind once the thread deleteLater()s itself.
+        self._watch_index_thread = None
         self._scan_status_label.setVisible(False)
         self._scan_status_label.setText("")
         self._scan_progress.setVisible(False)
@@ -1202,16 +1237,15 @@ class MainWindow(QMainWindow):
             )
             self.dlna_server.invalidate_cache()
             self._library_refresh_timer.start()
-        self._watch_index_thread = None
 
     def _on_watch_index_failed(self, error: str) -> None:
         if not self._watch_index_sender_is_current():
             return
+        self._watch_index_thread = None
         self._scan_status_label.setVisible(False)
         self._scan_status_label.setText("")
         self._scan_progress.setVisible(False)
         self.show_toast(f"Library update failed: {error}", level="error", duration_ms=6000)
-        self._watch_index_thread = None
 
     def _watch_index_sender_is_current(self) -> bool:
         sender = self.sender()
@@ -1729,8 +1763,7 @@ class MainWindow(QMainWindow):
         self._start_update_check(manual=True, toast_host=toast_host)
 
     def _update_check_in_progress(self) -> bool:
-        thread = self._update_thread
-        if thread is not None and thread.isRunning():
+        if self._thread_running(self._update_thread):
             return True
         return self._update_worker is not None
 
@@ -1860,12 +1893,16 @@ class MainWindow(QMainWindow):
             thread = self._update_thread
         if thread is None:
             return
-        thread.quit()
-        if not thread.wait(2000):
-            return
         if self._update_thread is thread:
+            # Drop our handles unconditionally, before waiting: the thread
+            # deleteLater()s itself on finish, so keeping the reference past
+            # a wait() timeout leaves a deleted-C++ wrapper that crashes the
+            # next isRunning() caller (historically closeEvent, under the
+            # I/O load of a large library import).
             self._update_thread = None
             self._update_worker = None
+        thread.quit()
+        thread.wait(2000)
 
     def _show_update_dialog(self, info: object, *, parent: QWidget | None = None) -> None:
         from .update_dialog import UpdateAvailableDialog
@@ -1915,12 +1952,40 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------ drag-and-drop
     _DROP_EXTENSIONS = SUPPORTED_EXTS
+    # File drops up to this size index synchronously for instant feedback;
+    # anything larger goes through a worker thread so a mass drop (whole
+    # library import) cannot freeze the UI until force-quit.
+    _SYNC_DROP_INDEX_LIMIT = 100
 
     def dragEnterEvent(self, ev: QDragEnterEvent) -> None:
         if ev.mimeData().hasUrls():
             ev.acceptProposedAction()
         else:
             ev.ignore()
+
+    def _start_index_files(self, files: list[str], label: str) -> None:
+        """Index a large set of dropped files off the UI thread."""
+        if self._thread_running(self._scan_thread) or self._thread_running(
+            self._watch_index_thread
+        ):
+            self.show_toast(
+                "Library scan already running — try adding the files again when it finishes.",
+                level="warning",
+            )
+            return
+        self._scan_status_label.setText(f"{label}…")
+        self._scan_status_label.setVisible(True)
+        self._scan_progress.setVisible(True)
+        self._watch_index_thread = LibraryIndexThread(
+            self.library,
+            WatchBatch(changed_paths=set(files)),
+            settle_ms=0,
+            parent=self,
+        )
+        self._watch_index_thread.finished_with.connect(self._on_watch_index_finished)
+        self._watch_index_thread.failed_with.connect(self._on_watch_index_failed)
+        self._watch_index_thread.finished.connect(self._watch_index_thread.deleteLater)
+        self._watch_index_thread.start()
 
     def dropEvent(self, ev: QDropEvent) -> None:
         folders: list[str] = []
@@ -1942,8 +2007,18 @@ class MainWindow(QMainWindow):
             self.settings.save()
             self._restart_library_watcher()
             self._start_scan(folders, f"Added {len(folders)} folder(s)")
+        if files and len(files) > self._SYNC_DROP_INDEX_LIMIT:
+            self._start_index_files(files, f"Adding {len(files)} files")
+            ev.acceptProposedAction()
+            return
         if files:
-            results = [self.library.index_file(f) for f in files]
+            results = []
+            for f in files:
+                try:
+                    results.append(self.library.index_file(f))
+                except Exception:  # noqa: BLE001 — one bad file must not abort the drop
+                    LOG.exception("Failed to index dropped file %s", f)
+                    results.append(IndexResult("failed", f))
             self.library.commit()
             added = sum(1 for result in results if result.status == "added")
             updated = sum(1 for result in results if result.status == "updated")
@@ -1993,7 +2068,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, ev) -> None:
         self._watch_debounce_timer.stop()
         self._library_watcher.stop()
-        if self._watch_index_thread is not None and self._watch_index_thread.isRunning():
+        if self._thread_running(self._watch_index_thread):
             self._watch_index_thread.request_stop()
             if not self._watch_index_thread.wait(3000):
                 self.show_toast(
@@ -2003,7 +2078,7 @@ class MainWindow(QMainWindow):
                 )
                 ev.ignore()
                 return
-        if self._scan_thread is not None and self._scan_thread.isRunning():
+        if self._thread_running(self._scan_thread):
             self._scan_thread.request_stop()
             if not self._scan_thread.wait(3000):
                 self.show_toast(
@@ -2013,7 +2088,7 @@ class MainWindow(QMainWindow):
                 )
                 ev.ignore()
                 return
-        if self._rg_scanner is not None and self._rg_scanner.isRunning():
+        if self._thread_running(self._rg_scanner):
             scanner = self._rg_scanner
             scanner.requestInterruption()
             if not scanner.wait(3000):
@@ -2035,7 +2110,7 @@ class MainWindow(QMainWindow):
             )
             ev.ignore()
             return
-        if self._update_thread is not None and self._update_thread.isRunning():
+        if self._thread_running(self._update_thread):
             self._update_thread.quit()
             if not self._update_thread.wait(3000):
                 self.show_toast(
