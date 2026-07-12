@@ -1275,26 +1275,28 @@ def test_close_event_completes_with_stale_thread_wrappers(main_window):
     assert event.isAccepted()
 
 
-def test_finish_update_thread_clears_handles_even_when_wait_times_out(main_window):
-    class StuckThread:
-        def __init__(self):
-            self.quit_called = False
+def test_update_worker_quits_without_waiting_on_itself(main_window, qapp, monkeypatch):
+    from lyon.core import updater as updater_mod
 
-        def quit(self):
-            self.quit_called = True
+    monkeypatch.setattr(
+        updater_mod,
+        "check_for_update",
+        lambda *_args, **_kwargs: None,
+    )
+    main_window.settings.update_appcast_url = "https://example.test/appcast.xml"
 
-        def wait(self, _ms):
-            return False
+    main_window._start_update_check(manual=False)
+    thread = main_window._update_thread
+    assert thread is not None
 
-    stuck = StuckThread()
-    main_window._update_thread = stuck
-    main_window._update_worker = object()
+    deadline = QtCore.QDeadlineTimer(3000)
+    while main_window._update_thread is not None and not deadline.hasExpired():
+        qapp.processEvents()
+        QtCore.QThread.msleep(10)
 
-    main_window._finish_update_thread(stuck)
-
-    assert stuck.quit_called
     assert main_window._update_thread is None
     assert main_window._update_worker is None
+    assert not main_window._thread_running(thread)
 
 
 def test_scan_finished_clears_thread_handle_even_if_refresh_fails(main_window, monkeypatch):

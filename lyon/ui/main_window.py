@@ -2021,13 +2021,25 @@ class MainWindow(QMainWindow):
         worker.failed.connect(worker.deleteLater)
         worker.finished.connect(self._on_update_check_finished)
         worker.failed.connect(self._on_update_check_failed)
-        worker.finished.connect(lambda *_args, thread=thread: self._finish_update_thread(thread))
-        worker.failed.connect(lambda *_args, thread=thread: self._finish_update_thread(thread))
+        # Use Qt's canonical worker shutdown sequence.  A contextless lambda
+        # connected to a worker signal runs on the worker thread in PySide;
+        # the old lambda called _finish_update_thread(), which then waited on
+        # the current thread and deadlocked (or aborted natively on Windows).
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        thread.finished.connect(self._on_update_thread_finished)
         self._update_thread = thread
         self._update_worker = worker
         self._update_manual_request = manual
         self._update_toast_host = toast_host
         thread.start()
+
+    def _on_update_thread_finished(self) -> None:
+        """Clear updater handles on the window's thread after QThread exits."""
+        thread = self.sender()
+        if thread is self._update_thread:
+            self._update_thread = None
+            self._update_worker = None
 
     def _on_update_check_finished(self, info: object) -> None:
         from ..core.updater import UpdateInfo
@@ -2084,22 +2096,6 @@ class MainWindow(QMainWindow):
                 level="warning",
                 toast_host=toast_host,
             )
-
-    def _finish_update_thread(self, thread: QThread | None = None) -> None:
-        if thread is None:
-            thread = self._update_thread
-        if thread is None:
-            return
-        if self._update_thread is thread:
-            # Drop our handles unconditionally, before waiting: the thread
-            # deleteLater()s itself on finish, so keeping the reference past
-            # a wait() timeout leaves a deleted-C++ wrapper that crashes the
-            # next isRunning() caller (historically closeEvent, under the
-            # I/O load of a large library import).
-            self._update_thread = None
-            self._update_worker = None
-        thread.quit()
-        thread.wait(2000)
 
     def _show_update_dialog(self, info: object, *, parent: QWidget | None = None) -> None:
         from .update_dialog import UpdateAvailableDialog
