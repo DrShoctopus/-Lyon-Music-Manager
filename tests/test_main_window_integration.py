@@ -877,6 +877,16 @@ def test_verbose_scan_status_cancel_requests_worker_stop(main_window):
     main_window._scan_thread = None
 
 
+def test_verbose_scan_status_hides_automatically_after_success(main_window, monkeypatch):
+    main_window._scan_details_panel.setVisible(True)
+    monkeypatch.setattr(main_window.library_view, "refresh_after_scan", lambda: None)
+    monkeypatch.setattr(main_window, "_refresh_video_catalog_if_loaded", lambda: None)
+
+    main_window._on_scan_finished(10, 0, 0, "Scanned")
+
+    assert main_window._scan_details_panel.isHidden()
+
+
 def test_startup_scan_prunes_missing_library_rows(qapp, fake_backend, monkeypatch, tmp_path):
     from lyon.core import player as player_mod
     from lyon.core.library import Library
@@ -912,6 +922,55 @@ def test_startup_scan_prunes_missing_library_rows(qapp, fake_backend, monkeypatc
     w = main_window_mod.MainWindow()
     try:
         assert scan_calls == [([str(library_root)], "Scanned", True)]
+    finally:
+        w.player.stop()
+        w.library.close()
+        w.deleteLater()
+
+
+def test_startup_does_not_rescan_an_existing_library(
+    qapp, fake_backend, monkeypatch, tmp_path
+):
+    from lyon.core import player as player_mod
+    from lyon.core.library import Library
+    from lyon.core.settings import Settings
+    from lyon.ui import main_window as main_window_mod
+
+    monkeypatch.setattr(player_mod, "create_playback_backend", lambda _parent: fake_backend)
+    library_root = tmp_path / "Music"
+    library_root.mkdir()
+    settings = Settings(
+        music_root=str(library_root),
+        library_paths=[str(library_root)],
+        watch_library_folders=False,
+        first_run_completed=True,
+        youtube_acknowledged=True,
+        update_check_enabled=False,
+    )
+    monkeypatch.setattr(Settings, "load", classmethod(lambda cls: settings))
+    library = Library(tmp_path / "existing-library.db")
+    library.conn.execute(
+        """INSERT INTO tracks
+           (path, title, artist, album_artist, album, track_no, disc_no, year,
+            genre, duration, bitrate, samplerate, media_type)
+           VALUES (?, 'Existing', 'Artist', 'Artist', 'Album', 1, 1, 2024,
+                   'Rock', 60, 320000, 44100, 'audio')""",
+        (str(library_root / "existing.flac"),),
+    )
+    library.commit()
+    monkeypatch.setattr(main_window_mod, "Library", lambda: library)
+    scan_calls = []
+    monkeypatch.setattr(
+        main_window_mod.MainWindow,
+        "_start_scan",
+        lambda self, roots, label, prune=False: scan_calls.append(
+            (roots, label, prune)
+        ),
+    )
+
+    w = main_window_mod.MainWindow()
+    try:
+        assert scan_calls == []
     finally:
         w.player.stop()
         w.library.close()

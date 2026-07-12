@@ -13,7 +13,6 @@ from lyon.core.library import Track
 from lyon.ui import library_view as library_view_module
 from lyon.ui.library_view import (
     _ALL_ALBUMS_KEY,
-    _ART_LOAD_CONCURRENCY,
     _COL_TITLE,
     _GRID_ALBUM_PAGE_SIZE,
     _LOAD_MORE_ALBUMS_KEY,
@@ -22,8 +21,7 @@ from lyon.ui.library_view import (
     _PLAYING_GLYPH,
     _UI_POPULATE_CHUNK,
     LibraryView,
-    _ArtLoader,
-    _ArtSignals,
+    _read_scaled_artwork,
 )
 
 
@@ -181,7 +179,7 @@ def test_all_albums_aggregates_tracks(view):
     assert view.tracks_model.rowCount() == 3  # 2 from First Album + 1 from Second
 
 
-def test_list_album_art_uses_async_loader(app, monkeypatch, tmp_path):
+def test_list_album_art_queues_one_gui_thread_decode_per_shared_path(app, tmp_path):
     art_path = str(tmp_path / "cover.png")
     library = FakeLibrary({
         "Art Band": {
@@ -195,44 +193,14 @@ def test_list_album_art_uses_async_loader(app, monkeypatch, tmp_path):
         return [("First", art_path), ("Second", art_path)]
 
     library.albums_for_artist = albums_for_artist
-    started: list[object] = []
-    created: list[tuple[int, str, object]] = []
-
-    class FakePool:
-        def start(self, runnable):
-            started.append(runnable)
-
-    class FakeLoader:
-        def __init__(self, gen, path, signals, get_gen=None):
-            self.gen = gen
-            self.path = path
-            self.signals = signals
-            created.append((gen, path, signals))
-
-    fake_pool = FakePool()
-    monkeypatch.setattr(
-        library_view_module.QThreadPool,
-        "globalInstance",
-        staticmethod(lambda: fake_pool),
-    )
-    monkeypatch.setattr(library_view_module, "_ArtLoader", FakeLoader)
-
     view = LibraryView(library)
-    created.clear()
-    started.clear()
+    view._art_load_timer.stop()
+    view._art_pending.clear()
 
     view._refresh_albums()
 
-    # One shared artwork path should queue one background loader and attach both
-    # album items to the result map. The old code decoded QPixmap synchronously
-    # for each row here.
-    assert len(created) == 1
-    assert len(started) == 1
-    assert started[0].path == art_path
-    gen, path, signals = created[0]
-    assert path == art_path
-    assert signals is view._art_signals
-    assert gen == view._grid_gen
+    assert list(view._art_pending) == [(view._grid_gen, art_path)]
+    assert view._art_load_timer.isActive()
     assert [item.text() for item in view._grid_art_map[art_path]] == ["First", "Second"]
 
 
@@ -538,42 +506,64 @@ def test_large_library_grid_loads_bounded_album_pages(view, monkeypatch):
     ]
 
 
-def test_grid_artwork_submissions_are_bounded(view, monkeypatch):
+def test_grid_artwork_decodes_serially_on_gui_thread(view, monkeypatch):
     albums = [
         (f"Artist {i}", f"Album {i}", f"/art/cover-{i}.jpg")
         for i in range(50)
     ]
     monkeypatch.setattr(view, "_is_large_library", lambda: False)
     monkeypatch.setattr(view, "_library_all_albums", lambda *_args: albums)
-    monkeypatch.setattr(view, "_pump_artwork_loads", lambda *_args, **_kwargs: None)
-    view._art_active.clear()
+    decoded = []
+    monkeypatch.setattr(
+        library_view_module,
+        "_read_scaled_artwork",
+        lambda path: decoded.append(path),
+    )
 
     view._refresh_grid_albums()
 
     assert len(view._art_pending) == 50
-
-    class RecordingPool:
-        def __init__(self):
-            self.tasks = []
-
-        def start(self, task):
-            self.tasks.append(task)
-
-    pool = RecordingPool()
-    LibraryView._pump_artwork_loads(view, pool)
-
-    assert len(pool.tasks) == _ART_LOAD_CONCURRENCY
-    assert len(view._art_pending) == 50 - _ART_LOAD_CONCURRENCY
+    view._art_load_timer.stop()
+    view._load_next_artwork()
+    assert decoded == ["/art/cover-0.jpg"]
+    assert len(view._art_pending) == 49
+    assert view._art_load_timer.isActive()
 
 
-def test_art_loader_rejects_oversized_cover_before_decode(app, tmp_path):
+def test_art_loader_rejects_oversized_cover_before_decode(tmp_path):
     cover = tmp_path / "oversized.jpg"
     with cover.open("wb") as stream:
         stream.truncate(_MAX_ARTWORK_FILE_BYTES + 1)
-    signals = _ArtSignals()
-    loaded = []
-    signals.loaded.connect(lambda gen, path, image: loaded.append((gen, path, image)))
+    assert _read_scaled_artwork(str(cover)) is None
 
-    _ArtLoader(7, str(cover), signals, lambda: 7).run()
 
-    assert loaded == [(7, str(cover), None)]
+def test_rapid_grid_refresh_and_teardown_leaves_no_artwork_workers(
+    app, monkeypatch
+):
+    library = FakeLibrary({
+        "Artist": {"Album": [_track(1, "Song", "Artist", "Album")]},
+    })
+    view = LibraryView(library)
+    pages = [
+        (f"Artist {i}", f"Album {i}", f"/missing/cover-{i}.jpg")
+        for i in range(500)
+    ]
+    monkeypatch.setattr(view, "_is_large_library", lambda: True)
+    monkeypatch.setattr(
+        library,
+        "album_summaries_page",
+        lambda **_kwargs: pages,
+        raising=False,
+    )
+    monkeypatch.setattr(library_view_module, "_read_scaled_artwork", lambda _path: None)
+
+    for _ in range(5):
+        view._refresh_grid_albums()
+        QtCore.QCoreApplication.processEvents()
+        view._refresh_albums()
+        QtCore.QCoreApplication.processEvents()
+
+    assert not hasattr(view, "_art_signals")
+    assert not hasattr(view, "_art_active")
+    view.deleteLater()
+    QtCore.QCoreApplication.sendPostedEvents(None, QtCore.QEvent.DeferredDelete)

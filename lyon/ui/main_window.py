@@ -425,8 +425,15 @@ class MainWindow(QMainWindow):
 
         self.setAcceptDrops(True)
 
-        # Initial scan of saved roots.
-        if self.settings.library_paths and self.settings.first_run_completed:
+        # Only an empty database needs an automatic startup scan.  Re-walking a
+        # completed 100k-track library on every launch creates needless I/O and
+        # can collide with the user opening artwork-heavy views.  Watched folders
+        # handle live changes; Rescan Library remains the explicit reconciliation.
+        if (
+            self.settings.library_paths
+            and self.settings.first_run_completed
+            and self.library.count_tracks() == 0
+        ):
             self._start_scan(self.settings.library_paths, "Scanned", prune=True)
 
         # Menu + keyboard shortcuts
@@ -1174,11 +1181,11 @@ class MainWindow(QMainWindow):
             return
         self._scan_details_panel.setVisible(False)
 
-    def _finish_scan_details(self, title: str) -> None:
+    def _finish_scan_details(self, title: str, *, auto_hide: bool = False) -> None:
         self._scan_details_title.setText(title)
         self._scan_details_action.setText("Close")
         self._scan_details_action.setEnabled(True)
-        self._scan_details_panel.setVisible(True)
+        self._scan_details_panel.setVisible(not auto_hide)
 
     def _on_scan_finished(self, n: int, updated: int, removed: int, label: str) -> None:
         # Drop the handle before any UI work: the thread deleteLater()s
@@ -1196,10 +1203,10 @@ class MainWindow(QMainWindow):
             self._scan_details_log.appendPlainText(
                 f"CANCELLED after {processed:,} files; committed progress was kept."
             )
-            self._finish_scan_details("Library scan — cancelled")
+            self._finish_scan_details("Library scan — cancelled", auto_hide=True)
         else:
             self._scan_details_log.appendPlainText("COMPLETE")
-            self._finish_scan_details("Library scan — complete")
+            self._finish_scan_details("Library scan — complete", auto_hide=True)
         self._scan_details_mode = None
         parts = [f"{label}: {n} new track{'' if n == 1 else 's'}"]
         if updated:
@@ -1399,10 +1406,10 @@ class MainWindow(QMainWindow):
         if self._scan_details_mode == "watch":
             if self._scan_cancel_requested:
                 self._scan_details_log.appendPlainText("CANCELLED; committed progress was kept.")
-                self._finish_scan_details("Library update — cancelled")
+                self._finish_scan_details("Library update — cancelled", auto_hide=True)
             else:
                 self._scan_details_log.appendPlainText("COMPLETE")
-                self._finish_scan_details("Library update — complete")
+                self._finish_scan_details("Library update — complete", auto_hide=True)
             self._scan_cancel_requested = False
             self._scan_details_mode = None
         parts: list[str] = []

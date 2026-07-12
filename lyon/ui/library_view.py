@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 from collections import OrderedDict, deque
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -538,7 +538,6 @@ class _IdentifyTrackDialog(QDialog):
 
 _GRID_ICON_SIZE = 180
 _ART_CACHE_MAX = 200
-_ART_LOAD_CONCURRENCY = 4
 _MAX_ARTWORK_FILE_BYTES = 64 * 1024 * 1024
 _MAX_ARTWORK_PIXELS = 64_000_000
 _LARGE_LIBRARY_THRESHOLD = 10_000
@@ -546,94 +545,37 @@ _UI_POPULATE_CHUNK = 500
 _GRID_ALBUM_PAGE_SIZE = 500
 
 
-class _ArtSignals(QObject):
-    """Carries the result of a background artwork load back to the main thread."""
-    loaded = Signal(int, str, object)   # (generation, art_path, QImage | None)
-
-
-class _ArtGenerationToken:
-    """Python-only generation state safe for workers after Qt widget teardown."""
-
-    def __init__(self) -> None:
-        self.value = 0
-
-
-class _ArtLoader(QRunnable):
-    """Loads and scales an artwork image on a worker thread.
-
-    ``get_gen`` is a zero-argument callable that returns the *current*
-    generation counter held by the owning ``LibraryView``.  If the counter
-    has already advanced past ``gen`` when the worker wakes up — or between
-    the disk read and the scale step — the worker bails out early so the GUI
-    thread never has to discard the result.
-    """
-
-    def __init__(
-        self,
-        gen: int,
-        art_path: str,
-        signals: _ArtSignals,
-        get_gen: Callable[[], int],
-    ) -> None:
-        super().__init__()
-        self.setAutoDelete(True)
-        self._gen = gen
-        self._art_path = art_path
-        self._signals = signals
-        self._get_gen = get_gen
-
-    def _emit(self, image: object) -> None:
-        try:
-            self._signals.loaded.emit(self._gen, self._art_path, image)
-        except RuntimeError:
-            # The window may be closing while an artwork job finishes.
-            pass
-
-    def run(self) -> None:
-        # Bail out immediately if the artist/genre selection has already changed.
-        if self._get_gen() != self._gen:
-            self._emit(None)
-            return
-        try:
-            try:
-                if Path(self._art_path).stat().st_size > _MAX_ARTWORK_FILE_BYTES:
-                    self._emit(None)
-                    return
-            except OSError:
-                self._emit(None)
-                return
-            reader = QImageReader(self._art_path)
-            source_size = reader.size()
-            if (
-                source_size.isValid()
-                and source_size.width() * source_size.height() > _MAX_ARTWORK_PIXELS
-            ):
-                self._emit(None)
-                return
-            if source_size.isValid():
-                reader.setScaledSize(
-                    source_size.scaled(
-                        _GRID_ICON_SIZE,
-                        _GRID_ICON_SIZE,
-                        Qt.KeepAspectRatio,
-                    )
-                )
-            img = reader.read()
-            if img.isNull():
-                self._emit(None)
-            else:
-                # Check again before the expensive scale step.
-                if self._get_gen() != self._gen:
-                    self._emit(None)
-                    return
-                scaled = img.scaled(
-                    _GRID_ICON_SIZE, _GRID_ICON_SIZE,
-                    Qt.KeepAspectRatio, Qt.SmoothTransformation,
-                )
-                self._emit(scaled)
-        except Exception as exc:
-            LOG.debug("Could not load grid artwork %s: %s", self._art_path, exc)
-            self._emit(None)
+def _read_scaled_artwork(art_path: str):
+    """Decode one bounded thumbnail on the Qt GUI thread."""
+    try:
+        if Path(art_path).stat().st_size > _MAX_ARTWORK_FILE_BYTES:
+            return None
+    except OSError:
+        return None
+    reader = QImageReader(art_path)
+    source_size = reader.size()
+    if (
+        source_size.isValid()
+        and source_size.width() * source_size.height() > _MAX_ARTWORK_PIXELS
+    ):
+        return None
+    if source_size.isValid():
+        reader.setScaledSize(
+            source_size.scaled(
+                _GRID_ICON_SIZE,
+                _GRID_ICON_SIZE,
+                Qt.KeepAspectRatio,
+            )
+        )
+    image = reader.read()
+    if image.isNull():
+        return None
+    return image.scaled(
+        _GRID_ICON_SIZE,
+        _GRID_ICON_SIZE,
+        Qt.KeepAspectRatio,
+        Qt.SmoothTransformation,
+    )
 
 
 class LibraryView(QWidget):
@@ -658,15 +600,14 @@ class LibraryView(QWidget):
         # Album art grid async loading
         self._art_cache: OrderedDict[str, QPixmap] = OrderedDict()
         self._grid_gen: int = 0
-        self._art_generation = _ArtGenerationToken()
         self._grid_art_map: dict[str, list[QStandardItem]] = {}
         self._grid_album_offset = 0
         self._grid_album_genre: str | None = None
         self._grid_album_has_more = False
         self._art_pending: deque[tuple[int, str]] = deque()
-        self._art_active: set[tuple[int, str]] = set()
-        self._art_signals = _ArtSignals(self)
-        self._art_signals.loaded.connect(self._on_artwork_loaded)
+        self._art_load_timer = QTimer(self)
+        self._art_load_timer.setSingleShot(True)
+        self._art_load_timer.timeout.connect(self._load_next_artwork)
         self._populate_gen = 0
         self._populate_timer = QTimer(self)
         self._populate_timer.timeout.connect(self._populate_next_chunk)
@@ -1227,12 +1168,11 @@ class LibraryView(QWidget):
         self._clear_playlist_selection()
         self._grid_gen += 1
         gen = self._grid_gen
-        self._art_generation.value = gen
+        self._art_load_timer.stop()
         self._art_pending.clear()
         self._grid_art_map = {}
         virtual_key = None
         should_refresh_tracks = False
-        pool = QThreadPool.globalInstance()
 
         with _blocked_selection_signals(self.albums):
             self.albums_model.clear()
@@ -1281,7 +1221,7 @@ class LibraryView(QWidget):
                     self._clear_tracks_model()
                     self._update_footer()
 
-        self._pump_artwork_loads(pool)
+        self._pump_artwork_loads()
 
         if virtual_key is not None:
             self._populate_virtual_collection(virtual_key)
@@ -1368,7 +1308,7 @@ class LibraryView(QWidget):
         """Populate the album art grid for the selected genre (artwork loads asynchronously)."""
         self._grid_gen += 1
         gen = self._grid_gen
-        self._art_generation.value = gen
+        self._art_load_timer.stop()
         self._art_pending.clear()
         self._grid_art_map = {}
         self._grid_albums_model.clear()
@@ -1453,26 +1393,24 @@ class LibraryView(QWidget):
             self._grid_albums_model.appendRow(more)
         self._pump_artwork_loads()
 
-    def _pump_artwork_loads(self, pool: QThreadPool | None = None) -> None:
-        pool = pool or QThreadPool.globalInstance()
-        while self._art_pending and len(self._art_active) < _ART_LOAD_CONCURRENCY:
-            gen, art_path = self._art_pending.popleft()
-            key = (gen, art_path)
-            if key in self._art_active:
-                continue
-            self._art_active.add(key)
-            pool.start(
-                _ArtLoader(
-                    gen,
-                    art_path,
-                    self._art_signals,
-                    lambda token=self._art_generation: token.value,
-                )
-            )
+    def _pump_artwork_loads(self) -> None:
+        if self._art_pending and not self._art_load_timer.isActive():
+            self._art_load_timer.start(0)
+
+    def _load_next_artwork(self) -> None:
+        if not self._art_pending:
+            return
+        gen, art_path = self._art_pending.popleft()
+        image = None
+        if gen == self._grid_gen:
+            try:
+                image = _read_scaled_artwork(art_path)
+            except Exception as exc:  # noqa: BLE001 — one bad image must not break the grid
+                LOG.debug("Could not load grid artwork %s: %s", art_path, exc)
+        self._on_artwork_loaded(gen, art_path, image)
+        self._pump_artwork_loads()
 
     def _on_artwork_loaded(self, gen: int, art_path: str, img: object) -> None:
-        self._art_active.discard((gen, art_path))
-        self._pump_artwork_loads()
         if gen != self._grid_gen:
             return
         pm: QPixmap | None = None
