@@ -35,7 +35,14 @@ from ..core.cast_controller import CastController
 from ..core.cd_detect import close_dll_handles as close_cd_dll_handles
 from ..core.diagnostics import collect_diagnostics_bundle, logs_dir
 from ..core.dlna_server import DlnaServer
-from ..core.library import SUPPORTED_EXTS, IndexResult, Library, ScanSummary, Track
+from ..core.library import (
+    SUPPORTED_EXTS,
+    IndexResult,
+    Library,
+    ScanProgress,
+    ScanSummary,
+    Track,
+)
 from ..core.library_watcher import (
     LibraryFolderWatcher,
     LibraryIndexThread,
@@ -82,6 +89,7 @@ def _dlna_settings_signature(settings: Settings) -> tuple[object, ...]:
 class _LibraryScanThread(QThread):
     finished_with = Signal(int, int, int, str)  # (new_tracks, updated_tracks, removed_tracks, label)
     failed_with = Signal(str, str)         # (label, error)
+    progress = Signal(object)              # ScanProgress
 
     def __init__(self, library: Library, roots: list[str], label: str, prune: bool = False, parent=None):
         super().__init__(parent)
@@ -108,7 +116,12 @@ class _LibraryScanThread(QThread):
                 else 0
             )
             scan_summary = (
-                self.library.scan_paths_summary(self.roots, should_cancel=should_cancel)
+                self.library.scan_paths_summary(
+                    self.roots,
+                    should_cancel=should_cancel,
+                    isolate_metadata=True,
+                    on_progress=self.progress.emit,
+                )
                 if not should_cancel()
                 else ScanSummary()
             )
@@ -164,6 +177,8 @@ class MainWindow(QMainWindow):
             self._on_cast_playback_state_changed
         )
         self._scan_thread: _LibraryScanThread | None = None
+        self._scan_latest_progress: ScanProgress | None = None
+        self._scan_cancel_requested = False
         self._rg_scanner: ReplayGainScanner | None = None
         self._watch_index_thread: LibraryIndexThread | None = None
         self._library_watcher = LibraryFolderWatcher(self)
@@ -301,6 +316,37 @@ class MainWindow(QMainWindow):
         self.tab_bar.currentChanged.connect(self._activate_tab)
         self.stack.currentChanged.connect(self._on_view_changed)
         layout.addWidget(self.stack, 1)
+
+        # ---- bounded verbose library-scan status box
+        self._scan_details_panel = QWidget()
+        self._scan_details_panel.setObjectName("scanDetailsPanel")
+        scan_layout = QVBoxLayout(self._scan_details_panel)
+        scan_layout.setContentsMargins(12, 8, 12, 8)
+        scan_layout.setSpacing(4)
+        scan_header = QHBoxLayout()
+        self._scan_details_title = QLabel("Library scan")
+        self._scan_details_title.setObjectName("sectionHeading")
+        self._scan_details_counts = QLabel("")
+        self._scan_details_counts.setObjectName("mutedTextSmall")
+        self._scan_details_action = QToolButton()
+        self._scan_details_action.setText("Cancel")
+        self._scan_details_action.clicked.connect(self._cancel_or_close_scan_details)
+        scan_header.addWidget(self._scan_details_title)
+        scan_header.addWidget(self._scan_details_counts)
+        scan_header.addStretch(1)
+        scan_header.addWidget(self._scan_details_action)
+        scan_layout.addLayout(scan_header)
+        self._scan_details_current = QLabel("")
+        self._scan_details_current.setObjectName("mutedTextSmall")
+        self._scan_details_current.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        scan_layout.addWidget(self._scan_details_current)
+        self._scan_details_log = QPlainTextEdit()
+        self._scan_details_log.setReadOnly(True)
+        self._scan_details_log.setMaximumHeight(105)
+        self._scan_details_log.document().setMaximumBlockCount(250)
+        scan_layout.addWidget(self._scan_details_log)
+        self._scan_details_panel.setVisible(False)
+        layout.addWidget(self._scan_details_panel)
 
         # ---- transport bar
         self.transport = TransportBar(self.player, library=self.library)
@@ -1035,11 +1081,68 @@ class MainWindow(QMainWindow):
         self._scan_status_label.setText("Scanning library…")
         self._scan_status_label.setVisible(True)
         self._scan_progress.setVisible(True)
+        self._scan_cancel_requested = False
+        self._scan_latest_progress = None
+        self._scan_details_title.setText("Library scan — starting")
+        self._scan_details_counts.setText("0 files processed")
+        self._scan_details_current.setText("Preparing library folders…")
+        self._scan_details_log.clear()
+        for root in roots:
+            self._scan_details_log.appendPlainText(f"ROOT  {root}")
+        self._scan_details_action.setText("Cancel")
+        self._scan_details_action.setEnabled(True)
+        self._scan_details_panel.setVisible(True)
         self._scan_thread = _LibraryScanThread(self.library, list(roots), label, prune, self)
+        self._scan_thread.progress.connect(self._on_scan_progress)
         self._scan_thread.finished_with.connect(self._on_scan_finished)
         self._scan_thread.failed_with.connect(self._on_scan_failed)
         self._scan_thread.finished.connect(self._scan_thread.deleteLater)
         self._scan_thread.start()
+
+    def _on_scan_progress(self, progress: object) -> None:
+        if not isinstance(progress, ScanProgress):
+            return
+        self._scan_latest_progress = progress
+        phase_label = {
+            "starting": "starting",
+            "metadata": "reading metadata and artwork",
+            "indexing": "indexing files",
+            "cancelled": "cancelled",
+            "complete": "complete",
+        }.get(progress.phase, progress.phase)
+        self._scan_details_title.setText(f"Library scan — {phase_label}")
+        self._scan_details_counts.setText(
+            f"{progress.processed:,} processed  •  {progress.added:,} new  •  "
+            f"{progress.updated:,} updated  •  {progress.unchanged:,} unchanged  •  "
+            f"{progress.skipped:,} skipped  •  {progress.failed:,} failed"
+        )
+        if progress.current_path:
+            self._scan_details_current.setText(progress.current_path)
+        self._scan_status_label.setText(f"Scanning library… {progress.processed:,} files")
+        for result in progress.recent:
+            detail = f" — {result.error}" if result.error else ""
+            self._scan_details_log.appendPlainText(
+                f"{result.status.upper():9} {result.path}{detail}"
+            )
+
+    def _cancel_or_close_scan_details(self) -> None:
+        if self._thread_running(self._scan_thread):
+            self._scan_cancel_requested = True
+            self._scan_details_action.setEnabled(False)
+            self._scan_details_title.setText("Library scan — cancelling…")
+            self._scan_details_log.appendPlainText("CANCEL REQUESTED")
+            try:
+                self._scan_thread.request_stop()
+            except RuntimeError:
+                pass
+            return
+        self._scan_details_panel.setVisible(False)
+
+    def _finish_scan_details(self, title: str) -> None:
+        self._scan_details_title.setText(title)
+        self._scan_details_action.setText("Close")
+        self._scan_details_action.setEnabled(True)
+        self._scan_details_panel.setVisible(True)
 
     def _on_scan_finished(self, n: int, updated: int, removed: int, label: str) -> None:
         # Drop the handle before any UI work: the thread deleteLater()s
@@ -1049,13 +1152,35 @@ class MainWindow(QMainWindow):
         self._scan_status_label.setVisible(False)
         self._scan_status_label.setText("")
         self._scan_progress.setVisible(False)
+        was_cancelled = self._scan_cancel_requested
+        self._scan_cancel_requested = False
+        progress = self._scan_latest_progress
+        if was_cancelled:
+            processed = progress.processed if progress is not None else n + updated
+            self._scan_details_log.appendPlainText(
+                f"CANCELLED after {processed:,} files; committed progress was kept."
+            )
+            self._finish_scan_details("Library scan — cancelled")
+        else:
+            self._scan_details_log.appendPlainText("COMPLETE")
+            self._finish_scan_details("Library scan — complete")
         parts = [f"{label}: {n} new track{'' if n == 1 else 's'}"]
         if updated:
             parts.append(f"{updated} updated")
         if removed:
             parts.append(f"{removed} removed")
+        if progress is not None and progress.skipped:
+            parts.append(f"{progress.skipped} skipped")
+        if progress is not None and progress.failed:
+            parts.append(f"{progress.failed} failed")
         message = ", ".join(parts)
-        toast_level = "success" if (n > 0 or updated > 0 or removed > 0) else "info"
+        if was_cancelled:
+            message = f"Scan cancelled; progress kept. {message}"
+        toast_level = (
+            "warning"
+            if was_cancelled or (progress is not None and progress.failed)
+            else "success" if (n > 0 or updated > 0 or removed > 0) else "info"
+        )
         self.show_toast(message, level=toast_level, duration_ms=4000)
         try:
             self.dlna_server.invalidate_cache()
@@ -1069,6 +1194,9 @@ class MainWindow(QMainWindow):
         self._scan_status_label.setVisible(False)
         self._scan_status_label.setText("")
         self._scan_progress.setVisible(False)
+        self._scan_cancel_requested = False
+        self._scan_details_log.appendPlainText(f"FAILED — {error}")
+        self._finish_scan_details("Library scan — failed")
         self.show_toast(f"{label} failed: {error}", level="error", duration_ms=6000)
 
     # ------------------------------------------------------------------ watched folders

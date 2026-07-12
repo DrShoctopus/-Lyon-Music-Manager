@@ -829,6 +829,52 @@ def test_show_toast_with_action_button(main_window):
 def test_scan_progress_indicator_hidden_by_default(main_window):
     assert not main_window._scan_progress.isVisible()
     assert not main_window._scan_status_label.isVisible()
+    assert not main_window._scan_details_panel.isVisible()
+
+
+def test_verbose_scan_status_is_bounded_and_reports_counts(main_window):
+    from lyon.core.library import IndexResult, ScanProgress
+
+    main_window._scan_details_panel.setVisible(True)
+    for i in range(300):
+        main_window._on_scan_progress(
+            ScanProgress(
+                phase="indexing",
+                current_path=f"/music/track-{i}.flac",
+                processed=i + 1,
+                added=i + 1,
+                updated=0,
+                unchanged=0,
+                skipped=0,
+                failed=0,
+                recent=(IndexResult("added", f"/music/track-{i}.flac"),),
+            )
+        )
+
+    assert "300 processed" in main_window._scan_details_counts.text()
+    assert main_window._scan_details_current.text() == "/music/track-299.flac"
+    assert main_window._scan_details_log.document().blockCount() <= 250
+
+
+def test_verbose_scan_status_cancel_requests_worker_stop(main_window):
+    class RunningScan:
+        stopped = False
+
+        def isRunning(self):
+            return True
+
+        def request_stop(self):
+            self.stopped = True
+
+    worker = RunningScan()
+    main_window._scan_thread = worker
+
+    main_window._cancel_or_close_scan_details()
+
+    assert worker.stopped is True
+    assert main_window._scan_cancel_requested is True
+    assert not main_window._scan_details_action.isEnabled()
+    main_window._scan_thread = None
 
 
 def test_startup_scan_prunes_missing_library_rows(qapp, fake_backend, monkeypatch, tmp_path):

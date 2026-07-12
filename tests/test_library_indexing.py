@@ -1,10 +1,11 @@
 import os
 import threading
+import wave
 from pathlib import Path
 
 from lyon.core import library as library_module
 from lyon.core import library_watcher as library_watcher_module
-from lyon.core.library import Library
+from lyon.core.library import Library, ScanProgress
 from lyon.core.library_watcher import (
     LibraryFolderWatcher,
     LibraryIndexThread,
@@ -210,6 +211,115 @@ def test_scan_paths_summary_commits_large_scans_in_batches(tmp_path, monkeypatch
 
         assert summary.added == 501
         assert counting_conn.commits >= 2
+    finally:
+        library.close()
+
+
+def test_resource_safe_scan_reads_metadata_in_bounded_isolated_batch(tmp_path, monkeypatch):
+    root = tmp_path / "Music"
+    root.mkdir()
+    paths = []
+    for i in range(3):
+        path = root / f"track-{i}.flac"
+        _set_file_state(path, b"file", 1_700_000_000_000_000_000 + i)
+        paths.append(str(path))
+
+    def fail_if_read_in_scan_process(*_args, **_kwargs):
+        raise AssertionError("resource-safe scan must use the isolated metadata result")
+
+    monkeypatch.setattr(library_module, "MutagenFile", fail_if_read_in_scan_process)
+    library = Library(tmp_path / "library.db")
+    batches: list[list[str]] = []
+    progress: list[ScanProgress] = []
+
+    def isolated_reader(batch, *, should_cancel):
+        assert should_cancel is None
+        batches.append(list(batch))
+        return {
+            path: {
+                "title": Path(path).stem,
+                "artist": "Artist",
+                "album_artist": "Artist",
+                "album": "Album",
+                "track_no": 1,
+                "disc_no": 1,
+                "year": 2024,
+                "genre": "Rock",
+                "grouping": "",
+                "duration": 60.0,
+                "bitrate": 320000,
+                "samplerate": 44100,
+                "disc_id": "",
+            }
+            for path in batch
+        }
+
+    monkeypatch.setattr(library, "_read_metadata_batch_isolated", isolated_reader)
+    try:
+        summary = library.scan_paths_summary(
+            [root],
+            isolate_metadata=True,
+            on_progress=progress.append,
+        )
+
+        assert summary.added == 3
+        assert len(batches) == 1
+        assert set(batches[0]) == set(paths)
+        assert progress[-1].phase == "complete"
+        assert progress[-1].processed == 3
+    finally:
+        library.close()
+
+
+def test_isolated_metadata_reader_splits_crashed_batch_to_individual_files(
+    tmp_path, monkeypatch
+):
+    library = Library(tmp_path / "library.db")
+    calls: list[list[str]] = []
+
+    def fake_process(batch, *, should_cancel):
+        assert should_cancel is None
+        calls.append(list(batch))
+        if len(batch) > 1:
+            return None
+        return {batch[0]: {"title": Path(batch[0]).stem}}
+
+    monkeypatch.setattr(library_module, "_run_metadata_process", fake_process)
+    try:
+        result = library._read_metadata_batch_isolated(
+            ["/music/a.flac", "/music/b.flac"],
+            should_cancel=None,
+        )
+
+        assert result == {
+            "/music/a.flac": {"title": "a"},
+            "/music/b.flac": {"title": "b"},
+        }
+        assert calls == [
+            ["/music/a.flac", "/music/b.flac"],
+            ["/music/a.flac"],
+            ["/music/b.flac"],
+        ]
+    finally:
+        library.close()
+
+
+def test_resource_safe_scan_uses_real_spawned_metadata_parser(tmp_path):
+    root = tmp_path / "Music"
+    root.mkdir()
+    path = root / "valid.wav"
+    with wave.open(str(path), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(44100)
+        wav.writeframes(b"\x00\x00" * 100)
+
+    library = Library(tmp_path / "library.db")
+    try:
+        summary = library.scan_paths_summary([root], isolate_metadata=True)
+
+        assert summary.added == 1
+        assert library.count_tracks() == 1
     finally:
         library.close()
 

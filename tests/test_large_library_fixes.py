@@ -18,7 +18,7 @@ import pytest
 
 QtCore = pytest.importorskip("PySide6.QtCore", exc_type=ImportError)
 
-from lyon.core.library import Library, Track  # noqa: E402
+from lyon.core.library import IndexResult, Library, ScanProgress, Track  # noqa: E402
 from lyon.core.playlist_import import import_playlist  # noqa: E402
 
 
@@ -86,6 +86,40 @@ def test_all_track_path_ids_returns_lean_pairs(tmp_path):
 
     assert sorted(p for p, _ in pairs) == ["/music/a.flac", "/music/b.flac"]
     assert all(isinstance(tid, int) for _, tid in pairs)
+
+
+def test_100k_scan_progress_snapshots_stay_bounded(tmp_path, monkeypatch):
+    """Verbose status must not retain one UI/log object for every library file."""
+    from lyon.core import library as library_module
+
+    root = tmp_path / "Music"
+    root.mkdir()
+    names = [f"track-{i:06}.flac" for i in range(100_000)]
+    monkeypatch.setattr(
+        library_module.os,
+        "walk",
+        lambda _root: iter([(str(root), [], names)]),
+    )
+    library = Library(tmp_path / "library.db")
+    monkeypatch.setattr(library, "_metadata_candidates", lambda paths, *, force: [])
+    monkeypatch.setattr(
+        library,
+        "index_file",
+        lambda path, **_kwargs: IndexResult("added", str(path)),
+    )
+    progress: list[ScanProgress] = []
+    try:
+        summary = library.scan_paths_summary(
+            [root],
+            isolate_metadata=True,
+            on_progress=progress.append,
+        )
+
+        assert summary.added == 100_000
+        assert progress[-1].processed == 100_000
+        assert max(len(snapshot.recent) for snapshot in progress) <= 50
+    finally:
+        library.close()
 
 
 # --------------------------------------------------------------- playlist import

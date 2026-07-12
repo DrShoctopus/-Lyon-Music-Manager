@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import multiprocessing
 import os
 import sqlite3
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable, Iterator, Literal
@@ -119,6 +121,10 @@ _MIGRATIONS: list[tuple[int, str]] = [
 
 _PAGE_SIZE = 500  # rows per page in streaming queries
 _SCAN_COMMIT_INTERVAL = 500  # indexed filesystem entries per scan transaction
+_SCAN_METADATA_BATCH_SIZE = 500
+_SCAN_PROGRESS_INTERVAL_SECONDS = 0.2
+_MAX_TAG_TEXT_LENGTH = 4096
+_METADATA_NOT_PROVIDED = object()
 # SQLite caps host parameters per statement (999 on pre-3.32 builds, 32766
 # after).  Queries that expand a caller-supplied list into "IN (?,?,...)"
 # must chunk at a size safe for every build we might run against.
@@ -225,6 +231,25 @@ class ScanSummary:
         self.removed += other.removed
         self.failed += other.failed
 
+    @property
+    def processed(self) -> int:
+        return self.added + self.updated + self.unchanged + self.skipped + self.failed
+
+
+@dataclass(frozen=True)
+class ScanProgress:
+    """Bounded progress snapshot safe to queue from a scan worker to the UI."""
+
+    phase: str
+    current_path: str
+    processed: int
+    added: int
+    updated: int
+    unchanged: int
+    skipped: int
+    failed: int
+    recent: tuple[IndexResult, ...] = ()
+
 
 class Library:
     def __init__(self, db_path: Path | None = None):
@@ -298,6 +323,8 @@ class Library:
         should_cancel: "Callable[[], bool] | None" = None,
         *,
         force: bool = False,
+        isolate_metadata: bool = False,
+        on_progress: "Callable[[ScanProgress], None] | None" = None,
     ) -> ScanSummary:
         """Incrementally index supported media under *roots*.
 
@@ -308,6 +335,10 @@ class Library:
         """
         summary = ScanSummary()
         entries_since_commit = 0
+        pending_media: list[str] = []
+        recent: deque[IndexResult] = deque(maxlen=50)
+        last_progress_at = 0.0
+        current_path = ""
 
         def commit_progress(*, force: bool = False) -> None:
             nonlocal entries_since_commit
@@ -317,6 +348,73 @@ class Library:
                 self.conn.commit()
             entries_since_commit = 0
 
+        def emit_progress(phase: str, *, force_emit: bool = False) -> None:
+            nonlocal last_progress_at
+            if on_progress is None:
+                recent.clear()
+                return
+            now = time.monotonic()
+            if not force_emit and now - last_progress_at < _SCAN_PROGRESS_INTERVAL_SECONDS:
+                return
+            snapshot = ScanProgress(
+                phase=phase,
+                current_path=current_path,
+                processed=summary.processed,
+                added=summary.added,
+                updated=summary.updated,
+                unchanged=summary.unchanged,
+                skipped=summary.skipped,
+                failed=summary.failed,
+                recent=tuple(recent),
+            )
+            recent.clear()
+            last_progress_at = now
+            try:
+                on_progress(snapshot)
+            except Exception:  # noqa: BLE001 — status reporting must not abort a scan
+                LOG.exception("Library scan progress callback failed")
+
+        def add_result(result: IndexResult) -> None:
+            nonlocal entries_since_commit, current_path
+            current_path = result.path
+            summary.add_result(result)
+            recent.append(result)
+            entries_since_commit += 1
+            commit_progress()
+            emit_progress("indexing", force_emit=result.status == "failed")
+
+        def flush_media_batch() -> bool:
+            """Index the pending batch; return False when cancellation was requested."""
+            nonlocal pending_media, current_path
+            if not pending_media:
+                return True
+            batch = pending_media
+            pending_media = []
+            metadata_by_path: dict[str, dict | None] = {}
+            if isolate_metadata:
+                candidates = self._metadata_candidates(batch, force=force)
+                if candidates:
+                    current_path = candidates[0]
+                    emit_progress("metadata", force_emit=True)
+                    metadata_by_path = self._read_metadata_batch_isolated(
+                        candidates,
+                        should_cancel=should_cancel,
+                    )
+            for full in batch:
+                if isolate_metadata and should_cancel is not None and should_cancel():
+                    commit_progress(force=True)
+                    emit_progress("cancelled", force_emit=True)
+                    return False
+                try:
+                    supplied = metadata_by_path.get(full, _METADATA_NOT_PROVIDED)
+                    add_result(self.index_file(full, force=force, _metadata=supplied))
+                except Exception as exc:  # noqa: BLE001
+                    LOG.exception("Failed to index %s: %s", full, exc)
+                    add_result(IndexResult("failed", full, str(exc)))
+            return True
+
+        emit_progress("starting", force_emit=True)
+
         for root in roots:
             root = Path(root)
             if not root.exists():
@@ -324,32 +422,99 @@ class Library:
             for dirpath, _dirs, files in os.walk(root):
                 if should_cancel is not None and should_cancel():
                     commit_progress(force=True)
+                    emit_progress("cancelled", force_emit=True)
                     return summary
                 for name in files:
                     if should_cancel is not None and should_cancel():
                         commit_progress(force=True)
+                        emit_progress("cancelled", force_emit=True)
                         return summary
                     ext = os.path.splitext(name)[1].lower()
                     full = os.path.join(dirpath, name)
                     if ext in SUPPORTED_EXTS:
-                        try:
-                            summary.add_result(self.index_file(full, force=force))
-                        except Exception as exc:  # noqa: BLE001
-                            LOG.exception("Failed to index %s: %s", full, exc)
-                            summary.failed += 1
-                        entries_since_commit += 1
-                        commit_progress()
+                        pending_media.append(full)
+                        if not isolate_metadata or len(pending_media) >= _SCAN_METADATA_BATCH_SIZE:
+                            if not flush_media_batch():
+                                return summary
                     elif ext == SUPPORTED_CUE_EXT:
                         try:
-                            summary.merge(self._index_cue_file(full, force=force))
+                            cue_summary = self._index_cue_file(full, force=force)
+                            summary.merge(cue_summary)
+                            current_path = full
+                            recent.append(
+                                IndexResult(
+                                    "failed" if cue_summary.failed else "updated",
+                                    full,
+                                )
+                            )
                         except Exception as exc:  # noqa: BLE001
                             LOG.exception("Failed to index CUE sheet %s: %s", full, exc)
                             summary.failed += 1
+                            recent.append(IndexResult("failed", full, str(exc)))
                         entries_since_commit += 1
                         commit_progress()
+                        emit_progress("indexing")
+        if not flush_media_batch():
+            return summary
         summary.removed += self.remove_stale_cue_tracks()
         commit_progress(force=True)
+        emit_progress("complete", force_emit=True)
         return summary
+
+    def _metadata_candidates(self, paths: list[str], *, force: bool) -> list[str]:
+        """Return only paths whose tags need parsing for this scan batch."""
+        candidates: list[str] = []
+        for path in paths:
+            ext = Path(path).suffix.lower()
+            row = self._track_row_for_path(path)
+            stat = _safe_stat(path)
+            if stat is None:
+                continue
+            if row is None or force or not _row_matches_stat(row, stat):
+                candidates.append(path)
+            elif ext in SUPPORTED_AUDIO_EXTS and _row_disc_id_unchecked(row):
+                candidates.append(path)
+        return candidates
+
+    def _read_metadata_batch_isolated(
+        self,
+        paths: list[str],
+        *,
+        should_cancel: "Callable[[], bool] | None",
+    ) -> dict[str, dict | None]:
+        """Parse tags in short-lived spawned processes to release artwork memory.
+
+        Mutagen has to decode container metadata, which can include multi-megabyte
+        embedded cover images even though the library index only keeps text fields.
+        Recycling the parser process per batch puts a hard lifetime on those native
+        and Python allocations.  If a parser process crashes, split the batch until
+        the bad file is isolated instead of taking down the application.
+        """
+
+        def cancelled() -> bool:
+            return should_cancel is not None and should_cancel()
+
+        def read_batch(batch: list[str]) -> dict[str, dict | None]:
+            if not batch or cancelled():
+                return {}
+            result = _run_metadata_process(batch, should_cancel=should_cancel)
+            if result is not None:
+                return result
+            if len(batch) == 1:
+                LOG.error("Metadata parser process failed for %s", batch[0])
+                return {batch[0]: None}
+            midpoint = len(batch) // 2
+            LOG.warning(
+                "Metadata parser process failed for %d files; retrying smaller batches",
+                len(batch),
+            )
+            left = read_batch(batch[:midpoint])
+            if cancelled():
+                return left
+            left.update(read_batch(batch[midpoint:]))
+            return left
+
+        return read_batch(paths)
 
     def add_file(self, path: str | os.PathLike, disc_id: str | None = None) -> bool:
         return self.index_file(path, disc_id=disc_id).status == "added"
@@ -360,6 +525,7 @@ class Library:
         disc_id: str | None = None,
         *,
         force: bool = False,
+        _metadata: object = _METADATA_NOT_PROVIDED,
     ) -> IndexResult:
         """Add or refresh one supported media file.
 
@@ -389,12 +555,12 @@ class Library:
                 # tag read once, not on every startup reconciliation scan —
                 # at 100k tracks the difference is a full library re-parse
                 # per launch.
-                meta = _read_tags(path)
+                meta = _read_tags(path) if _metadata is _METADATA_NOT_PROVIDED else _metadata
                 tag_disc_id = (meta.get("disc_id") or "") if meta is not None else ""
                 self._mark_disc_id_checked(path, tag_disc_id)
             return IndexResult("unchanged", path)
 
-        meta = _read_tags(path)
+        meta = _read_tags(path) if _metadata is _METADATA_NOT_PROVIDED else _metadata
         if meta is None:
             if media_type == "video":
                 meta = {
@@ -1716,6 +1882,68 @@ def _row_disc_id_unchecked(row: sqlite3.Row) -> bool:
     return "disc_id" in row.keys() and row["disc_id"] is None
 
 
+def _metadata_process_worker(paths: list[str], send_conn) -> None:
+    """Child-process entry point for bounded metadata decoding."""
+    try:
+        send_conn.send({path: _read_tags(path) for path in paths})
+    finally:
+        send_conn.close()
+
+
+def _run_metadata_process(
+    paths: list[str],
+    *,
+    should_cancel: "Callable[[], bool] | None",
+) -> dict[str, dict | None] | None:
+    """Return child-decoded tags, or None when the child exits abnormally."""
+    context = multiprocessing.get_context("spawn")
+    recv_conn, send_conn = context.Pipe(duplex=False)
+    process = context.Process(
+        target=_metadata_process_worker,
+        args=(paths, send_conn),
+        name="SeaLyonMetadataBatch",
+        daemon=True,
+    )
+    try:
+        process.start()
+    except Exception:
+        recv_conn.close()
+        send_conn.close()
+        raise
+    send_conn.close()
+    payload: object = None
+    received = False
+    try:
+        while True:
+            if should_cancel is not None and should_cancel():
+                process.terminate()
+                return {}
+            if recv_conn.poll(0.1):
+                try:
+                    payload = recv_conn.recv()
+                    received = True
+                except EOFError:
+                    pass
+                break
+            if not process.is_alive():
+                if recv_conn.poll():
+                    try:
+                        payload = recv_conn.recv()
+                        received = True
+                    except EOFError:
+                        pass
+                break
+    finally:
+        recv_conn.close()
+        process.join(2.0)
+        if process.is_alive():
+            process.terminate()
+            process.join(2.0)
+    if not received or process.exitcode != 0 or not isinstance(payload, dict):
+        return None
+    return payload
+
+
 def _read_tags(path: str) -> dict | None:
     try:
         f = MutagenFile(path, easy=True)
@@ -1729,7 +1957,10 @@ def _read_tags(path: str) -> dict | None:
     def first(key: str) -> str:
         v = f.get(key)
         if isinstance(v, list) and v:
-            return str(v[0])
+            # Corrupt/malicious files can carry enormous text frames.  The UI
+            # never needs unbounded tag strings and SQLite should not retain
+            # megabytes of junk per row during a 100k-file import.
+            return str(v[0])[:_MAX_TAG_TEXT_LENGTH]
         return ""
 
     def to_int(s: str) -> int:
