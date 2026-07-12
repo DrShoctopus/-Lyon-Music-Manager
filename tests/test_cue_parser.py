@@ -2,7 +2,14 @@
 from pathlib import Path
 
 import pytest
-from lyon.core.cue_parser import CueSheet, _parse_sectors, _unquote, parse_cue
+from lyon.core.cue_parser import (
+    _MAX_CUE_BYTES,
+    _MAX_CUE_TEXT_LENGTH,
+    CueSheet,
+    _parse_sectors,
+    _unquote,
+    parse_cue,
+)
 
 # ---------------------------------------------------------------------------
 # helpers
@@ -61,6 +68,10 @@ def test_unquote_no_quotes_unchanged():
 
 def test_unquote_strips_whitespace():
     assert _unquote('  "Test"  ') == "Test"
+
+
+def test_unquote_bounds_malformed_giant_metadata():
+    assert len(_unquote('"' + ("x" * 10_000) + '"')) == _MAX_CUE_TEXT_LENGTH
 
 
 # ---------------------------------------------------------------------------
@@ -176,6 +187,14 @@ def test_parse_cue_image_path_absolute(tmp_path):
 
 def test_parse_cue_no_tracks_returns_none(tmp_path):
     cue = _write_cue(tmp_path, 'TITLE "Empty"\nPERFORMER "Nobody"\n')
+    assert parse_cue(cue) is None
+
+
+def test_parse_cue_rejects_oversized_file_before_reading_it(tmp_path):
+    cue = tmp_path / "oversized.cue"
+    with cue.open("wb") as stream:
+        stream.truncate(_MAX_CUE_BYTES + 1)
+
     assert parse_cue(cue) is None
 
 

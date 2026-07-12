@@ -11,12 +11,13 @@ def add_track(
     album_artist: str = "",
     album: str = "",
     media_type: str = "audio",
+    genre: str = "",
 ) -> None:
     library.conn.execute(
         """INSERT INTO tracks
            (path, title, artist, album_artist, album, track_no, disc_no, year, genre, duration, bitrate, samplerate, media_type)
-           VALUES (?, ?, ?, ?, ?, 1, 1, 0, '', 60.0, 320000, 48000, ?)""",
-        (path, Path(path).stem, artist, album_artist, album, media_type),
+           VALUES (?, ?, ?, ?, ?, 1, 1, 0, ?, 60.0, 320000, 48000, ?)""",
+        (path, Path(path).stem, artist, album_artist, album, genre, media_type),
     )
     library.conn.commit()
 
@@ -158,6 +159,57 @@ def test_all_albums_respects_media_type_filter(tmp_path):
     assert library.all_albums() == [
         ("Artist", "Album", None),
         ("Video Artist", "Videos", None),
+    ]
+
+
+def test_albums_for_genre_returns_lean_album_summaries(tmp_path):
+    library = Library(tmp_path / "library.db")
+    add_track(
+        library,
+        "/music/rock-a.flac",
+        artist="Artist",
+        album="Rock Album",
+        genre="Rock",
+    )
+    add_track(
+        library,
+        "/music/rock-b.flac",
+        artist="Artist",
+        album="Rock Album",
+        genre="Rock",
+    )
+    add_track(
+        library,
+        "/music/jazz.flac",
+        artist="Other",
+        album="Jazz Album",
+        genre="Jazz",
+    )
+
+    assert library.albums_for_genre("Rock", "audio") == [
+        ("Artist", "Rock Album", None)
+    ]
+
+
+def test_album_summary_pages_are_bounded_and_filterable(tmp_path):
+    library = Library(tmp_path / "library.db")
+    for i in range(5):
+        add_track(
+            library,
+            f"/music/{i}.flac",
+            artist="Artist",
+            album=f"Album {i}",
+            genre="Rock" if i < 4 else "Jazz",
+        )
+
+    assert library.album_summaries_page(
+        limit=2,
+        offset=1,
+        media_type="audio",
+        genre="Rock",
+    ) == [
+        ("Artist", "Album 1", None),
+        ("Artist", "Album 2", None),
     ]
 
 

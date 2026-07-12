@@ -10,6 +10,15 @@ from pathlib import Path
 import pytest
 
 
+def test_launcher_enables_windows_frozen_multiprocessing_before_qt_imports():
+    repo = Path(__file__).resolve().parents[1]
+    source = (repo / "main.py").read_text(encoding="utf-8")
+
+    assert source.index("multiprocessing.freeze_support()") < source.index(
+        "from lyon.app import main"
+    )
+
+
 def test_pyinstaller_spec_resolves_repo_root(monkeypatch):
     repo = Path(__file__).resolve().parents[1]
     captured = {}

@@ -122,6 +122,77 @@ def test_100k_scan_progress_snapshots_stay_bounded(tmp_path, monkeypatch):
         library.close()
 
 
+def test_100k_mass_file_index_uses_bounded_batches_and_progress(tmp_path, monkeypatch):
+    """Watcher/drop file lists use the same 500-file metadata boundary."""
+    library = Library(tmp_path / "library.db")
+    batch_sizes: list[int] = []
+    progress: list[ScanProgress] = []
+
+    def no_metadata_needed(paths, *, force):
+        assert force is False
+        batch_sizes.append(len(paths))
+        return []
+
+    monkeypatch.setattr(library, "_metadata_candidates", no_metadata_needed)
+    monkeypatch.setattr(
+        library,
+        "index_file",
+        lambda path, **_kwargs: IndexResult("added", str(path)),
+    )
+    paths = (f"/music/track-{i:06d}.flac" for i in range(100_000))
+    try:
+        summary = library.index_files_summary(
+            paths,
+            isolate_metadata=True,
+            on_progress=progress.append,
+        )
+
+        assert summary.added == 100_000
+        assert max(batch_sizes) == 500
+        assert len(batch_sizes) == 200
+        assert progress[-1].processed == 100_000
+        assert max(len(snapshot.recent) for snapshot in progress) <= 50
+    finally:
+        library.close()
+
+
+def test_100k_database_album_grid_query_is_paged(tmp_path):
+    library = Library(tmp_path / "library.db")
+
+    def rows():
+        for i in range(100_000):
+            album = i // 10
+            yield (
+                f"/music/track-{i:06d}.flac",
+                f"Track {i}",
+                f"Artist {album // 10}",
+                f"Album {album}",
+            )
+
+    try:
+        library.conn.executemany(
+            """INSERT INTO tracks
+               (path, title, artist, album_artist, album, track_no, disc_no, year,
+                genre, duration, bitrate, samplerate, media_type)
+               VALUES (?, ?, ?, ?, ?, 1, 1, 2024, 'Rock', 60, 320000, 44100, 'audio')""",
+            (
+                (path, title, artist, artist, album)
+                for path, title, artist, album in rows()
+            ),
+        )
+        library.commit()
+
+        first_page = library.album_summaries_page(
+            limit=501,
+            media_type="audio",
+        )
+
+        assert library.count_tracks("audio") == 100_000
+        assert len(first_page) == 501
+    finally:
+        library.close()
+
+
 # --------------------------------------------------------------- playlist import
 def test_import_playlist_larger_than_sqlite_parameter_limit(tmp_path, monkeypatch):
     """Importing a whole-library M3U (33k entries) must not blow the SQL cap."""

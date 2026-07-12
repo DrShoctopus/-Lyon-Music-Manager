@@ -10,6 +10,7 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass
+from itertools import islice
 from pathlib import Path
 from typing import Callable, Iterable, Iterator, Literal
 
@@ -125,6 +126,7 @@ _SCAN_METADATA_BATCH_SIZE = 500
 _SCAN_PROGRESS_INTERVAL_SECONDS = 0.2
 _MAX_TAG_TEXT_LENGTH = 4096
 _METADATA_NOT_PROVIDED = object()
+_METADATA_BATCH_TIMEOUT_MAX_SECONDS = 300.0
 # SQLite caps host parameters per statement (999 on pre-3.32 builds, 32766
 # after).  Queries that expand a caller-supplied list into "IN (?,?,...)"
 # must chunk at a size safe for every build we might run against.
@@ -438,7 +440,12 @@ class Library:
                                 return summary
                     elif ext == SUPPORTED_CUE_EXT:
                         try:
-                            cue_summary = self._index_cue_file(full, force=force)
+                            cue_summary = self._index_cue_file(
+                                full,
+                                force=force,
+                                isolate_metadata=isolate_metadata,
+                                should_cancel=should_cancel,
+                            )
                             summary.merge(cue_summary)
                             current_path = full
                             recent.append(
@@ -458,6 +465,87 @@ class Library:
             return summary
         summary.removed += self.remove_stale_cue_tracks()
         commit_progress(force=True)
+        emit_progress("complete", force_emit=True)
+        return summary
+
+    def index_files_summary(
+        self,
+        paths: Iterable[str | os.PathLike],
+        should_cancel: "Callable[[], bool] | None" = None,
+        *,
+        force: bool = False,
+        isolate_metadata: bool = False,
+        on_progress: "Callable[[ScanProgress], None] | None" = None,
+    ) -> ScanSummary:
+        """Index an arbitrary file stream with the same bounded scan safeguards."""
+        summary = ScanSummary()
+        recent: deque[IndexResult] = deque(maxlen=50)
+        last_progress_at = 0.0
+        current_path = ""
+        path_iter = iter(paths)
+
+        def emit_progress(phase: str, *, force_emit: bool = False) -> None:
+            nonlocal last_progress_at
+            if on_progress is None:
+                recent.clear()
+                return
+            now = time.monotonic()
+            if not force_emit and now - last_progress_at < _SCAN_PROGRESS_INTERVAL_SECONDS:
+                return
+            try:
+                on_progress(
+                    ScanProgress(
+                        phase=phase,
+                        current_path=current_path,
+                        processed=summary.processed,
+                        added=summary.added,
+                        updated=summary.updated,
+                        unchanged=summary.unchanged,
+                        skipped=summary.skipped,
+                        failed=summary.failed,
+                        recent=tuple(recent),
+                    )
+                )
+            except Exception:  # noqa: BLE001 — status reporting must not abort indexing
+                LOG.exception("Library file-index progress callback failed")
+            recent.clear()
+            last_progress_at = now
+
+        emit_progress("starting", force_emit=True)
+        while True:
+            if should_cancel is not None and should_cancel():
+                emit_progress("cancelled", force_emit=True)
+                break
+            batch = [str(path) for path in islice(path_iter, _SCAN_METADATA_BATCH_SIZE)]
+            if not batch:
+                break
+            metadata_by_path: dict[str, dict | None] = {}
+            if isolate_metadata:
+                candidates = self._metadata_candidates(batch, force=force)
+                if candidates:
+                    current_path = candidates[0]
+                    emit_progress("metadata", force_emit=True)
+                    metadata_by_path = self._read_metadata_batch_isolated(
+                        candidates,
+                        should_cancel=should_cancel,
+                    )
+            for path in batch:
+                if should_cancel is not None and should_cancel():
+                    self.commit()
+                    emit_progress("cancelled", force_emit=True)
+                    return summary
+                current_path = path
+                try:
+                    supplied = metadata_by_path.get(path, _METADATA_NOT_PROVIDED)
+                    result = self.index_file(path, force=force, _metadata=supplied)
+                except Exception as exc:  # noqa: BLE001
+                    LOG.exception("Failed to index %s: %s", path, exc)
+                    result = IndexResult("failed", path, str(exc))
+                summary.add_result(result)
+                recent.append(result)
+                emit_progress("indexing", force_emit=result.status == "failed")
+            self.commit()
+        self.commit()
         emit_progress("complete", force_emit=True)
         return summary
 
@@ -684,7 +772,10 @@ class Library:
     def _track_row_for_path(self, path: str) -> sqlite3.Row | None:
         with self._lock:
             return self.conn.execute(
-                "SELECT * FROM tracks WHERE path = ?", (path,)
+                """SELECT id, file_size, file_mtime_ns, disc_id, file_hash,
+                          acoustid_id, media_type, scan_error
+                   FROM tracks WHERE path = ?""",
+                (path,),
             ).fetchone()
 
     def _backfill_disc_id(self, path: str, disc_id: str) -> None:
@@ -734,6 +825,8 @@ class Library:
         *,
         force: bool = False,
         commit: bool = False,
+        isolate_metadata: bool = False,
+        should_cancel: "Callable[[], bool] | None" = None,
     ) -> ScanSummary:
         """Parse a CUE sheet and upsert one library row per audio track it describes."""
         from .cue_parser import parse_cue
@@ -778,7 +871,22 @@ class Library:
         art = _find_local_artwork(cue_path.parent)
         now = time.time()
         new_paths: set[str] = set()
-        image_duration = _audio_duration_seconds(cue_sheet.image_path)
+        image_duration: float | None = None
+        if cue_sheet.image_path is not None:
+            if isolate_metadata:
+                image_path = str(cue_sheet.image_path)
+                isolated = self._read_metadata_batch_isolated(
+                    [image_path],
+                    should_cancel=should_cancel,
+                )
+                if should_cancel is not None and should_cancel():
+                    return summary
+                image_meta = isolated.get(image_path)
+                if image_meta is not None:
+                    duration = float(image_meta.get("duration", 0.0) or 0.0)
+                    image_duration = duration if duration > 0 else None
+            else:
+                image_duration = _audio_duration_seconds(cue_sheet.image_path)
 
         with self._lock:
             for track in cue_sheet.tracks:
@@ -862,12 +970,6 @@ class Library:
         ``foo.cue::N`` strings that never exist on disk), so this method is the
         only path that cleans up CUE rows when either side of the pair vanishes.
         """
-        with self._lock:
-            rows = self.conn.execute(
-                "SELECT id, path, cue_image_path FROM tracks "
-                "WHERE media_type = 'cue_track'"
-            ).fetchall()
-
         # Cache existence checks per source file to avoid stat()ing the same
         # .cue or image once per virtual track.
         existence: dict[str, bool] = {}
@@ -881,24 +983,36 @@ class Library:
                 existence[p] = cached
             return cached
 
-        stale_ids: list[int] = []
-        for row in rows:
-            cue_path = None
-            sep = row["path"].rfind("::")
-            if sep > 0:
-                cue_path = row["path"][:sep]
-            if _missing(cue_path) or _missing(row["cue_image_path"]):
-                stale_ids.append(row["id"])
-
-        if not stale_ids:
-            return 0
-
-        with self._lock:
-            self.conn.executemany(
-                "DELETE FROM tracks WHERE id = ?", [(i,) for i in stale_ids]
-            )
-            self.conn.commit()
-        return len(stale_ids)
+        removed = 0
+        last_id = 0
+        while True:
+            with self._lock:
+                rows = self.conn.execute(
+                    """SELECT id, path, cue_image_path FROM tracks
+                       WHERE media_type = 'cue_track' AND id > ?
+                       ORDER BY id LIMIT ?""",
+                    (last_id, _PAGE_SIZE),
+                ).fetchall()
+            if not rows:
+                break
+            last_id = int(rows[-1]["id"])
+            existence.clear()
+            stale_ids: list[int] = []
+            for row in rows:
+                cue_path = None
+                sep = row["path"].rfind("::")
+                if sep > 0:
+                    cue_path = row["path"][:sep]
+                if _missing(cue_path) or _missing(row["cue_image_path"]):
+                    stale_ids.append(int(row["id"]))
+            if stale_ids:
+                with self._lock:
+                    self.conn.executemany(
+                        "DELETE FROM tracks WHERE id = ?", [(i,) for i in stale_ids]
+                    )
+                    self.conn.commit()
+                removed += len(stale_ids)
+        return removed
 
     def remove_path(self, path: str | os.PathLike, *, commit: bool = True) -> int:
         """Remove a library record for *path* without touching the filesystem."""
@@ -1071,6 +1185,59 @@ class Library:
                     FROM tracks {filter_sql}
                     GROUP BY a, display_album
                     ORDER BY a COLLATE NOCASE, display_album COLLATE NOCASE""",
+                params,
+            ).fetchall()
+        return [(r["a"], r["display_album"], r["art"]) for r in rows]
+
+    def albums_for_genre(
+        self,
+        genre: str,
+        media_type: str | None = None,
+    ) -> list[tuple[str, str, str | None]]:
+        """Return album summaries for a genre without materialising Track rows."""
+        media_sql = "" if media_type is None else "AND media_type = ?"
+        params = (genre,) if media_type is None else (genre, media_type)
+        with self._lock:
+            rows = self.conn.execute(
+                f"""SELECT {DISPLAY_ARTIST_SQL} AS a,
+                           {DISPLAY_ALBUM_SQL} AS display_album,
+                           MAX(artwork_path) AS art
+                    FROM tracks
+                    WHERE genre = ? {media_sql}
+                    GROUP BY a, display_album
+                    ORDER BY a COLLATE NOCASE, display_album COLLATE NOCASE""",
+                params,
+            ).fetchall()
+        return [(r["a"], r["display_album"], r["art"]) for r in rows]
+
+    def album_summaries_page(
+        self,
+        *,
+        limit: int,
+        offset: int = 0,
+        media_type: str | None = None,
+        genre: str | None = None,
+    ) -> list[tuple[str, str, str | None]]:
+        """Return a bounded page for the album-art grid."""
+        conditions: list[str] = []
+        params: list[object] = []
+        if media_type is not None:
+            conditions.append("media_type = ?")
+            params.append(media_type)
+        if genre is not None:
+            conditions.append("genre = ?")
+            params.append(genre)
+        where_sql = "WHERE " + " AND ".join(conditions) if conditions else ""
+        params.extend((max(1, int(limit)), max(0, int(offset))))
+        with self._lock:
+            rows = self.conn.execute(
+                f"""SELECT {DISPLAY_ARTIST_SQL} AS a,
+                           {DISPLAY_ALBUM_SQL} AS display_album,
+                           MAX(artwork_path) AS art
+                    FROM tracks {where_sql}
+                    GROUP BY a, display_album
+                    ORDER BY a COLLATE NOCASE, display_album COLLATE NOCASE
+                    LIMIT ? OFFSET ?""",
                 params,
             ).fetchall()
         return [(r["a"], r["display_album"], r["art"]) for r in rows]
@@ -1718,22 +1885,15 @@ class Library:
         return [(r["path"], int(r["id"])) for r in rows]
 
     def remove_missing(self) -> int:
-        with self._lock:
-            rows = self.conn.execute(
-                "SELECT id, path FROM tracks WHERE media_type != 'cue_track'"
-            ).fetchall()
-        # Path existence checks run outside the lock to avoid blocking queries.
-        missing_ids = [r["id"] for r in rows if not Path(r["path"]).exists()]
-        if not missing_ids:
-            return 0
-        with self._lock:
-            self.conn.executemany(
-                "DELETE FROM tracks WHERE id = ?", [(id_,) for id_ in missing_ids]
-            )
-            self.conn.commit()
-        return len(missing_ids)
+        return self._remove_missing_batched(existing_roots=None)
 
-    def remove_missing_under_existing_roots(self, roots: Iterable[str | os.PathLike]) -> int:
+    def remove_missing_under_existing_roots(
+        self,
+        roots: Iterable[str | os.PathLike],
+        *,
+        should_cancel: "Callable[[], bool] | None" = None,
+        on_progress: "Callable[[int, int, str], None] | None" = None,
+    ) -> int:
         """Remove missing rows only for library roots that are currently reachable."""
         existing_roots: list[str] = []
         for root in roots:
@@ -1746,31 +1906,73 @@ class Library:
         if not existing_roots:
             return 0
 
-        with self._lock:
-            rows = self.conn.execute(
-                "SELECT id, path FROM tracks WHERE media_type != 'cue_track'"
-            ).fetchall()
+        return self._remove_missing_batched(
+            existing_roots=existing_roots,
+            should_cancel=should_cancel,
+            on_progress=on_progress,
+        )
 
-        missing_ids: list[int] = []
-        for row in rows:
-            path = row["path"]
-            if Path(path).exists():
-                continue
-            try:
-                path_norm = os.path.normcase(os.path.abspath(path))
-                if any(os.path.commonpath([root, path_norm]) == root for root in existing_roots):
-                    missing_ids.append(row["id"])
-            except (OSError, ValueError):
-                continue
-
-        if not missing_ids:
-            return 0
-        with self._lock:
-            self.conn.executemany(
-                "DELETE FROM tracks WHERE id = ?", [(id_,) for id_ in missing_ids]
-            )
-            self.conn.commit()
-        return len(missing_ids)
+    def _remove_missing_batched(
+        self,
+        *,
+        existing_roots: list[str] | None,
+        should_cancel: "Callable[[], bool] | None" = None,
+        on_progress: "Callable[[int, int, str], None] | None" = None,
+    ) -> int:
+        """Prune missing paths in fixed-size pages instead of loading the library."""
+        removed = 0
+        checked = 0
+        last_id = 0
+        while True:
+            if should_cancel is not None and should_cancel():
+                break
+            with self._lock:
+                rows = self.conn.execute(
+                    """SELECT id, path FROM tracks
+                       WHERE media_type != 'cue_track' AND id > ?
+                       ORDER BY id LIMIT ?""",
+                    (last_id, _PAGE_SIZE),
+                ).fetchall()
+            if not rows:
+                break
+            last_id = int(rows[-1]["id"])
+            missing_ids: list[int] = []
+            current_path = ""
+            for row in rows:
+                if should_cancel is not None and should_cancel():
+                    break
+                current_path = str(row["path"])
+                checked += 1
+                if Path(current_path).exists():
+                    continue
+                if existing_roots is None:
+                    missing_ids.append(int(row["id"]))
+                    continue
+                try:
+                    path_norm = os.path.normcase(os.path.abspath(current_path))
+                    if any(
+                        os.path.commonpath([root, path_norm]) == root
+                        for root in existing_roots
+                    ):
+                        missing_ids.append(int(row["id"]))
+                except (OSError, ValueError):
+                    continue
+            if missing_ids:
+                with self._lock:
+                    self.conn.executemany(
+                        "DELETE FROM tracks WHERE id = ?",
+                        [(track_id,) for track_id in missing_ids],
+                    )
+                    self.conn.commit()
+                removed += len(missing_ids)
+            if on_progress is not None:
+                try:
+                    on_progress(checked, removed, current_path)
+                except Exception:  # noqa: BLE001 — pruning must survive status failures
+                    LOG.exception("Library prune progress callback failed")
+            if should_cancel is not None and should_cancel():
+                break
+        return removed
 
 
 def _row_to_track(r: sqlite3.Row) -> Track:
@@ -1913,11 +2115,19 @@ def _run_metadata_process(
     send_conn.close()
     payload: object = None
     received = False
+    deadline = time.monotonic() + min(
+        _METADATA_BATCH_TIMEOUT_MAX_SECONDS,
+        max(30.0, len(paths) * 0.5),
+    )
     try:
         while True:
             if should_cancel is not None and should_cancel():
                 process.terminate()
                 return {}
+            if time.monotonic() >= deadline:
+                LOG.error("Metadata parser timed out while reading %d files", len(paths))
+                process.terminate()
+                return None
             if recv_conn.poll(0.1):
                 try:
                     payload = recv_conn.recv()

@@ -73,6 +73,7 @@ from .transport_bar import TransportBar
 from .yt_download_dialog import YtDownloadDialog
 
 LOG = logging.getLogger(__name__)
+_WATCH_PATH_COLLAPSE_THRESHOLD = 5_000
 
 
 def _dlna_settings_signature(settings: Settings) -> tuple[object, ...]:
@@ -109,9 +110,28 @@ class _LibraryScanThread(QThread):
             def should_cancel() -> bool:
                 return self._cancel or self.isInterruptionRequested()
 
+            def prune_progress(checked: int, removed: int, current_path: str) -> None:
+                self.progress.emit(
+                    ScanProgress(
+                        phase="pruning",
+                        current_path=current_path,
+                        processed=checked,
+                        added=0,
+                        updated=0,
+                        unchanged=0,
+                        skipped=0,
+                        failed=0,
+                        recent=(),
+                    )
+                )
+
             summary = ScanSummary()
             summary.removed = (
-                self.library.remove_missing_under_existing_roots(self.roots)
+                self.library.remove_missing_under_existing_roots(
+                    self.roots,
+                    should_cancel=should_cancel,
+                    on_progress=prune_progress,
+                )
                 if self.prune and not should_cancel()
                 else 0
             )
@@ -179,6 +199,7 @@ class MainWindow(QMainWindow):
         self._scan_thread: _LibraryScanThread | None = None
         self._scan_latest_progress: ScanProgress | None = None
         self._scan_cancel_requested = False
+        self._scan_details_mode: str | None = None
         self._rg_scanner: ReplayGainScanner | None = None
         self._watch_index_thread: LibraryIndexThread | None = None
         self._library_watcher = LibraryFolderWatcher(self)
@@ -293,7 +314,7 @@ class MainWindow(QMainWindow):
         # ---- stacked content (order must match _TAB_ORDER)
         self.stack = QStackedWidget()
         self.library_view = LibraryView(self.library)
-        self._library_refresh_timer.timeout.connect(self.library_view.refresh)
+        self._library_refresh_timer.timeout.connect(self.library_view.refresh_after_scan)
         self._library_refresh_timer.timeout.connect(self._refresh_video_catalog_if_loaded)
 
         # Build tab bar + stack together so indices always match _TAB_ORDER.
@@ -1083,6 +1104,7 @@ class MainWindow(QMainWindow):
         self._scan_progress.setVisible(True)
         self._scan_cancel_requested = False
         self._scan_latest_progress = None
+        self._scan_details_mode = "scan"
         self._scan_details_title.setText("Library scan — starting")
         self._scan_details_counts.setText("0 files processed")
         self._scan_details_current.setText("Preparing library folders…")
@@ -1105,6 +1127,7 @@ class MainWindow(QMainWindow):
         self._scan_latest_progress = progress
         phase_label = {
             "starting": "starting",
+            "pruning": "checking existing library paths",
             "metadata": "reading metadata and artwork",
             "indexing": "indexing files",
             "cancelled": "cancelled",
@@ -1125,14 +1148,27 @@ class MainWindow(QMainWindow):
                 f"{result.status.upper():9} {result.path}{detail}"
             )
 
+    def _on_watch_progress(self, progress: object) -> None:
+        if not self._watch_index_sender_is_current():
+            return
+        if self._scan_details_mode == "watch":
+            self._on_scan_progress(progress)
+        elif isinstance(progress, ScanProgress):
+            self._scan_status_label.setText(
+                f"Updating library… {progress.processed:,} files"
+            )
+
     def _cancel_or_close_scan_details(self) -> None:
-        if self._thread_running(self._scan_thread):
+        worker = self._scan_thread if self._thread_running(self._scan_thread) else None
+        if worker is None and self._thread_running(self._watch_index_thread):
+            worker = self._watch_index_thread
+        if worker is not None:
             self._scan_cancel_requested = True
             self._scan_details_action.setEnabled(False)
             self._scan_details_title.setText("Library scan — cancelling…")
             self._scan_details_log.appendPlainText("CANCEL REQUESTED")
             try:
-                self._scan_thread.request_stop()
+                worker.request_stop()
             except RuntimeError:
                 pass
             return
@@ -1164,6 +1200,7 @@ class MainWindow(QMainWindow):
         else:
             self._scan_details_log.appendPlainText("COMPLETE")
             self._finish_scan_details("Library scan — complete")
+        self._scan_details_mode = None
         parts = [f"{label}: {n} new track{'' if n == 1 else 's'}"]
         if updated:
             parts.append(f"{updated} updated")
@@ -1184,7 +1221,7 @@ class MainWindow(QMainWindow):
         self.show_toast(message, level=toast_level, duration_ms=4000)
         try:
             self.dlna_server.invalidate_cache()
-            self.library_view.refresh()
+            self.library_view.refresh_after_scan()
             self._refresh_video_catalog_if_loaded()
         except Exception:  # noqa: BLE001 — a refresh failure must not poison scan state
             LOG.exception("Post-scan library refresh failed")
@@ -1197,6 +1234,7 @@ class MainWindow(QMainWindow):
         self._scan_cancel_requested = False
         self._scan_details_log.appendPlainText(f"FAILED — {error}")
         self._finish_scan_details("Library scan — failed")
+        self._scan_details_mode = None
         self.show_toast(f"{label} failed: {error}", level="error", duration_ms=6000)
 
     # ------------------------------------------------------------------ watched folders
@@ -1259,6 +1297,15 @@ class MainWindow(QMainWindow):
         if batch.is_empty() or not self.settings.watch_library_folders:
             return
         coalesce_batch(self._watch_pending, batch)
+        if len(self._watch_pending.changed_paths) > _WATCH_PATH_COLLAPSE_THRESHOLD:
+            # A bulk copy can generate one watchdog event per track.  Replace
+            # that unbounded set with a single safe root rescan; subsequent
+            # file events under the root are then discarded by coalesce_batch.
+            self._watch_pending.changed_paths.clear()
+            self._watch_pending.scan_roots.update(
+                path for path in self.settings.library_paths if path
+            )
+            coalesce_batch(self._watch_pending, WatchBatch())
         self._watch_debounce_timer.start()
 
     def _filter_watch_batch_to_current_roots(self, batch: WatchBatch) -> WatchBatch:
@@ -1334,6 +1381,7 @@ class MainWindow(QMainWindow):
             settle_ms=750,
             parent=self,
         )
+        self._watch_index_thread.progress.connect(self._on_watch_progress)
         self._watch_index_thread.finished_with.connect(self._on_watch_index_finished)
         self._watch_index_thread.failed_with.connect(self._on_watch_index_failed)
         self._watch_index_thread.finished.connect(self._watch_index_thread.deleteLater)
@@ -1348,6 +1396,15 @@ class MainWindow(QMainWindow):
         self._scan_status_label.setVisible(False)
         self._scan_status_label.setText("")
         self._scan_progress.setVisible(False)
+        if self._scan_details_mode == "watch":
+            if self._scan_cancel_requested:
+                self._scan_details_log.appendPlainText("CANCELLED; committed progress was kept.")
+                self._finish_scan_details("Library update — cancelled")
+            else:
+                self._scan_details_log.appendPlainText("COMPLETE")
+                self._finish_scan_details("Library update — complete")
+            self._scan_cancel_requested = False
+            self._scan_details_mode = None
         parts: list[str] = []
         if summary.added:
             parts.append(f"{summary.added} new")
@@ -1373,6 +1430,11 @@ class MainWindow(QMainWindow):
         self._scan_status_label.setVisible(False)
         self._scan_status_label.setText("")
         self._scan_progress.setVisible(False)
+        if self._scan_details_mode == "watch":
+            self._scan_details_log.appendPlainText(f"FAILED — {error}")
+            self._finish_scan_details("Library update — failed")
+            self._scan_cancel_requested = False
+            self._scan_details_mode = None
         self.show_toast(f"Library update failed: {error}", level="error", duration_ms=6000)
 
     def _watch_index_sender_is_current(self) -> bool:
@@ -2104,12 +2166,24 @@ class MainWindow(QMainWindow):
         self._scan_status_label.setText(f"{label}…")
         self._scan_status_label.setVisible(True)
         self._scan_progress.setVisible(True)
+        self._scan_latest_progress = None
+        self._scan_cancel_requested = False
+        self._scan_details_mode = "watch"
+        self._scan_details_title.setText(f"{label} — starting")
+        self._scan_details_counts.setText("0 files processed")
+        self._scan_details_current.setText("Preparing selected files…")
+        self._scan_details_log.clear()
+        self._scan_details_log.appendPlainText(f"FILES  {len(files):,} selected")
+        self._scan_details_action.setText("Cancel")
+        self._scan_details_action.setEnabled(True)
+        self._scan_details_panel.setVisible(True)
         self._watch_index_thread = LibraryIndexThread(
             self.library,
             WatchBatch(changed_paths=set(files)),
             settle_ms=0,
             parent=self,
         )
+        self._watch_index_thread.progress.connect(self._on_watch_progress)
         self._watch_index_thread.finished_with.connect(self._on_watch_index_finished)
         self._watch_index_thread.failed_with.connect(self._on_watch_index_failed)
         self._watch_index_thread.finished.connect(self._watch_index_thread.deleteLater)

@@ -1090,6 +1090,30 @@ def test_watched_indexing_waits_while_ripping(main_window, tmp_path, monkeypatch
         main_window._watch_debounce_timer.stop()
 
 
+def test_bulk_watch_events_collapse_to_bounded_root_rescan(main_window, tmp_path):
+    from lyon.core.library_watcher import WatchBatch
+    from lyon.ui import main_window as main_window_module
+
+    root = tmp_path / "Music"
+    root.mkdir()
+    main_window.settings.library_paths = [str(root)]
+    main_window.settings.watch_library_folders = True
+    batch = WatchBatch(
+        changed_paths={
+            str(root / f"track-{i:05d}.flac")
+            for i in range(main_window_module._WATCH_PATH_COLLAPSE_THRESHOLD + 1)
+        }
+    )
+
+    main_window._queue_library_watch_batch(batch)
+
+    try:
+        assert main_window._watch_pending.changed_paths == set()
+        assert main_window._watch_pending.scan_roots == {str(root)}
+    finally:
+        main_window._watch_debounce_timer.stop()
+
+
 def test_stale_watch_index_finish_does_not_clear_new_worker(main_window, monkeypatch):
     from lyon.core.library import ScanSummary
 

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -27,7 +27,7 @@ from PySide6.QtGui import (
     QColor,
     QDesktopServices,
     QIcon,
-    QImage,
+    QImageReader,
     QKeySequence,
     QPainter,
     QPixmap,
@@ -76,6 +76,7 @@ LOG = logging.getLogger(__name__)
 # Sentinel stored in Qt.UserRole on the synthetic "All Albums" album row.
 _ALL_ALBUMS_KEY = "__all_albums__"
 _ALL_GENRES_KEY = "__all_genres__"
+_LOAD_MORE_ALBUMS_KEY = "__load_more_albums__"
 
 # Sentinels for virtual collections shown at the top of the artist list.
 _RECENTLY_ADDED_KEY = "__recently_added__"
@@ -537,11 +538,24 @@ class _IdentifyTrackDialog(QDialog):
 
 _GRID_ICON_SIZE = 180
 _ART_CACHE_MAX = 200
+_ART_LOAD_CONCURRENCY = 4
+_MAX_ARTWORK_FILE_BYTES = 64 * 1024 * 1024
+_MAX_ARTWORK_PIXELS = 64_000_000
+_LARGE_LIBRARY_THRESHOLD = 10_000
+_UI_POPULATE_CHUNK = 500
+_GRID_ALBUM_PAGE_SIZE = 500
 
 
 class _ArtSignals(QObject):
     """Carries the result of a background artwork load back to the main thread."""
     loaded = Signal(int, str, object)   # (generation, art_path, QImage | None)
+
+
+class _ArtGenerationToken:
+    """Python-only generation state safe for workers after Qt widget teardown."""
+
+    def __init__(self) -> None:
+        self.value = 0
 
 
 class _ArtLoader(QRunnable):
@@ -568,26 +582,58 @@ class _ArtLoader(QRunnable):
         self._signals = signals
         self._get_gen = get_gen
 
+    def _emit(self, image: object) -> None:
+        try:
+            self._signals.loaded.emit(self._gen, self._art_path, image)
+        except RuntimeError:
+            # The window may be closing while an artwork job finishes.
+            pass
+
     def run(self) -> None:
         # Bail out immediately if the artist/genre selection has already changed.
         if self._get_gen() != self._gen:
+            self._emit(None)
             return
         try:
-            img = QImage(self._art_path)
+            try:
+                if Path(self._art_path).stat().st_size > _MAX_ARTWORK_FILE_BYTES:
+                    self._emit(None)
+                    return
+            except OSError:
+                self._emit(None)
+                return
+            reader = QImageReader(self._art_path)
+            source_size = reader.size()
+            if (
+                source_size.isValid()
+                and source_size.width() * source_size.height() > _MAX_ARTWORK_PIXELS
+            ):
+                self._emit(None)
+                return
+            if source_size.isValid():
+                reader.setScaledSize(
+                    source_size.scaled(
+                        _GRID_ICON_SIZE,
+                        _GRID_ICON_SIZE,
+                        Qt.KeepAspectRatio,
+                    )
+                )
+            img = reader.read()
             if img.isNull():
-                self._signals.loaded.emit(self._gen, self._art_path, None)
+                self._emit(None)
             else:
                 # Check again before the expensive scale step.
                 if self._get_gen() != self._gen:
+                    self._emit(None)
                     return
                 scaled = img.scaled(
                     _GRID_ICON_SIZE, _GRID_ICON_SIZE,
                     Qt.KeepAspectRatio, Qt.SmoothTransformation,
                 )
-                self._signals.loaded.emit(self._gen, self._art_path, scaled)
+                self._emit(scaled)
         except Exception as exc:
             LOG.debug("Could not load grid artwork %s: %s", self._art_path, exc)
-            self._signals.loaded.emit(self._gen, self._art_path, None)
+            self._emit(None)
 
 
 class LibraryView(QWidget):
@@ -612,9 +658,19 @@ class LibraryView(QWidget):
         # Album art grid async loading
         self._art_cache: OrderedDict[str, QPixmap] = OrderedDict()
         self._grid_gen: int = 0
+        self._art_generation = _ArtGenerationToken()
         self._grid_art_map: dict[str, list[QStandardItem]] = {}
+        self._grid_album_offset = 0
+        self._grid_album_genre: str | None = None
+        self._grid_album_has_more = False
+        self._art_pending: deque[tuple[int, str]] = deque()
+        self._art_active: set[tuple[int, str]] = set()
         self._art_signals = _ArtSignals(self)
         self._art_signals.loaded.connect(self._on_artwork_loaded)
+        self._populate_gen = 0
+        self._populate_timer = QTimer(self)
+        self._populate_timer.timeout.connect(self._populate_next_chunk)
+        self._populate_state: dict | None = None
 
         # ---- Top toolbar
         top = QHBoxLayout()
@@ -994,8 +1050,31 @@ class LibraryView(QWidget):
         self._show_videos = checked
         self.refresh()
 
-    def refresh(self) -> None:
-        has_tracks = bool(self._library_all_artists(self._media_type_filter))
+    def _library_has_tracks(self) -> bool:
+        fn = getattr(self.library, "count_tracks", None)
+        if callable(fn):
+            try:
+                return fn(self._media_type_filter) > 0
+            except TypeError:
+                return fn() > 0
+        return bool(self._library_all_artists(self._media_type_filter))
+
+    def _is_large_library(self) -> bool:
+        fn = getattr(self.library, "count_tracks", None)
+        if not callable(fn):
+            return False
+        try:
+            return fn(self._media_type_filter) >= _LARGE_LIBRARY_THRESHOLD
+        except TypeError:
+            return fn() >= _LARGE_LIBRARY_THRESHOLD
+
+    def refresh_after_scan(self) -> None:
+        """Refresh models without one huge GUI-thread allocation burst."""
+        self.refresh(chunked=self._is_large_library())
+
+    def refresh(self, *, chunked: bool = False) -> None:
+        self._cancel_populate()
+        has_tracks = self._library_has_tracks()
         active_pl = self._active_playlist_id
         self._refresh_playlists()
 
@@ -1022,11 +1101,12 @@ class LibraryView(QWidget):
             # Preserve view mode across refresh
             current_page = self._browser_stack.currentIndex()
             self._browser_stack.setCurrentIndex(max(1, current_page))
-            self._refresh_artists()
-            if self._browser_stack.currentIndex() == 2:
+            if self._browser_stack.currentIndex() == 1:
+                self._refresh_artists(chunked=chunked)
+            elif self._browser_stack.currentIndex() == 2:
                 self._refresh_grid_albums()
             elif self._browser_stack.currentIndex() == 3:
-                self._sv_refresh_artists()
+                self._sv_refresh_artists(chunked=chunked)
         else:
             self._browser_stack.setCurrentIndex(0)
             self.artists_model.clear()
@@ -1044,7 +1124,57 @@ class LibraryView(QWidget):
                 self._clear_tracks_model()
                 self._update_footer()
 
-    def _refresh_artists(self) -> None:
+    def _cancel_populate(self) -> None:
+        self._populate_gen += 1
+        self._populate_timer.stop()
+        self._populate_state = None
+
+    def _start_artist_populate(
+        self,
+        list_view: QListView,
+        model: QStandardItemModel,
+        virtual_count: int,
+        artists: list[str],
+    ) -> None:
+        self._cancel_populate()
+        self._populate_gen += 1
+        self._populate_state = {
+            "gen": self._populate_gen,
+            "list_view": list_view,
+            "model": model,
+            "virtual_count": virtual_count,
+            "artists": artists,
+            "offset": 0,
+        }
+        self._populate_timer.start(0)
+
+    def _populate_next_chunk(self) -> None:
+        state = self._populate_state
+        if state is None or state["gen"] != self._populate_gen:
+            self._populate_timer.stop()
+            return
+        artists: list[str] = state["artists"]
+        offset: int = state["offset"]
+        end = min(offset + _UI_POPULATE_CHUNK, len(artists))
+        model: QStandardItemModel = state["model"]
+        for name in artists[offset:end]:
+            item = QStandardItem(name)
+            item.setData(name, Qt.UserRole)
+            model.appendRow(item)
+        state["offset"] = end
+        if end < len(artists):
+            self._populate_timer.start(0)
+            return
+        self._populate_timer.stop()
+        self._populate_state = None
+        list_view: QListView = state["list_view"]
+        virtual_count: int = state["virtual_count"]
+        if artists:
+            list_view.setCurrentIndex(model.index(virtual_count, 0))
+        elif model.rowCount():
+            list_view.setCurrentIndex(model.index(0, 0))
+
+    def _refresh_artists(self, *, chunked: bool = False) -> None:
         """Repopulate artist list filtered by current genre selection."""
         genre_idx = self.genres.currentIndex()
         genre_key = genre_idx.data(Qt.UserRole) if genre_idx.isValid() else _ALL_GENRES_KEY
@@ -1061,6 +1191,14 @@ class LibraryView(QWidget):
                 item.setFont(fnt)
                 self.artists_model.appendRow(item)
             real_artists = self._library_all_artists(self._media_type_filter, genre=genre)
+            if chunked and len(real_artists) > _UI_POPULATE_CHUNK:
+                self._start_artist_populate(
+                    self.artists,
+                    self.artists_model,
+                    len(virtual_collections),
+                    real_artists,
+                )
+                return
             for a in real_artists:
                 it = QStandardItem(a)
                 it.setData(a, Qt.UserRole)
@@ -1089,9 +1227,12 @@ class LibraryView(QWidget):
         self._clear_playlist_selection()
         self._grid_gen += 1
         gen = self._grid_gen
+        self._art_generation.value = gen
+        self._art_pending.clear()
         self._grid_art_map = {}
         virtual_key = None
         should_refresh_tracks = False
+        pool = QThreadPool.globalInstance()
 
         with _blocked_selection_signals(self.albums):
             self.albums_model.clear()
@@ -1116,7 +1257,6 @@ class LibraryView(QWidget):
                     font.setItalic(True)
                     all_item.setFont(font)
                     self.albums_model.appendRow(all_item)
-                pool = QThreadPool.globalInstance()
                 for album, _art in albums:
                     it = QStandardItem(album)
                     it.setData(album, Qt.UserRole)
@@ -1132,9 +1272,7 @@ class LibraryView(QWidget):
                         first = _art not in self._grid_art_map
                         self._grid_art_map.setdefault(_art, []).append(it)
                         if first:
-                            pool.start(
-                                _ArtLoader(gen, _art, self._art_signals, lambda: self._grid_gen)
-                            )
+                            self._art_pending.append((gen, _art))
                 if self.albums_model.rowCount():
                     self.albums.setCurrentIndex(self.albums_model.index(0, 0))
                     should_refresh_tracks = True
@@ -1142,6 +1280,8 @@ class LibraryView(QWidget):
                     self._current_tracks = []
                     self._clear_tracks_model()
                     self._update_footer()
+
+        self._pump_artwork_loads(pool)
 
         if virtual_key is not None:
             self._populate_virtual_collection(virtual_key)
@@ -1189,8 +1329,10 @@ class LibraryView(QWidget):
                 self._list_mode_btn.blockSignals(False)
             return
         self._set_view_mode_checked(self._list_mode_btn)
-        has_tracks = bool(self._library_all_artists(self._media_type_filter))
+        has_tracks = self._library_has_tracks()
         self._browser_stack.setCurrentIndex(1 if has_tracks else 0)
+        if has_tracks:
+            self._refresh_artists(chunked=self._is_large_library())
 
     def _on_view_mode_toggled(self, checked: bool) -> None:
         if not checked:
@@ -1220,32 +1362,55 @@ class LibraryView(QWidget):
             return
         self._set_view_mode_checked(self._simple_mode_btn)
         self._browser_stack.setCurrentIndex(3)
-        self._sv_refresh_artists()
+        self._sv_refresh_artists(chunked=self._is_large_library())
 
     def _refresh_grid_albums(self) -> None:
         """Populate the album art grid for the selected genre (artwork loads asynchronously)."""
         self._grid_gen += 1
         gen = self._grid_gen
+        self._art_generation.value = gen
+        self._art_pending.clear()
         self._grid_art_map = {}
         self._grid_albums_model.clear()
 
         genre_idx = self._grid_genres.currentIndex()
         genre_key = genre_idx.data(Qt.UserRole) if genre_idx.isValid() else _ALL_GENRES_KEY
         genre = None if genre_key == _ALL_GENRES_KEY else genre_key
+        self._grid_album_offset = 0
+        self._grid_album_genre = genre
+        self._grid_album_has_more = False
 
+        if self._is_large_library() and callable(
+            getattr(self.library, "album_summaries_page", None)
+        ):
+            self._load_next_grid_album_page()
+            return
         if genre is None:
             albums = self._library_all_albums(self._media_type_filter)
         else:
-            tracks = self.library.tracks_for_genre(genre, self._media_type_filter)
-            seen: set[tuple[str, str]] = set()
-            albums = []
-            for t in tracks:
-                key_t = (t.display_artist, t.display_album)
-                if key_t not in seen:
-                    seen.add(key_t)
-                    albums.append((t.display_artist, t.display_album, t.artwork_path))
+            albums_fn = getattr(self.library, "albums_for_genre", None)
+            if callable(albums_fn):
+                albums = albums_fn(genre, self._media_type_filter)
+            else:
+                tracks = self.library.tracks_for_genre(genre, self._media_type_filter)
+                seen: set[tuple[str, str]] = set()
+                albums = []
+                for track in tracks:
+                    key_t = (track.display_artist, track.display_album)
+                    if key_t not in seen:
+                        seen.add(key_t)
+                        albums.append(
+                            (track.display_artist, track.display_album, track.artwork_path)
+                        )
 
-        pool = QThreadPool.globalInstance()
+        self._append_grid_album_items(gen, albums)
+        self._pump_artwork_loads()
+
+    def _append_grid_album_items(
+        self,
+        gen: int,
+        albums: list[tuple[str, str, str | None]],
+    ) -> None:
         for artist, album, art in albums:
             it = QStandardItem(QIcon(), f"{album}\n{artist}")
             it.setData((artist, album), Qt.UserRole)
@@ -1260,9 +1425,54 @@ class LibraryView(QWidget):
                 first = art not in self._grid_art_map
                 self._grid_art_map.setdefault(art, []).append(it)
                 if first:
-                    pool.start(_ArtLoader(gen, art, self._art_signals, lambda: self._grid_gen))
+                    self._art_pending.append((gen, art))
+
+    def _load_next_grid_album_page(self) -> None:
+        page_fn = getattr(self.library, "album_summaries_page", None)
+        if not callable(page_fn):
+            return
+        if self._grid_albums_model.rowCount():
+            last_row = self._grid_albums_model.rowCount() - 1
+            last = self._grid_albums_model.item(last_row)
+            if last is not None and last.data(Qt.UserRole) == _LOAD_MORE_ALBUMS_KEY:
+                self._grid_albums_model.removeRow(last_row)
+        page = page_fn(
+            limit=_GRID_ALBUM_PAGE_SIZE + 1,
+            offset=self._grid_album_offset,
+            media_type=self._media_type_filter,
+            genre=self._grid_album_genre,
+        )
+        albums = list(page[:_GRID_ALBUM_PAGE_SIZE])
+        self._grid_album_offset += len(albums)
+        self._grid_album_has_more = len(page) > _GRID_ALBUM_PAGE_SIZE
+        self._append_grid_album_items(self._grid_gen, albums)
+        if self._grid_album_has_more:
+            more = QStandardItem("Load more albums…")
+            more.setData(_LOAD_MORE_ALBUMS_KEY, Qt.UserRole)
+            more.setTextAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
+            self._grid_albums_model.appendRow(more)
+        self._pump_artwork_loads()
+
+    def _pump_artwork_loads(self, pool: QThreadPool | None = None) -> None:
+        pool = pool or QThreadPool.globalInstance()
+        while self._art_pending and len(self._art_active) < _ART_LOAD_CONCURRENCY:
+            gen, art_path = self._art_pending.popleft()
+            key = (gen, art_path)
+            if key in self._art_active:
+                continue
+            self._art_active.add(key)
+            pool.start(
+                _ArtLoader(
+                    gen,
+                    art_path,
+                    self._art_signals,
+                    lambda token=self._art_generation: token.value,
+                )
+            )
 
     def _on_artwork_loaded(self, gen: int, art_path: str, img: object) -> None:
+        self._art_active.discard((gen, art_path))
+        self._pump_artwork_loads()
         if gen != self._grid_gen:
             return
         pm: QPixmap | None = None
@@ -1282,6 +1492,9 @@ class LibraryView(QWidget):
 
     def _on_grid_album_activated(self, index: QModelIndex) -> None:
         data = index.data(Qt.UserRole)
+        if data == _LOAD_MORE_ALBUMS_KEY:
+            self._load_next_grid_album_page()
+            return
         if not isinstance(data, tuple) or len(data) != 2:
             return
         artist, album = data
@@ -1291,10 +1504,19 @@ class LibraryView(QWidget):
         self._navigate_to_album(artist, album)
 
     # ------------------------------------------------------------------ simple view
-    def _sv_refresh_artists(self) -> None:
+    def _sv_refresh_artists(self, *, chunked: bool = False) -> None:
         with _blocked_selection_signals(self._sv_artists):
             self._sv_artists_model.clear()
-            for a in self._library_all_artists(self._media_type_filter):
+            artists = self._library_all_artists(self._media_type_filter)
+            if chunked and len(artists) > _UI_POPULATE_CHUNK:
+                self._start_artist_populate(
+                    self._sv_artists,
+                    self._sv_artists_model,
+                    0,
+                    artists,
+                )
+                return
+            for a in artists:
                 it = QStandardItem(a)
                 it.setData(a, Qt.UserRole)
                 self._sv_artists_model.appendRow(it)

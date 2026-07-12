@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 LOG = logging.getLogger(__name__)
+_MAX_CUE_BYTES = 8 * 1024 * 1024
+_MAX_CUE_TEXT_LENGTH = 4096
 
 
 @dataclass
@@ -40,8 +42,8 @@ def _parse_sectors(time_str: str) -> int:
 def _unquote(s: str) -> str:
     s = s.strip()
     if len(s) >= 2 and s[0] == '"' and s[-1] == '"':
-        return s[1:-1]
-    return s
+        s = s[1:-1]
+    return s[:_MAX_CUE_TEXT_LENGTH]
 
 
 def parse_cue(cue_path: Path) -> CueSheet | None:
@@ -51,6 +53,9 @@ def parse_cue(cue_path: Path) -> CueSheet | None:
     only tracks covered by the first FILE entry are returned.
     """
     try:
+        if cue_path.stat().st_size > _MAX_CUE_BYTES:
+            LOG.warning("Skipping oversized CUE sheet %s", cue_path)
+            return None
         text = cue_path.read_text(encoding="utf-8-sig")
     except UnicodeDecodeError:
         try:

@@ -13,10 +13,17 @@ from lyon.core.library import Track
 from lyon.ui import library_view as library_view_module
 from lyon.ui.library_view import (
     _ALL_ALBUMS_KEY,
+    _ART_LOAD_CONCURRENCY,
     _COL_TITLE,
+    _GRID_ALBUM_PAGE_SIZE,
+    _LOAD_MORE_ALBUMS_KEY,
+    _MAX_ARTWORK_FILE_BYTES,
     _NUM_COLS,
     _PLAYING_GLYPH,
+    _UI_POPULATE_CHUNK,
     LibraryView,
+    _ArtLoader,
+    _ArtSignals,
 )
 
 
@@ -461,3 +468,112 @@ def test_fetch_album_metadata_reports_dialog_start_failure(view, monkeypatch):
     view._fetch_album_metadata("Alpha Band", "First Album")
 
     assert messages[-1] == "Metadata fetch could not be started."
+
+
+def test_refresh_after_scan_requests_chunked_models_for_large_library(view, monkeypatch):
+    calls: list[bool] = []
+    monkeypatch.setattr(view, "_is_large_library", lambda: True)
+    monkeypatch.setattr(
+        view,
+        "refresh",
+        lambda *, chunked=False: calls.append(chunked),
+    )
+
+    view.refresh_after_scan()
+
+    assert calls == [True]
+
+
+def test_chunked_artist_population_yields_between_fixed_size_batches(view, monkeypatch):
+    artists = [f"Artist {i:04d}" for i in range(_UI_POPULATE_CHUNK + 25)]
+    monkeypatch.setattr(view, "_library_all_artists", lambda *_args, **_kwargs: artists)
+
+    view._refresh_artists(chunked=True)
+
+    assert view._populate_state is not None
+    assert view._populate_state["offset"] == 0
+    view._populate_next_chunk()
+    assert view._populate_state is not None
+    assert view._populate_state["offset"] == _UI_POPULATE_CHUNK
+    view._populate_next_chunk()
+    assert view._populate_state is None
+
+
+def test_large_library_grid_loads_bounded_album_pages(view, monkeypatch):
+    albums = [
+        (f"Artist {i}", f"Album {i}", None)
+        for i in range(_GRID_ALBUM_PAGE_SIZE + 1)
+    ]
+    calls = []
+
+    def page(**kwargs):
+        calls.append(kwargs)
+        offset = kwargs["offset"]
+        return albums[offset:offset + kwargs["limit"]]
+
+    monkeypatch.setattr(view, "_is_large_library", lambda: True)
+    monkeypatch.setattr(view.library, "album_summaries_page", page, raising=False)
+    view._grid_genres.setCurrentIndex(view.genres_model.index(0, 0))
+
+    view._refresh_grid_albums()
+
+    assert view._grid_albums_model.rowCount() == _GRID_ALBUM_PAGE_SIZE + 1
+    load_more = view._grid_albums_model.item(_GRID_ALBUM_PAGE_SIZE)
+    assert load_more.data(QtCore.Qt.UserRole) == _LOAD_MORE_ALBUMS_KEY
+    view._on_grid_album_activated(load_more.index())
+    assert view._grid_albums_model.rowCount() == _GRID_ALBUM_PAGE_SIZE + 1
+    assert calls == [
+        {
+            "limit": _GRID_ALBUM_PAGE_SIZE + 1,
+            "offset": 0,
+            "media_type": "audio",
+            "genre": None,
+        },
+        {
+            "limit": _GRID_ALBUM_PAGE_SIZE + 1,
+            "offset": _GRID_ALBUM_PAGE_SIZE,
+            "media_type": "audio",
+            "genre": None,
+        },
+    ]
+
+
+def test_grid_artwork_submissions_are_bounded(view, monkeypatch):
+    albums = [
+        (f"Artist {i}", f"Album {i}", f"/art/cover-{i}.jpg")
+        for i in range(50)
+    ]
+    monkeypatch.setattr(view, "_is_large_library", lambda: False)
+    monkeypatch.setattr(view, "_library_all_albums", lambda *_args: albums)
+    monkeypatch.setattr(view, "_pump_artwork_loads", lambda *_args, **_kwargs: None)
+    view._art_active.clear()
+
+    view._refresh_grid_albums()
+
+    assert len(view._art_pending) == 50
+
+    class RecordingPool:
+        def __init__(self):
+            self.tasks = []
+
+        def start(self, task):
+            self.tasks.append(task)
+
+    pool = RecordingPool()
+    LibraryView._pump_artwork_loads(view, pool)
+
+    assert len(pool.tasks) == _ART_LOAD_CONCURRENCY
+    assert len(view._art_pending) == 50 - _ART_LOAD_CONCURRENCY
+
+
+def test_art_loader_rejects_oversized_cover_before_decode(app, tmp_path):
+    cover = tmp_path / "oversized.jpg"
+    with cover.open("wb") as stream:
+        stream.truncate(_MAX_ARTWORK_FILE_BYTES + 1)
+    signals = _ArtSignals()
+    loaded = []
+    signals.loaded.connect(lambda gen, path, image: loaded.append((gen, path, image)))
+
+    _ArtLoader(7, str(cover), signals, lambda: 7).run()
+
+    assert loaded == [(7, str(cover), None)]

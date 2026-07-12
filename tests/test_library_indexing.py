@@ -324,6 +324,44 @@ def test_resource_safe_scan_uses_real_spawned_metadata_parser(tmp_path):
         library.close()
 
 
+def test_resource_safe_scan_isolates_cue_image_metadata(tmp_path, monkeypatch):
+    root = tmp_path / "Music"
+    root.mkdir()
+    image = root / "album-image.bin"
+    image.write_bytes(b"image")
+    cue = root / "album.cue"
+    cue.write_text(
+        'FILE "album-image.bin" WAVE\n'
+        '  TRACK 01 AUDIO\n'
+        '    TITLE "Song"\n'
+        '    INDEX 01 00:00:00\n',
+        encoding="utf-8",
+    )
+    library = Library(tmp_path / "library.db")
+    isolated_calls: list[list[str]] = []
+
+    def isolated_reader(paths, **_kwargs):
+        isolated_calls.append(list(paths))
+        return {str(image.resolve()): {"duration": 120.0}}
+
+    monkeypatch.setattr(library, "_read_metadata_batch_isolated", isolated_reader)
+    monkeypatch.setattr(
+        library_module,
+        "_audio_duration_seconds",
+        lambda _path: (_ for _ in ()).throw(
+            AssertionError("CUE duration must not be parsed in the scan worker")
+        ),
+    )
+    try:
+        summary = library.scan_paths_summary([root], isolate_metadata=True)
+
+        assert summary.added == 1
+        assert isolated_calls == [[str(image.resolve())]]
+        assert next(library.all_tracks()).duration == 120.0
+    finally:
+        library.close()
+
+
 def test_move_path_preserves_playlist_membership_and_rating(tmp_path, monkeypatch):
     monkeypatch.setattr(
         library_module,
@@ -470,6 +508,63 @@ def test_scan_prune_ignores_missing_files_under_offline_roots(tmp_path):
         library.close()
 
 
+def test_scan_prune_pages_through_large_library_and_reports_progress(tmp_path):
+    mounted_root = tmp_path / "Mounted"
+    mounted_root.mkdir()
+    library = Library(tmp_path / "library.db")
+    try:
+        library.conn.executemany(
+            """INSERT INTO tracks
+               (path, title, artist, album_artist, album, track_no, disc_no, year,
+                genre, duration, bitrate, samplerate)
+               VALUES (?, 'Missing', '', '', '', 1, 1, 0, '', 1, 1, 1)""",
+            [(str(mounted_root / f"missing-{i:04d}.flac"),) for i in range(1_201)],
+        )
+        library.commit()
+        progress: list[tuple[int, int, str]] = []
+
+        removed = library.remove_missing_under_existing_roots(
+            [mounted_root],
+            on_progress=lambda checked, count, path: progress.append(
+                (checked, count, path)
+            ),
+        )
+
+        assert removed == 1_201
+        assert [checked for checked, _removed, _path in progress] == [500, 1_000, 1_201]
+        assert library.count_tracks() == 0
+    finally:
+        library.close()
+
+
+def test_hot_path_track_lookup_selects_only_indexing_columns(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        library_module,
+        "MutagenFile",
+        lambda path, **_kwargs: _FakeAudio(Path(path).stem),
+    )
+    path = tmp_path / "song.flac"
+    _set_file_state(path, b"one", 1_700_000_000_000_000_000)
+    library = Library(tmp_path / "library.db")
+    try:
+        assert library.index_file(path).status == "added"
+        row = library._track_row_for_path(str(path))
+
+        assert row is not None
+        assert set(row.keys()) == {
+            "id",
+            "file_size",
+            "file_mtime_ns",
+            "disc_id",
+            "file_hash",
+            "acoustid_id",
+            "media_type",
+            "scan_error",
+        }
+    finally:
+        library.close()
+
+
 def test_watch_batch_coalesces_duplicate_and_conflicting_events():
     target = WatchBatch(changed_paths={"/music/a.flac"})
     coalesce_batch(target, WatchBatch(deleted_paths={"/music/a.flac"}))
@@ -566,6 +661,11 @@ def test_library_index_thread_applies_watched_folder_batch(tmp_path, monkeypatch
     path = tmp_path / "song.flac"
     _set_file_state(path, b"one", 1_700_000_000_000_000_000)
     library = Library(tmp_path / "library.db")
+    monkeypatch.setattr(
+        library,
+        "_read_metadata_batch_isolated",
+        lambda paths, **_kwargs: {path: library_module._read_tags(path) for path in paths},
+    )
     try:
         batch = WatchBatch(changed_paths={str(path)})
         worker = LibraryIndexThread(library, batch, settle_ms=0)
@@ -579,6 +679,56 @@ def test_library_index_thread_applies_watched_folder_batch(tmp_path, monkeypatch
         worker.run()
 
         assert list(library.all_tracks()) == []
+    finally:
+        library.close()
+
+
+def test_library_index_thread_isolates_metadata_for_mass_file_events(tmp_path, monkeypatch):
+    library = Library(tmp_path / "library.db")
+    calls = []
+
+    def record_index(paths, **kwargs):
+        calls.append((list(paths), kwargs))
+        return library_module.ScanSummary(added=2)
+
+    monkeypatch.setattr(library, "index_files_summary", record_index)
+    try:
+        worker = LibraryIndexThread(
+            library,
+            WatchBatch(changed_paths={"/music/a.flac", "/music/b.flac"}),
+            settle_ms=0,
+        )
+        worker.run()
+
+        assert calls[0][0] == ["/music/a.flac", "/music/b.flac"]
+        assert calls[0][1]["isolate_metadata"] is True
+        assert callable(calls[0][1]["on_progress"])
+    finally:
+        library.close()
+
+
+def test_library_index_thread_isolates_metadata_for_folder_rescan(tmp_path, monkeypatch):
+    root = tmp_path / "Music"
+    root.mkdir()
+    library = Library(tmp_path / "library.db")
+    calls = []
+
+    def record_scan(roots, **kwargs):
+        calls.append((list(roots), kwargs))
+        return library_module.ScanSummary()
+
+    monkeypatch.setattr(library, "scan_paths_summary", record_scan)
+    try:
+        worker = LibraryIndexThread(
+            library,
+            WatchBatch(scan_roots={str(root)}),
+            settle_ms=0,
+        )
+        worker.run()
+
+        assert calls[0][0] == [str(root)]
+        assert calls[0][1]["isolate_metadata"] is True
+        assert callable(calls[0][1]["on_progress"])
     finally:
         library.close()
 
@@ -671,6 +821,11 @@ def test_artwork_folder_scan_forces_unchanged_media_refresh(tmp_path, monkeypatc
     _set_file_state(media, b"one", 1_700_000_000_000_000_000)
 
     library = Library(tmp_path / "library.db")
+    monkeypatch.setattr(
+        library,
+        "_read_metadata_batch_isolated",
+        lambda paths, **_kwargs: {path: library_module._read_tags(path) for path in paths},
+    )
     try:
         assert library.index_file(media).status == "added"
         library.commit()
