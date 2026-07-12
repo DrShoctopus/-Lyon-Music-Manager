@@ -468,6 +468,49 @@ def test_initial_refresh_chunks_large_library_artist_models(app, monkeypatch):
     assert view._populate_state["artists"] == list(artists)
 
 
+def test_initial_refresh_pages_real_large_library_without_full_artist_query(
+    app, monkeypatch
+):
+    artists = [f"Artist {i:04d}" for i in range(_UI_POPULATE_CHUNK + 25)]
+    library = FakeLibrary({
+        name: {"Album": [_track(i + 1, "Song", name, "Album")]}
+        for i, name in enumerate(artists)
+    })
+    page_calls: list[tuple[int, int, str | None, str | None]] = []
+
+    library.count_tracks = lambda _media=None: len(artists)
+
+    def artist_names_page(*, limit, offset, media_type=None, genre=None):
+        page_calls.append((limit, offset, media_type, genre))
+        return artists[offset:offset + limit]
+
+    def full_query_must_not_run(*_args, **_kwargs):
+        raise AssertionError("large-library startup must not load every artist")
+
+    library.artist_names_page = artist_names_page
+    library.all_artists = full_query_must_not_run
+    monkeypatch.setattr(LibraryView, "_is_large_library", lambda _self: True)
+
+    view = LibraryView(library)
+
+    virtual_count = len(view._available_virtual_collections())
+    assert view._populate_state is None
+    assert view.artists_model.rowCount() == virtual_count + _UI_POPULATE_CHUNK
+    assert page_calls == [(_UI_POPULATE_CHUNK + 1, 0, "audio", None)]
+    assert view.artists_model.canFetchMore()
+
+    view.artists_model.fetchMore()
+
+    assert view.artists_model.rowCount() == virtual_count + len(artists)
+    assert page_calls[-1] == (
+        _UI_POPULATE_CHUNK + 1,
+        _UI_POPULATE_CHUNK,
+        "audio",
+        None,
+    )
+    assert not view.artists_model.canFetchMore()
+
+
 def test_chunked_artist_population_yields_between_fixed_size_batches(view, monkeypatch):
     artists = [f"Artist {i:04d}" for i in range(_UI_POPULATE_CHUNK + 25)]
     monkeypatch.setattr(view, "_library_all_artists", lambda *_args, **_kwargs: artists)

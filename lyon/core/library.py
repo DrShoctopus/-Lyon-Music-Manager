@@ -1159,6 +1159,35 @@ class Library:
             ).fetchall()
         return [r["a"] for r in rows]
 
+    def artist_names_page(
+        self,
+        *,
+        limit: int,
+        offset: int = 0,
+        media_type: str | None = None,
+        genre: str | None = None,
+    ) -> list[str]:
+        """Return one bounded page of display artists for virtualized UI models."""
+        conditions: list[str] = []
+        params: list[object] = []
+        if media_type is not None:
+            conditions.append("media_type = ?")
+            params.append(media_type)
+        if genre is not None:
+            conditions.append("genre = ?")
+            params.append(genre)
+        where_sql = "WHERE " + " AND ".join(conditions) if conditions else ""
+        params.extend((max(1, int(limit)), max(0, int(offset))))
+        with self._lock:
+            rows = self.conn.execute(
+                f"""SELECT DISTINCT {DISPLAY_ARTIST_SQL} AS a
+                    FROM tracks {where_sql}
+                    ORDER BY a COLLATE NOCASE
+                    LIMIT ? OFFSET ?""",
+                params,
+            ).fetchall()
+        return [r["a"] for r in rows]
+
     def albums_for_artist(
         self, artist: str, media_type: str | None = None
     ) -> list[tuple[str, str | None]]:

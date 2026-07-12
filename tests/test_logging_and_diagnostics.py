@@ -81,6 +81,26 @@ def test_configure_logging_sets_root_to_info(clean_root_logger):
     assert logging.getLogger().level == logging.INFO
 
 
+def test_native_fault_logging_uses_dedicated_persistent_file(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        app_module.faulthandler,
+        "enable",
+        lambda *, file, all_threads: calls.append((file.name, all_threads)),
+    )
+    monkeypatch.setattr(app_module.faulthandler, "disable", lambda: None)
+    app_module._NATIVE_FAULT_LOG_STREAM = None
+
+    try:
+        app_module._configure_native_fault_logging()
+
+        fault_path = settings.app_data_dir() / "logs" / "native-fault.log"
+        assert calls == [(str(fault_path), True)]
+        assert "startup" in fault_path.read_text(encoding="utf-8")
+    finally:
+        app_module._close_native_fault_logging()
+
+
 def test_excepthook_logs_uncaught_exception(clean_root_logger, monkeypatch):
     app_module._configure_logging()
     app_module._install_excepthooks()
@@ -134,6 +154,17 @@ def test_collect_diagnostics_bundle_embeds_log_tail(clean_root_logger):
     bundle = diagnostics.collect_diagnostics_bundle()
 
     assert "UNIQUE-MARKER-IN-LOG" in bundle
+
+
+def test_collect_diagnostics_bundle_embeds_native_fault_tail():
+    fault_path = settings.app_data_dir() / "logs" / "native-fault.log"
+    fault_path.parent.mkdir(parents=True, exist_ok=True)
+    fault_path.write_text("NATIVE-FAULT-MARKER", encoding="utf-8")
+
+    bundle = diagnostics.collect_diagnostics_bundle()
+
+    assert "native-fault.log (tail)" in bundle
+    assert "NATIVE-FAULT-MARKER" in bundle
 
 
 def test_collect_diagnostics_bundle_caps_log_tail(monkeypatch, tmp_path):

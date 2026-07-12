@@ -1,11 +1,13 @@
 """Application entry point."""
 from __future__ import annotations
 
+import faulthandler
 import logging
 import logging.handlers
 import sys
 import threading
 import traceback
+from datetime import datetime, timezone
 from pathlib import Path
 from types import TracebackType
 from typing import Any
@@ -24,6 +26,7 @@ LOG = logging.getLogger(__name__)
 _LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 _LOG_MAX_BYTES = 10 * 1024 * 1024  # 10 MB
 _LOG_BACKUP_COUNT = 5
+_NATIVE_FAULT_LOG_STREAM: Any | None = None
 
 
 def _logs_dir() -> Path:
@@ -65,6 +68,36 @@ def _configure_logging() -> None:
     root.addHandler(stderr_handler)
 
 
+def _configure_native_fault_logging() -> None:
+    """Capture native Qt/Python faults that bypass normal exception logging."""
+    global _NATIVE_FAULT_LOG_STREAM
+    if _NATIVE_FAULT_LOG_STREAM is not None:
+        return
+    try:
+        stream = (_logs_dir() / "native-fault.log").open("a", encoding="utf-8")
+        stream.write(
+            "\n--- startup "
+            f"{datetime.now(timezone.utc).isoformat(timespec='seconds')} ---\n"
+        )
+        stream.flush()
+        faulthandler.enable(file=stream, all_threads=True)
+        _NATIVE_FAULT_LOG_STREAM = stream
+    except (OSError, RuntimeError) as exc:
+        LOG.warning("Could not enable native fault logging: %s", exc)
+
+
+def _close_native_fault_logging() -> None:
+    global _NATIVE_FAULT_LOG_STREAM
+    stream = _NATIVE_FAULT_LOG_STREAM
+    _NATIVE_FAULT_LOG_STREAM = None
+    if stream is None:
+        return
+    try:
+        faulthandler.disable()
+    finally:
+        stream.close()
+
+
 def _install_excepthooks() -> None:
     """Route uncaught exceptions through the logging system before defaulting."""
     original_excepthook = sys.excepthook
@@ -102,6 +135,7 @@ def _install_excepthooks() -> None:
 def main() -> int:
     migrate_macos_app_data()
     _configure_logging()
+    _configure_native_fault_logging()
     _install_excepthooks()
     LOG.info("Starting %s", __app_name__)
 
@@ -129,7 +163,10 @@ def main() -> int:
     else:
         win.showMaximized()
     finish_startup_splash(app, win)
-    return app.exec()
+    try:
+        return app.exec()
+    finally:
+        _close_native_fault_logging()
 
 
 if __name__ == "__main__":

@@ -351,8 +351,9 @@ def collect_diagnostics_bundle() -> str:
       1. Header  -- timestamp, app version, Python, Qt, OS
       2. Dependency checks
       3. Tail of sea-lyon.log (last ~1 MB)
-      4. Tail of metadata-diagnostics.log (last ~1 MB, if present)
-      5. Redacted settings.json
+      4. Tail of native-fault.log (last ~1 MB, if present)
+      5. Tail of metadata-diagnostics.log (last ~1 MB, if present)
+      6. Redacted settings.json
 
     Secret values (``_REDACTED_SETTINGS_KEYS``) appear as ``<redacted>``.
     Library paths, podcast URLs, and radio URLs are NOT redacted because
@@ -390,10 +391,17 @@ def collect_diagnostics_bundle() -> str:
 
     logs_section: list[str] = []
     main_log = logs_dir() / "sea-lyon.log"
+    native_fault_log = logs_dir() / "native-fault.log"
     metadata_log = app_data_dir() / "metadata-diagnostics.log"
     logs_section.append("sea-lyon.log (tail)")
     logs_section.append("-" * 19)
     logs_section.append(_read_tail(main_log) or "<empty or missing>")
+
+    if native_fault_log.exists():
+        logs_section.append("")
+        logs_section.append("native-fault.log (tail)")
+        logs_section.append("-" * 23)
+        logs_section.append(_read_tail(native_fault_log))
 
     if metadata_log.exists():
         logs_section.append("")

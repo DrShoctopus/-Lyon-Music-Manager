@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 from collections import OrderedDict, deque
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -545,6 +545,53 @@ _UI_POPULATE_CHUNK = 500
 _GRID_ALBUM_PAGE_SIZE = 500
 
 
+class _PagedArtistModel(QStandardItemModel):
+    """Fetch artist rows on demand instead of retaining the whole library."""
+
+    def __init__(self, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._page_loader: Callable[[int, int], list[str]] | None = None
+        self._page_size = _UI_POPULATE_CHUNK
+        self._offset = 0
+        self._has_more = False
+        self._fetching = False
+
+    def stop_paging(self) -> None:
+        self._page_loader = None
+        self._offset = 0
+        self._has_more = False
+        self._fetching = False
+
+    def start_paging(self, loader: Callable[[int, int], list[str]]) -> None:
+        self.stop_paging()
+        self._page_loader = loader
+        self._has_more = True
+        self.fetchMore()
+
+    def canFetchMore(self, parent: QModelIndex = QModelIndex()) -> bool:  # type: ignore[override]
+        return not parent.isValid() and self._has_more and not self._fetching
+
+    def fetchMore(self, parent: QModelIndex = QModelIndex()) -> None:  # type: ignore[override]
+        if parent.isValid() or not self.canFetchMore(parent):
+            return
+        loader = self._page_loader
+        if loader is None:
+            self._has_more = False
+            return
+        self._fetching = True
+        try:
+            rows = loader(self._page_size + 1, self._offset)
+            page = rows[:self._page_size]
+            self._has_more = len(rows) > self._page_size
+            self._offset += len(page)
+            for name in page:
+                item = QStandardItem(name)
+                item.setData(name, Qt.UserRole)
+                self.appendRow(item)
+        finally:
+            self._fetching = False
+
+
 def _read_scaled_artwork(art_path: str):
     """Decode one bounded thumbnail on the Qt GUI thread."""
     try:
@@ -667,7 +714,7 @@ class LibraryView(QWidget):
 
         self.artists = QListView()
         self.artists.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.artists_model = QStandardItemModel()
+        self.artists_model = _PagedArtistModel(self)
         self.artists.setModel(self.artists_model)
 
         self.albums = QListView()
@@ -820,7 +867,7 @@ class LibraryView(QWidget):
         grid_vl.addWidget(grid_inner)
 
         # ---- Simple-mode browser: 3-pane (Artists | Albums | Tracks)
-        self._sv_artists_model = QStandardItemModel()
+        self._sv_artists_model = _PagedArtistModel(self)
         self._sv_artists = QListView()
         self._sv_artists.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self._sv_artists.setModel(self._sv_artists_model)
@@ -951,6 +998,26 @@ class LibraryView(QWidget):
             return list(fn(media_type, genre=genre))
         except TypeError:
             return list(fn(media_type))
+
+    def _library_artist_page(
+        self,
+        *,
+        limit: int,
+        offset: int,
+        media_type: str | None = None,
+        genre: str | None = None,
+    ) -> list[str]:
+        fn = getattr(self.library, "artist_names_page", None)
+        if not callable(fn):
+            return self._library_all_artists(media_type, genre=genre)[offset:offset + limit]
+        return list(
+            fn(
+                limit=limit,
+                offset=offset,
+                media_type=media_type,
+                genre=genre,
+            )
+        )
 
     def _library_all_genres(self, media_type: str | None = None) -> list[str]:
         fn = getattr(self.library, "all_genres", None)
@@ -1125,6 +1192,7 @@ class LibraryView(QWidget):
         genre = None if genre_key == _ALL_GENRES_KEY else genre_key
 
         with _blocked_selection_signals(self.artists):
+            self.artists_model.stop_paging()
             self.artists_model.clear()
             virtual_collections = self._available_virtual_collections()
             for key, label in virtual_collections:
@@ -1134,12 +1202,28 @@ class LibraryView(QWidget):
                 fnt.setItalic(True)
                 item.setFont(fnt)
                 self.artists_model.appendRow(item)
-            real_artists = self._library_all_artists(self._media_type_filter, genre=genre)
-            if chunked and len(real_artists) > _UI_POPULATE_CHUNK:
+            virtual_count = len(virtual_collections)
+            supports_paging = callable(getattr(self.library, "artist_names_page", None))
+            real_artists: list[str] = []
+            if chunked and supports_paging:
+                self.artists_model.start_paging(
+                    lambda limit, offset: self._library_artist_page(
+                        limit=limit,
+                        offset=offset,
+                        media_type=self._media_type_filter,
+                        genre=genre,
+                    )
+                )
+            else:
+                real_artists = self._library_all_artists(
+                    self._media_type_filter,
+                    genre=genre,
+                )
+            if chunked and not supports_paging and len(real_artists) > _UI_POPULATE_CHUNK:
                 self._start_artist_populate(
                     self.artists,
                     self.artists_model,
-                    len(virtual_collections),
+                    virtual_count,
                     real_artists,
                 )
                 return
@@ -1148,9 +1232,9 @@ class LibraryView(QWidget):
                 it.setData(a, Qt.UserRole)
                 self.artists_model.appendRow(it)
 
-            if real_artists:
+            if self.artists_model.rowCount() > virtual_count:
                 self.artists.setCurrentIndex(
-                    self.artists_model.index(len(virtual_collections), 0)
+                    self.artists_model.index(virtual_count, 0)
                 )
             elif self.artists_model.rowCount():
                 self.artists.setCurrentIndex(self.artists_model.index(0, 0))
@@ -1447,9 +1531,21 @@ class LibraryView(QWidget):
     # ------------------------------------------------------------------ simple view
     def _sv_refresh_artists(self, *, chunked: bool = False) -> None:
         with _blocked_selection_signals(self._sv_artists):
+            self._sv_artists_model.stop_paging()
             self._sv_artists_model.clear()
-            artists = self._library_all_artists(self._media_type_filter)
-            if chunked and len(artists) > _UI_POPULATE_CHUNK:
+            supports_paging = callable(getattr(self.library, "artist_names_page", None))
+            artists: list[str] = []
+            if chunked and supports_paging:
+                self._sv_artists_model.start_paging(
+                    lambda limit, offset: self._library_artist_page(
+                        limit=limit,
+                        offset=offset,
+                        media_type=self._media_type_filter,
+                    )
+                )
+            else:
+                artists = self._library_all_artists(self._media_type_filter)
+            if chunked and not supports_paging and len(artists) > _UI_POPULATE_CHUNK:
                 self._start_artist_populate(
                     self._sv_artists,
                     self._sv_artists_model,

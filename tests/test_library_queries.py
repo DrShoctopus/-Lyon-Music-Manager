@@ -213,6 +213,32 @@ def test_album_summary_pages_are_bounded_and_filterable(tmp_path):
     ]
 
 
+def test_artist_name_pages_are_bounded_sorted_and_filterable(tmp_path):
+    library = Library(tmp_path / "library.db")
+    for artist, genre, media_type in (
+        ("Echo", "Rock", "audio"),
+        ("alpha", "Rock", "audio"),
+        ("Delta", "Jazz", "audio"),
+        ("Bravo", "Rock", "audio"),
+        ("Video Artist", "Rock", "video"),
+    ):
+        add_track(
+            library,
+            f"/{media_type}/{artist}.flac",
+            artist=artist,
+            album="Album",
+            genre=genre,
+            media_type=media_type,
+        )
+
+    assert library.artist_names_page(
+        limit=2,
+        offset=1,
+        media_type="audio",
+        genre="Rock",
+    ) == ["Bravo", "Echo"]
+
+
 def test_playlist_rows_cascade_when_playlist_or_track_is_deleted(tmp_path):
     library = Library(tmp_path / "library.db")
     add_track(library, "/music/song_one.flac", artist="Artist", album="Album")
