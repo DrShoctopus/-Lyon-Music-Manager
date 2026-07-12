@@ -452,6 +452,22 @@ def test_refresh_after_scan_requests_chunked_models_for_large_library(view, monk
     assert calls == [True]
 
 
+def test_initial_refresh_chunks_large_library_artist_models(app, monkeypatch):
+    artists = {
+        f"Artist {i:04d}": {
+            "Album": [_track(i + 1, "Song", f"Artist {i:04d}", "Album")]
+        }
+        for i in range(_UI_POPULATE_CHUNK + 25)
+    }
+    monkeypatch.setattr(LibraryView, "_is_large_library", lambda _self: True)
+
+    view = LibraryView(FakeLibrary(artists))
+
+    assert view._populate_state is not None
+    assert view._populate_state["offset"] == 0
+    assert view._populate_state["artists"] == list(artists)
+
+
 def test_chunked_artist_population_yields_between_fixed_size_batches(view, monkeypatch):
     artists = [f"Artist {i:04d}" for i in range(_UI_POPULATE_CHUNK + 25)]
     monkeypatch.setattr(view, "_library_all_artists", lambda *_args, **_kwargs: artists)

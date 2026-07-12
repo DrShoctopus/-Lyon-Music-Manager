@@ -928,7 +928,10 @@ class LibraryView(QWidget):
         self.playlists_view.tracks_dropped.connect(self._on_playlist_tracks_dropped)
         self.playlists_view.customContextMenuRequested.connect(self._on_playlist_context_menu)
 
-        self.refresh()
+        # A populated database is hydrated here only on startup.  Use the same
+        # bounded model-building path as a completed scan so restarting with a
+        # large library cannot allocate every artist item in one GUI-thread burst.
+        self.refresh(chunked=self._is_large_library())
 
     # ------------------------------------------------------------------ data
     @property
