@@ -1,6 +1,8 @@
 """Optical disc playback view."""
 from __future__ import annotations
 
+import logging
+
 from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -24,6 +26,8 @@ from ..core.metadata import AlbumInfo, lookup_disc
 from ..core.settings import Settings
 from .widgets import format_duration
 
+LOG = logging.getLogger(__name__)
+
 
 class _DiscReadThread(QThread):
     finished_with = Signal(object, object)  # DiscToc|None, AlbumInfo|None
@@ -38,17 +42,24 @@ class _DiscReadThread(QThread):
         self._cancelled = True
 
     def run(self) -> None:
-        toc = cd_detect.read_disc(self.drive)
+        try:
+            toc = cd_detect.read_disc(self.drive)
+        except Exception:
+            LOG.exception("Unexpected Audio CD read failure for %s", self.drive)
+            toc = None
         if self._cancelled:
             return
         album = None
         if toc is not None:
-            album = lookup_disc(
-                toc.discid,
-                toc.toc_string,
-                ctdb_toc=toc.ctdb_toc_string,
-                use_cuetools_db=self.settings.cuetools_db_metadata_enabled,
-            )
+            try:
+                album = lookup_disc(
+                    toc.discid,
+                    toc.toc_string,
+                    ctdb_toc=toc.ctdb_toc_string,
+                    use_cuetools_db=self.settings.cuetools_db_metadata_enabled,
+                )
+            except Exception:
+                LOG.exception("Unexpected Audio CD metadata lookup failure for %s", self.drive)
         if self._cancelled:
             return
         self.finished_with.emit(toc, album)

@@ -166,6 +166,7 @@ from lyon.ui import ripper_view as ripper_view_module  # noqa: E402
 from lyon.ui.ripper_view import (  # noqa: E402
     RipperView,
     _existing_target_files,
+    _LookupThread,
     _rip_request_from_toc,
 )
 
@@ -523,6 +524,45 @@ def test_ripper_track_rows_do_not_resize_status_column_per_row(qapp, monkeypatch
 
     assert view.tracks_model.rowCount() == 4
     assert calls == []
+
+
+def test_lookup_thread_emits_failure_result_when_lookup_raises(qapp, monkeypatch):
+    def broken_lookup(*_args, **_kwargs):
+        raise RuntimeError("metadata exploded")
+
+    monkeypatch.setattr(ripper_view_module, "lookup_disc", broken_lookup)
+    toc = DiscToc(drive="D:", discid="disc-id", track_count=1)
+    worker = _LookupThread(toc, Settings(download_artwork=False))
+    emitted = []
+    worker.finished_with.connect(lambda info, art: emitted.append((info, art)))
+
+    worker.run()
+
+    assert emitted == [(None, None)]
+
+
+def test_partial_album_metadata_preserves_toc_derived_tracks(qapp, monkeypatch, tmp_path):
+    monkeypatch.setattr(ripper_view_module.cd_detect, "list_cd_drives", lambda: [])
+
+    class FakeLibrary:
+        def find_album_match(self, *_args):
+            return None
+
+    view = RipperView(Settings(music_root=str(tmp_path)), FakeLibrary())
+    try:
+        view._toc = DiscToc(drive="D:", discid="disc-123", track_count=2)
+        view._populate_default_tracks(2)
+
+        view._apply_album(AlbumInfo(artist="Artist", album="Album"))
+
+        assert view.artist_edit.text() == "Artist"
+        assert view.album_edit.text() == "Album"
+        assert view.tracks_model.rowCount() == 2
+        assert view.tracks_model.item(0, 1).text() == "Track 01"
+        assert view.tracks_model.item(1, 1).text() == "Track 02"
+    finally:
+        view.shutdown()
+        view.deleteLater()
 
 
 def test_soft_album_duplicate_cancel_disables_rip_button(qapp, monkeypatch, tmp_path):

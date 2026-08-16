@@ -1,6 +1,7 @@
 """Rip-from-CD view: detect disc, look up metadata, kick off rip."""
 from __future__ import annotations
 
+import logging
 import sys
 from pathlib import Path
 
@@ -45,6 +46,8 @@ from ..core.ripper import (
 )
 from ..core.settings import Settings
 from .widgets import AppProgressBar, cover_pixmap, draw_app_progress_bar
+
+LOG = logging.getLogger(__name__)
 
 
 def _row_track_no(text: str | None) -> int:
@@ -129,17 +132,24 @@ class _LookupThread(QThread):
         self._cancelled = True
 
     def run(self) -> None:
-        info = lookup_disc(
-            self.toc.discid,
-            self.toc.toc_string,
-            ctdb_toc=self.toc.ctdb_toc_string,
-            use_cuetools_db=self.settings.cuetools_db_metadata_enabled,
-        )
+        try:
+            info = lookup_disc(
+                self.toc.discid,
+                self.toc.toc_string,
+                ctdb_toc=self.toc.ctdb_toc_string,
+                use_cuetools_db=self.settings.cuetools_db_metadata_enabled,
+            )
+        except Exception:
+            LOG.exception("Unexpected metadata lookup failure for disc %s", self.toc.discid)
+            info = None
         if self._cancelled:
             return
         art = None
         if info and self.settings.download_artwork:
-            art = fetch_artwork(info)
+            try:
+                art = fetch_artwork(info)
+            except Exception:
+                LOG.exception("Unexpected artwork lookup failure for %s - %s", info.artist, info.album)
         if self._cancelled:
             return
         self.finished_with.emit(info, art)
@@ -159,12 +169,19 @@ class _AlbumSearchThread(QThread):
         self._cancelled = True
 
     def run(self) -> None:
-        info = search_album(self.artist, self.album)
+        try:
+            info = search_album(self.artist, self.album)
+        except Exception:
+            LOG.exception("Unexpected album metadata search failure for %s - %s", self.artist, self.album)
+            info = None
         if self._cancelled:
             return
         art = None
         if info and self.settings.download_artwork:
-            art = fetch_artwork(info)
+            try:
+                art = fetch_artwork(info)
+            except Exception:
+                LOG.exception("Unexpected artwork lookup failure for %s - %s", info.artist, info.album)
         if self._cancelled:
             return
         self.finished_with.emit(info, art)
@@ -182,7 +199,15 @@ class _ArtworkThread(QThread):
         self._cancelled = True
 
     def run(self) -> None:
-        art = fetch_artwork(self.album)
+        try:
+            art = fetch_artwork(self.album)
+        except Exception:
+            LOG.exception(
+                "Unexpected artwork lookup failure for %s - %s",
+                self.album.artist,
+                self.album.album,
+            )
+            art = None
         if self._cancelled:
             return
         self.finished_with.emit(self.album, art)
@@ -554,7 +579,7 @@ class RipperView(QWidget):
         self._lookup = None
         if info is None:
             message = (
-                "Disc not found in CUETools DB, MusicBrainz, or TheAudioDB. "
+                "Disc not found in CUETools DB or MusicBrainz. "
                 "Edit titles manually or click Search Online."
             )
             if self.settings.metadata_diagnostics_enabled:
@@ -580,9 +605,15 @@ class RipperView(QWidget):
         self.album_edit.setText(info.album)
         self.artist_edit.setText(info.artist)
         self.year_edit.setText(str(info.year) if info.year else "")
-        self.tracks_model.removeRows(0, self.tracks_model.rowCount())
-        for tr in info.tracks:
-            self._add_track_row(tr.number, tr.title)
+        if info.tracks:
+            self.tracks_model.removeRows(0, self.tracks_model.rowCount())
+            for tr in info.tracks:
+                self._add_track_row(tr.number, tr.title)
+        elif self.tracks_model.rowCount() == 0 and self._toc is not None:
+            # Some providers return useful album-level metadata without a track
+            # list. Preserve (or recreate) the TOC-derived generic tracks so a
+            # partial metadata result cannot leave the CD unrippable.
+            self._populate_default_tracks(self._toc.track_count)
         if info.artwork:
             self._set_cover_art(info.artwork)
         else:

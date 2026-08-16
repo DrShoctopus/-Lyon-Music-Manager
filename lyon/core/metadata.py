@@ -293,7 +293,15 @@ def lookup_disc(
         providers.append(("musicbrainz", lambda: lookup_musicbrainz_disc(discid_str, toc)))
 
     for provider_name, provider in providers:
-        info = provider()
+        try:
+            info = provider()
+        except Exception:
+            # A provider integration should never prevent the remaining disc
+            # fallbacks from running.  Expected network errors are handled by
+            # each provider; this guard also covers import/parser regressions
+            # and makes sure callers receive a normal failed lookup result.
+            LOG.exception("Unexpected %s disc metadata provider failure", provider_name)
+            info = None
         provider_attempts.append((provider_name, info))
         if _has_basic_metadata(info):
             result = _with_theaudiodb_enrichment(info)
@@ -302,8 +310,9 @@ def lookup_disc(
 
     if diagnostics_enabled and _metadata_diagnostics_enabled():
         _log_empty_disc_lookup(discid_str, toc, ctdb_toc, use_cuetools_db, provider_attempts)
-    if not diagnostics_enabled:
-        _cache_put(_disc_lookup_cache, cache_key, None, _DISC_LOOKUP_CACHE_MAX)
+    # Do not cache a miss. A miss can be caused by a transient DNS, service, or
+    # drive-read problem, and users reasonably expect Retry to perform a fresh
+    # lookup. Successful results remain cached above.
     return None
 
 

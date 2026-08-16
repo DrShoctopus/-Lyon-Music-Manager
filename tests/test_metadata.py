@@ -138,6 +138,50 @@ def test_lookup_disc_caches_repeated_success(monkeypatch):
     assert calls == [("mb-toc", "ctdb-toc")]
 
 
+def test_lookup_disc_does_not_cache_provider_misses(monkeypatch):
+    calls = []
+
+    def fake_cuetools(toc, ctdb_toc=None):
+        calls.append(("cuetools", toc, ctdb_toc))
+        return None
+
+    def fake_musicbrainz(discid, toc):
+        calls.append(("musicbrainz", discid, toc))
+        return None
+
+    monkeypatch.setattr(metadata, "lookup_cuetools_db_disc", fake_cuetools)
+    monkeypatch.setattr(metadata, "lookup_musicbrainz_disc", fake_musicbrainz)
+
+    assert metadata.lookup_disc("disc-id", "mb-toc", ctdb_toc="ctdb-toc") is None
+    assert metadata.lookup_disc("disc-id", "mb-toc", ctdb_toc="ctdb-toc") is None
+    assert calls == [
+        ("cuetools", "mb-toc", "ctdb-toc"),
+        ("musicbrainz", "disc-id", "mb-toc"),
+        ("cuetools", "mb-toc", "ctdb-toc"),
+        ("musicbrainz", "disc-id", "mb-toc"),
+    ]
+
+
+def test_lookup_disc_continues_after_unexpected_provider_failure(monkeypatch, caplog):
+    expected = metadata.AlbumInfo(
+        artist="MB Artist",
+        album="MB Album",
+        tracks=[metadata.TrackInfo(number=1, title="Song")],
+    )
+
+    def broken_cuetools(*_args, **_kwargs):
+        raise RuntimeError("provider exploded")
+
+    monkeypatch.setattr(metadata, "lookup_cuetools_db_disc", broken_cuetools)
+    monkeypatch.setattr(metadata, "lookup_musicbrainz_disc", lambda *_args: expected)
+
+    with caplog.at_level("ERROR", logger="lyon.core.metadata"):
+        result = metadata.lookup_disc("disc-id", "mb-toc", ctdb_toc="ctdb-toc")
+
+    assert result is expected
+    assert "Unexpected cuetools_db disc metadata provider failure" in caplog.text
+
+
 def test_lookup_disc_respects_cuetools_toggle(monkeypatch):
     musicbrainz_album = metadata.AlbumInfo(
         artist="MB Artist",

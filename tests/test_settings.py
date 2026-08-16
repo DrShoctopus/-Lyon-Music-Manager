@@ -149,6 +149,30 @@ def test_default_musicbrainz_contact_is_real_url():
     assert s.musicbrainz_contact.startswith("https://")
 
 
+def test_legacy_placeholder_musicbrainz_contact_migrates_to_default(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "app_data_dir", lambda: tmp_path)
+    (tmp_path / "settings.json").write_text(
+        '{"music_root": "/music", "musicbrainz_contact": "https://example.invalid/lyon"}',
+        encoding="utf-8",
+    )
+
+    loaded = settings.Settings.load()
+
+    assert loaded.musicbrainz_contact == settings.DEFAULT_MUSICBRAINZ_CONTACT
+
+
+def test_custom_musicbrainz_contact_is_preserved(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "app_data_dir", lambda: tmp_path)
+    (tmp_path / "settings.json").write_text(
+        '{"music_root": "/music", "musicbrainz_contact": "mailto:user@somewhere.org"}',
+        encoding="utf-8",
+    )
+
+    loaded = settings.Settings.load()
+
+    assert loaded.musicbrainz_contact == "mailto:user@somewhere.org"
+
+
 def test_default_theaudiodb_key_uses_free_tier():
     s = settings.Settings()
     assert s.theaudiodb_api_key == settings.DEFAULT_THEAUDIODB_API_KEY

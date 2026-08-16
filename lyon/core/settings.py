@@ -489,6 +489,8 @@ class Settings:
                     and not _bool_value(data.get("theaudiodb_api_key_opt_out"), False)
                 ):
                     data["theaudiodb_api_key"] = DEFAULT_THEAUDIODB_API_KEY
+                if is_placeholder_contact(str(data.get("musicbrainz_contact") or "")):
+                    data["musicbrainz_contact"] = DEFAULT_MUSICBRAINZ_CONTACT
                 return cls(**data)
             except OSError as exc:
                 LOG.warning("Could not read settings.json; using defaults: %s", exc)

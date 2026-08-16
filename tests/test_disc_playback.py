@@ -20,7 +20,7 @@ from lyon.core.metadata import AlbumInfo, TrackInfo
 from lyon.core.settings import Settings
 
 pytest.importorskip("PySide6.QtWidgets", exc_type=ImportError)
-from lyon.ui.disc_view import DiscView
+from lyon.ui.disc_view import DiscView, _DiscReadThread
 
 
 def _process_events_until(qapp, predicate, timeout: float = 2.0) -> bool:
@@ -137,6 +137,25 @@ def test_disc_view_populates_audio_cd_tracks(qapp):
     finally:
         view.shutdown()
         view.deleteLater()
+
+
+def test_disc_read_thread_emits_toc_when_metadata_lookup_raises(qapp, monkeypatch):
+    from lyon.ui import disc_view as disc_view_mod
+
+    toc = DiscToc(drive="D:", discid="disc-id", track_count=1)
+    monkeypatch.setattr(disc_view_mod.cd_detect, "read_disc", lambda _drive: toc)
+
+    def broken_lookup(*_args, **_kwargs):
+        raise RuntimeError("metadata exploded")
+
+    monkeypatch.setattr(disc_view_mod, "lookup_disc", broken_lookup)
+    emitted = []
+    worker = _DiscReadThread("D:", Settings(download_artwork=False))
+    worker.finished_with.connect(lambda read_toc, album: emitted.append((read_toc, album)))
+
+    worker.run()
+
+    assert emitted == [(toc, None)]
 
 
 def test_disc_view_eject_clears_cached_audio_disc(qapp, monkeypatch):

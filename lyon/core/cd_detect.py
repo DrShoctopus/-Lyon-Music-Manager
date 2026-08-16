@@ -265,11 +265,13 @@ def _read_disc_darwin(drive: str | None) -> DiscToc | None:
     device = drive if drive.startswith("/dev/") else f"/dev/{drive}"
     try:
         d = discid.read(device, features=["mcn", "isrc"])
-    except Exception:
+    except Exception as exc:
         # Some drives reject ISRC/MCN feature requests; retry without them.
+        LOG.debug("Full libdiscid read failed for %s; retrying basic TOC: %s", device, exc)
         try:
             d = discid.read(device)
-        except Exception:
+        except Exception as retry_exc:
+            LOG.warning("Could not read Audio CD TOC from %s: %s", device, retry_exc)
             return None
 
     tracks = list(getattr(d, "tracks", []) or [])
@@ -314,7 +316,8 @@ def _load_discid():
             finally:
                 ctypes.util.find_library = original_find_library
         return importlib.import_module("discid")
-    except Exception:
+    except Exception as exc:
+        LOG.warning("Could not import discid/libdiscid: %s", exc)
         return None
 
 
